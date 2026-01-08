@@ -1,0 +1,3 @@
+# Use pygame-ce for better support on newer Python versions (still imported as `pygame`).
+pygame-ce>=2.5.2
+
