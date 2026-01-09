@@ -7295,14 +7295,8 @@ class HardcoreSurvivalState(State):
         }
         return str(name_map.get(model_id, model_id))
 
-    def _apply_bike_model(self) -> None:
-        if not hasattr(self, "bike") or self.bike is None:
-            return
-        mid = str(getattr(self.bike, "model_id", "bike"))
-        if mid not in self._TWO_WHEEL_FRAMES:
-            mid = "bike"
-            self.bike.model_id = mid
-
+    def _two_wheel_collider_px(self, model_id: str) -> tuple[int, int]:
+        mid = str(model_id)
         collider_map: dict[str, tuple[int, int]] = {
             "bike": (14, 10),
             "bike_lady": (14, 10),
@@ -7312,7 +7306,17 @@ class HardcoreSurvivalState(State):
             "moto_lux": (16, 12),
             "moto_long": (18, 12),
         }
-        w, h = collider_map.get(mid, (14, 10))
+        return collider_map.get(mid, (14, 10))
+
+    def _apply_bike_model(self) -> None:
+        if not hasattr(self, "bike") or self.bike is None:
+            return
+        mid = str(getattr(self.bike, "model_id", "bike"))
+        if mid not in self._TWO_WHEEL_FRAMES:
+            mid = "bike"
+            self.bike.model_id = mid
+
+        w, h = self._two_wheel_collider_px(mid)
         self.bike.w = int(w)
         self.bike.h = int(h)
 
@@ -7341,12 +7345,11 @@ class HardcoreSurvivalState(State):
         d = str(d)
         if d in ("left", "right"):
             shadow_w = max(12, int(spr_rect.w) - 3)
-            cy = int(spr_rect.top + spr_rect.h * 0.62)
         else:
             shadow_w = max(10, int(spr_rect.w) - 6)
-            cy = int(spr_rect.top + spr_rect.h * 0.78)
         shadow_h = 4
         shadow = pygame.Rect(0, 0, int(shadow_w), int(shadow_h))
+        cy = int(spr_rect.bottom - 2)
         shadow.center = (int(spr_rect.centerx), int(cy))
         return shadow
 
@@ -11899,8 +11902,10 @@ class HardcoreSurvivalState(State):
                     if not frames:
                         continue
                     spr = frames[min(int(frm), len(frames) - 1)]
-                    rect = spr.get_rect(center=(sx, sy))
-                    shadow = self._two_wheel_shadow_rect(rect, d)
+                    _cw, ch = self._two_wheel_collider_px(mid)
+                    rect = spr.get_rect()
+                    rect.midbottom = (int(sx), int(sy + ch // 2))
+                    shadow = self._two_wheel_shadow_rect(rect, d)        
                     sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
                     pygame.draw.ellipse(sh, (0, 0, 0, 80), sh.get_rect())
                     surface.blit(sh, shadow.topleft)
@@ -12149,7 +12154,11 @@ class HardcoreSurvivalState(State):
         if not frames:
             return
         spr = frames[min(int(frame), len(frames) - 1)]
-        rect = spr.get_rect(center=(int(round(bp.x)), int(round(bp.y))))
+        rect = spr.get_rect()
+        rect.midbottom = (
+            int(round(bp.x)),
+            int(round(bp.y + float(getattr(self.bike, "h", 10)) / 2.0)),
+        )
 
         # Soft ground shadow so the two-wheeler doesn't look like it's floating.
         shadow = self._two_wheel_shadow_rect(rect, str(d))
@@ -12657,13 +12666,14 @@ class HardcoreSurvivalState(State):
                             int(self.TILE_SIZE + face_h),
                         )
 
-                    # South (bottom) face: brighter and feature-rich (storefront/readability).
-                    south = pygame.Rect(bx, by + bh - self.TILE_SIZE, bw, self.TILE_SIZE + face_h)
+                    # South (bottom) face: front facade extrusion (downward) so the doorway sits on the ground.
+                    south = pygame.Rect(int(bx), int(by + bh - self.TILE_SIZE), int(bw), int(self.TILE_SIZE + face_h))
                     pygame.draw.rect(surface, front, south)
                     pygame.draw.rect(surface, outline, south, 1)
                     # Ground shadow under the facade.
-                    sh = pygame.Rect(south.x + 2, south.bottom - 2, south.w - 2, max(1, face_h // 2))
-                    pygame.draw.rect(surface, (*shadow, 0), sh)
+                    shadow_h = int(clamp(2 + int(face_h) // 10, 2, 5))
+                    sh = pygame.Rect(int(south.x + 2), int(south.bottom - 1), int(south.w - 2), int(shadow_h))
+                    pygame.draw.rect(surface, shadow, sh)
                     shade = self._tint(front, add=(-18, -18, -18))
                     surface.fill(shade, pygame.Rect(south.x, south.bottom - max(2, face_h // 2), south.w, max(2, face_h // 2)))
 
