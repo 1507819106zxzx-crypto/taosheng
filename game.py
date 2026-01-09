@@ -12468,6 +12468,351 @@ class HardcoreSurvivalState(State):
         self._roof_cache[key] = roof
         return roof
 
+    def _building_roof_style_var(self, roof_kind: int) -> tuple[int, int]:
+        roof_kind = int(roof_kind) & 0xFFFFFFFF
+        style = int((roof_kind >> 8) & 0xFF)
+        var = int(roof_kind & 0xFF)
+        return style, var
+
+    def _building_face_height_px(self, *, style: int, w: int, h: int, var: int) -> int:
+        style = int(style)
+        w = int(w)
+        h = int(h)
+        var = int(var)
+        # Wall extrusion height: makes building height readable at a glance.
+        base = {
+            1: 3,  # 住宅
+            2: 5,  # 超市/商店
+            3: 5,  # 医院
+            4: 6,  # 监狱
+            5: 5,  # 学校
+            6: 8,  # 高层住宅
+        }.get(style, 3)
+        area = int(w) * int(h)
+        if area >= 520:
+            base += 3
+        elif area >= 320:
+            base += 2
+        elif area >= 200:
+            base += 1
+        base += (int(var) % 5) - 2
+        return int(clamp(int(base), 3, 16))
+
+    def _building_wall_palette(self, *, style: int, var: int) -> tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]]:
+        style = int(style)
+        var = int(var)
+        # (front, side, trim, shadow) – tuned for a dirty city feel like the reference.
+        front = (88, 84, 78)
+        side = (64, 62, 58)
+        trim = (140, 140, 146)
+        shadow = (14, 14, 18)
+        if style == 1:  # 住宅
+            front, side, trim = (118, 102, 82), (92, 78, 62), (170, 148, 118)
+        elif style == 2:  # 超市/商店
+            front, side, trim = (86, 88, 94), (64, 66, 72), (130, 132, 140)
+        elif style == 3:  # 医院
+            front, side, trim = (184, 186, 196), (148, 150, 160), (236, 236, 242)
+        elif style == 4:  # 监狱
+            front, side, trim = (58, 58, 66), (40, 40, 46), (98, 98, 110)
+        elif style == 5:  # 学校
+            front, side, trim = (132, 102, 68), (102, 76, 50), (186, 146, 96)
+        elif style == 6:  # 高层住宅
+            front, side, trim = (88, 92, 122), (66, 70, 94), (142, 150, 186)
+        dv = (int(var) % 7) - 3
+        dv2 = (int(var) % 5) - 2
+        front = self._tint(front, add=(dv * 2, dv * 2, dv * 2))
+        side = self._tint(side, add=(dv2 * 2, dv2 * 2, dv2 * 2))
+        trim = self._tint(trim, add=(dv, dv, dv))
+        return front, side, trim, shadow
+
+    def _find_building_exterior_door(self, tx0: int, ty0: int, w: int, h: int) -> tuple[str, list[tuple[int, int]]] | None:
+        tx0 = int(tx0)
+        ty0 = int(ty0)
+        w = int(w)
+        h = int(h)
+        doors: list[tuple[int, int]] = []
+        # Perimeter only (skip interior doors).
+        for x in range(tx0, tx0 + w):
+            if int(self.world.get_tile(x, ty0)) == int(self.T_DOOR):
+                doors.append((x, ty0))
+            if int(self.world.get_tile(x, ty0 + h - 1)) == int(self.T_DOOR):
+                doors.append((x, ty0 + h - 1))
+        for y in range(ty0 + 1, ty0 + h - 1):
+            if int(self.world.get_tile(tx0, y)) == int(self.T_DOOR):
+                doors.append((tx0, y))
+            if int(self.world.get_tile(tx0 + w - 1, y)) == int(self.T_DOOR):
+                doors.append((tx0 + w - 1, y))
+        if not doors:
+            return None
+        side_votes = {"N": 0, "S": 0, "W": 0, "E": 0}
+        for x, y in doors:
+            if y == ty0:
+                side_votes["N"] += 1
+            elif y == ty0 + h - 1:
+                side_votes["S"] += 1
+            elif x == tx0:
+                side_votes["W"] += 1
+            elif x == tx0 + w - 1:
+                side_votes["E"] += 1
+        side = max(side_votes.items(), key=lambda kv: kv[1])[0]
+        return side, doors
+
+    def _draw_building_facades(
+        self,
+        surface: pygame.Surface,
+        cam_x: int,
+        cam_y: int,
+        start_tx: int,
+        end_tx: int,
+        start_ty: int,
+        end_ty: int,
+    ) -> None:
+        start_cx = start_tx // self.CHUNK_SIZE
+        end_cx = end_tx // self.CHUNK_SIZE
+        start_cy = start_ty // self.CHUNK_SIZE
+        end_cy = end_ty // self.CHUNK_SIZE
+
+        for cy in range(start_cy, end_cy + 1):
+            for cx in range(start_cx, end_cx + 1):
+                chunk = self.world.get_chunk(cx, cy)
+                for b in getattr(chunk, "buildings", []):
+                    tx0, ty0, w, h = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                    roof_kind = int(b[4]) if len(b) > 4 else 0
+                    style, var = self._building_roof_style_var(int(roof_kind))
+
+                    # Only draw facades for on-screen buildings.
+                    bx = int(tx0 * self.TILE_SIZE - cam_x)
+                    by = int(ty0 * self.TILE_SIZE - cam_y)
+                    bw = int(w * self.TILE_SIZE)
+                    bh = int(h * self.TILE_SIZE)
+                    if bx > INTERNAL_W or by > INTERNAL_H:
+                        continue
+                    if bx + bw < 0 or by + bh < 0:
+                        continue
+
+                    face_h = int(self._building_face_height_px(style=style, w=w, h=h, var=var))
+                    front, side, trim, shadow = self._building_wall_palette(style=style, var=var)
+                    outline = (10, 10, 12)
+
+                    # Door detection (used for storefront detail).
+                    door_info = self._find_building_exterior_door(tx0, ty0, w, h)
+                    door_side = ""
+                    door_tiles: list[tuple[int, int]] = []
+                    if door_info is not None:
+                        door_side, door_tiles = door_info
+
+                    # East (right) face: darker to read as shadow.
+                    east = pygame.Rect(bx + bw - self.TILE_SIZE, by, self.TILE_SIZE + face_h, bh)
+                    pygame.draw.rect(surface, side, east)
+                    pygame.draw.rect(surface, outline, east, 1)
+                    surface.fill(self._tint(side, add=(-14, -14, -14)), pygame.Rect(east.x, east.bottom - max(1, face_h // 2), east.w, max(1, face_h // 2)))
+
+                    # Small window columns for tall buildings.
+                    if style in (6,):
+                        win = self._tint(trim, add=(-30, -30, -30))
+                        ink = outline
+                        for yy in range(east.y + 6, east.bottom - 10, 12):
+                            if ((yy + var) % 2) != 0:
+                                continue
+                            wx = east.x + 3 + (var % 3)
+                            surface.fill(win, pygame.Rect(wx, yy, 5, 4))
+                            pygame.draw.rect(surface, ink, pygame.Rect(wx, yy, 5, 4), 1)
+
+                    # South (bottom) face: brighter and feature-rich (storefront/readability).
+                    south = pygame.Rect(bx, by + bh - self.TILE_SIZE, bw, self.TILE_SIZE + face_h)
+                    pygame.draw.rect(surface, front, south)
+                    pygame.draw.rect(surface, outline, south, 1)
+                    # Ground shadow under the facade.
+                    sh = pygame.Rect(south.x + 2, south.bottom - 2, south.w - 2, max(1, face_h // 2))
+                    pygame.draw.rect(surface, (*shadow, 0), sh)
+                    shade = self._tint(front, add=(-18, -18, -18))
+                    surface.fill(shade, pygame.Rect(south.x, south.bottom - max(2, face_h // 2), south.w, max(2, face_h // 2)))
+
+                    # Trim line under the roof.
+                    surface.fill(trim, pygame.Rect(south.x, south.y + 1, south.w, 2))
+
+                    # Facade details by building type.
+                    store_header_bottom = int(south.y + 3)
+                    if style in (2, 3, 5):  # shop/hospital/school: sign + awning band
+                        sign_h = int(clamp(int(south.h // 3), 5, 7))
+                        sign = pygame.Rect(south.x + 3, south.y + 2, south.w - 6, sign_h)
+                        sign_bg = self._tint(trim, add=(-22, -22, -22)) if style != 3 else self._tint(trim, add=(-4, -4, -4))
+                        pygame.draw.rect(surface, sign_bg, sign, border_radius=2)
+                        pygame.draw.rect(surface, outline, sign, 1, border_radius=2)
+                        # Tiny pseudo text blocks
+                        for xx in range(sign.x + 4 + (var % 3), sign.right - 6, 4):
+                            if ((xx + var) % 5) == 0:
+                                continue
+                            surface.fill(self._tint(sign_bg, add=(38, 38, 42)), pygame.Rect(xx, sign.y + 2, 2, 1))
+                        if style == 3 and sign.w >= 18:
+                            # Red cross
+                            cx = sign.centerx
+                            cy = sign.centery
+                            red = (190, 60, 60)
+                            surface.fill(red, pygame.Rect(cx - 1, cy - 3, 2, 7))
+                            surface.fill(red, pygame.Rect(cx - 3, cy - 1, 7, 2))
+                            pygame.draw.rect(surface, outline, pygame.Rect(cx - 3, cy - 3, 7, 7), 1)
+
+                        # Awning stripes just below sign for shops.
+                        store_header_bottom = int(sign.bottom)
+                        if style == 2:
+                            awn_h = 5 if int(south.h) >= 16 else 4
+                            awn = pygame.Rect(south.x + 3, sign.bottom + 1, south.w - 6, awn_h)
+                            a1 = (190, 190, 196)
+                            a2 = (170, 80, 80)
+                            for i in range(awn.w):
+                                col = a1 if ((i + var) % 6) < 3 else a2
+                                surface.fill(col, pygame.Rect(awn.x + i, awn.y, 1, awn.h))
+                            pygame.draw.rect(surface, outline, awn, 1)
+                            store_header_bottom = int(awn.bottom)
+
+                    if style == 4:
+                        # Prison: barred windows.
+                        bar = self._tint(trim, add=(-30, -30, -30))
+                        for xx in range(south.x + 6, south.right - 6, 6):
+                            surface.fill(bar, pygame.Rect(xx, south.y + 3, 1, south.h - 6))
+
+                    if style in (1, 6):
+                        # Residential/high-rise windows.
+                        win = self._tint(trim, add=(-40, -40, -46))
+                        frame = outline
+                        step = 10 if style == 6 else 12
+                        y1 = south.y + 4
+                        for xx in range(south.x + 6 + (var % 4), south.right - 10, step):
+                            if ((xx + var) % 3) == 0:
+                                continue
+                            r = pygame.Rect(xx, y1, 6, 4)
+                            pygame.draw.rect(surface, win, r, border_radius=1)
+                            pygame.draw.rect(surface, frame, r, 1, border_radius=1)
+
+                    # "Front interior" storefront hint (like the reference): show a cutout window strip with
+                    # silhouettes of shelves/props synced to the actual interior tiles.
+                    if style in (2, 3, 5):
+                        open_y = int(store_header_bottom + 1)
+                        open_h = int(south.bottom - 2 - open_y)
+                        open_x = int(south.x + 4)
+                        open_w = int(south.w - 8)
+                        if open_w >= int(self.TILE_SIZE * 2) and open_h >= 4:
+                            open_rect = pygame.Rect(int(open_x), int(open_y), int(open_w), int(open_h))
+                            interior = self._tint(side, add=(-30, -30, -30))
+                            if style == 3:
+                                interior = self._tint(front, add=(-34, -34, -30))
+                            elif style == 5:
+                                interior = self._tint(front, add=(-36, -30, -26))
+                            pygame.draw.rect(surface, interior, open_rect, border_radius=2)
+                            pygame.draw.rect(surface, outline, open_rect, 1, border_radius=2)
+
+                            # Glass highlight + mullions.
+                            glass_hi = self._tint(trim, add=(48, 48, 54))
+                            surface.fill(
+                                glass_hi,
+                                pygame.Rect(open_rect.x + 1, open_rect.y + 1, max(1, open_rect.w - 2), 1),
+                            )
+                            mull = self._tint(interior, add=(18, 18, 18))
+                            step = 12 if open_rect.w >= 80 else 10
+                            for xx in range(open_rect.x + 8 + (var % 5), open_rect.right - 6, step):
+                                surface.fill(mull, pygame.Rect(int(xx), open_rect.y + 2, 1, max(1, open_rect.h - 4)))
+
+                            # Interior silhouettes near the front wall.
+                            if open_rect.h >= 6 and int(w) >= 4 and int(h) >= 4:
+                                sample_ys = [int(ty0 + h - 2), int(ty0 + h - 3)]
+                                seed = int(self.seed) ^ 0x51F2A1B3
+                                for row_i, sy in enumerate(sample_ys):
+                                    if not (int(ty0) < int(sy) < int(ty0 + h - 1)):
+                                        continue
+                                    y_off = int(row_i)
+                                    for tx in range(int(tx0 + 1), int(tx0 + w - 1)):
+                                        px = int(tx * self.TILE_SIZE - cam_x)
+                                        if px + self.TILE_SIZE <= open_rect.x or px >= open_rect.right:
+                                            continue
+                                        tid = int(self.world.get_tile(tx, sy))
+                                        if tid == int(self.T_FLOOR):
+                                            if style != 2:
+                                                continue
+                                            hh = int(self._hash2_u32(int(tx), int(sy), seed))
+                                            if (hh & 15) != 0:
+                                                continue
+                                            crate = (132, 92, 62) if ((hh >> 4) & 1) else (92, 70, 52)
+                                            rr = pygame.Rect(
+                                                int(px + 2),
+                                                int(open_rect.bottom - 3 - y_off),
+                                                max(1, int(self.TILE_SIZE - 4)),
+                                                2,
+                                            )
+                                            surface.fill(crate, rr)
+                                            pygame.draw.rect(surface, outline, rr, 1)
+                                            if rr.w >= 5:
+                                                g1 = (196, 120, 86) if ((hh >> 6) & 1) else (86, 190, 120)
+                                                surface.fill(g1, pygame.Rect(rr.x + 2, rr.y, 1, 1))
+                                            continue
+
+                                        if tid in (int(self.T_TABLE), int(self.T_SHELF), int(self.T_BED)):
+                                            c = self._minimap_color(tid)
+                                            c = self._tint(c, add=(-56, -56, -56))
+                                            bh = 3 if tid != int(self.T_BED) else 4
+                                            rr = pygame.Rect(
+                                                int(px + 1),
+                                                int(open_rect.bottom - 2 - bh - y_off),
+                                                max(1, int(self.TILE_SIZE - 2)),
+                                                int(bh),
+                                            )
+                                            surface.fill(c, rr)
+                                            pygame.draw.rect(surface, outline, rr, 1)
+                                            if tid == int(self.T_SHELF) and rr.w >= 6 and rr.h >= 3:
+                                                hh = int(self._hash2_u32(int(tx), int(sy), seed ^ 0x9E3779B9))
+                                                g1 = (200, 86, 86) if ((hh >> 1) & 1) else (86, 210, 130)
+                                                g2 = (210, 200, 120) if ((hh >> 2) & 1) else (140, 140, 220)
+                                                surface.fill(g1, pygame.Rect(rr.x + 2, rr.y + 1, 1, 1))
+                                                surface.fill(g2, pygame.Rect(rr.right - 3, rr.y + 1, 1, 1))
+
+                            # Type accents for quick read.
+                            if style == 5 and open_rect.w >= 22 and open_rect.h >= 7:
+                                board = pygame.Rect(open_rect.x + 3, open_rect.y + 2, min(18, open_rect.w - 6), 4)
+                                surface.fill((22, 34, 26), board)
+                                pygame.draw.rect(surface, outline, board, 1)
+                            if style == 3 and open_rect.w >= 18 and open_rect.h >= 7:
+                                cx = open_rect.x + 8
+                                cy = open_rect.y + 4
+                                red = (190, 60, 60)
+                                surface.fill(red, pygame.Rect(int(cx - 1), int(cy - 3), 2, 7))
+                                surface.fill(red, pygame.Rect(int(cx - 3), int(cy - 1), 7, 2))
+                                pygame.draw.rect(surface, outline, pygame.Rect(int(cx - 3), int(cy - 3), 7, 7), 1)
+
+                    # Re-draw the exterior door if our facade covers it (south/east).
+                    if door_tiles:
+                        if door_side == "S":
+                            xs = [p[0] for p in door_tiles]
+                            ys = [p[1] for p in door_tiles]
+                            dx0 = int(min(xs))
+                            dx1 = int(max(xs))
+                            dy = int(max(ys))
+                            dr = pygame.Rect(
+                                int(dx0 * self.TILE_SIZE - cam_x),
+                                int(dy * self.TILE_SIZE - cam_y),
+                                int((dx1 - dx0 + 1) * self.TILE_SIZE),
+                                int(self.TILE_SIZE + face_h),
+                            )
+                            pygame.draw.rect(surface, (34, 30, 26), dr, border_radius=2)
+                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                            surface.fill((46, 40, 34), pygame.Rect(dr.x + 2, dr.y + 2, max(1, dr.w - 4), 3))
+                            pygame.draw.circle(surface, (18, 18, 22), (dr.right - 4, dr.y + dr.h // 2), 1)
+                        elif door_side == "E":
+                            xs = [p[0] for p in door_tiles]
+                            ys = [p[1] for p in door_tiles]
+                            dx = int(max(xs))
+                            dy0 = int(min(ys))
+                            dy1 = int(max(ys))
+                            dr = pygame.Rect(
+                                int(dx * self.TILE_SIZE - cam_x),
+                                int(dy0 * self.TILE_SIZE - cam_y),
+                                int(self.TILE_SIZE + face_h),
+                                int((dy1 - dy0 + 1) * self.TILE_SIZE),
+                            )
+                            pygame.draw.rect(surface, (30, 28, 26), dr, border_radius=2)
+                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                            surface.fill((46, 40, 34), pygame.Rect(dr.x + 2, dr.y + 2, 3, max(1, dr.h - 4)))
+                            pygame.draw.circle(surface, (18, 18, 22), (dr.x + dr.w // 2, dr.bottom - 4), 1)
+
     def _draw_roofs(
         self,
         surface: pygame.Surface,
@@ -12967,6 +13312,7 @@ class HardcoreSurvivalState(State):
                 rect = pygame.Rect(int(px), int(py), self.TILE_SIZE, self.TILE_SIZE)
                 self._draw_world_tile(surface, rect, tx=tx, ty=ty, tile_id=int(tile))
 
+        self._draw_building_facades(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
         self._draw_vehicle_props(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
         self._draw_world_props(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
         self._draw_world_items(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
