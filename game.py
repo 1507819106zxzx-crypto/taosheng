@@ -12748,7 +12748,13 @@ class HardcoreSurvivalState(State):
                                             continue
 
                                         if tid in (int(self.T_TABLE), int(self.T_SHELF), int(self.T_BED)):
-                                            c = self._minimap_color(tid)
+                                            # Keep facade interior silhouettes readable even if minimap hides interiors.
+                                            if tid == int(self.T_TABLE):
+                                                c = (104, 82, 62)
+                                            elif tid == int(self.T_SHELF):
+                                                c = (92, 92, 104)
+                                            else:
+                                                c = (126, 126, 164)
                                             c = self._tint(c, add=(-56, -56, -56))
                                             bh = 3 if tid != int(self.T_BED) else 4
                                             rr = pygame.Rect(
