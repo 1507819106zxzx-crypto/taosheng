@@ -12612,8 +12612,10 @@ class HardcoreSurvivalState(State):
                     if style in (6,):
                         win = self._tint(trim, add=(-30, -30, -30))
                         ink = outline
-                        for yy in range(east.y + 6, east.bottom - 10, 12):
-                            if ((yy + var) % 2) != 0:
+                        for row_i, yy in enumerate(range(east.y + 6, east.bottom - 10, 12)):
+                            # IMPORTANT: use local row index (not screen coordinates) so it doesn't flicker while the
+                            # camera moves.
+                            if ((row_i + var) % 2) != 0:
                                 continue
                             wx = east.x + 3 + (var % 3)
                             surface.fill(win, pygame.Rect(wx, yy, 5, 4))
@@ -12642,7 +12644,8 @@ class HardcoreSurvivalState(State):
                         pygame.draw.rect(surface, outline, sign, 1, border_radius=2)
                         # Tiny pseudo text blocks
                         for xx in range(sign.x + 4 + (var % 3), sign.right - 6, 4):
-                            if ((xx + var) % 5) == 0:
+                            # IMPORTANT: use local x (not screen coordinates) so it doesn't flicker while walking.
+                            if (((xx - sign.x) + var) % 5) == 0:
                                 continue
                             surface.fill(self._tint(sign_bg, add=(38, 38, 42)), pygame.Rect(xx, sign.y + 2, 2, 1))
                         if style == 3 and sign.w >= 18:
@@ -12679,8 +12682,10 @@ class HardcoreSurvivalState(State):
                         frame = outline
                         step = 10 if style == 6 else 12
                         y1 = south.y + 4
-                        for xx in range(south.x + 6 + (var % 4), south.right - 10, step):
-                            if ((xx + var) % 3) == 0:
+                        start_x = int(south.x + 6 + (var % 4))
+                        for i, xx in enumerate(range(start_x, south.right - 10, step)):
+                            # IMPORTANT: use local window index (not screen coordinates) so it doesn't flicker.
+                            if ((i + var) % 3) == 0:
                                 continue
                             r = pygame.Rect(xx, y1, 6, 4)
                             pygame.draw.rect(surface, win, r, border_radius=1)
@@ -13318,7 +13323,8 @@ class HardcoreSurvivalState(State):
                 rect = pygame.Rect(int(px), int(py), self.TILE_SIZE, self.TILE_SIZE)
                 self._draw_world_tile(surface, rect, tx=tx, ty=ty, tile_id=int(tile))
 
-        self._draw_building_facades(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
+        # Include a small off-screen margin so facade extrusions (face_h) don't pop at screen edges.
+        self._draw_building_facades(surface, cam_x, cam_y, start_tx - 3, end_tx + 3, start_ty - 3, end_ty + 3)
         self._draw_vehicle_props(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
         self._draw_world_props(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
         self._draw_world_items(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
