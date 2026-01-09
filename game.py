@@ -6158,7 +6158,9 @@ class HardcoreSurvivalState(State):
                         border = x in (x0, x0 + w - 1) or y in (y0, y0 + h - 1)
                         tiles[idx(x, y)] = self.state.T_WALL if border else self.state.T_FLOOR
 
-                door_side = rng.choice(["N", "S", "W", "E"])
+                # Always use south-facing entrances so the single "front facade"
+                # (bottom/S) matches the actual doorway + collision.
+                door_side = "S"
                 door_tiles: list[tuple[int, int]] = []
                 if door_side == "N":
                     dx = rng.randint(x0 + 1, x0 + w - 3)
@@ -12615,6 +12617,20 @@ class HardcoreSurvivalState(State):
                     if door_info is not None:
                         door_side, door_tiles = door_info
 
+                    door_px: pygame.Rect | None = None
+                    if door_tiles and door_side == "S":
+                        xs = [p[0] for p in door_tiles]
+                        ys = [p[1] for p in door_tiles]
+                        dx0 = int(min(xs))
+                        dx1 = int(max(xs))
+                        dy = int(max(ys))
+                        door_px = pygame.Rect(
+                            int(dx0 * self.TILE_SIZE - cam_x),
+                            int(dy * self.TILE_SIZE - cam_y),
+                            int((dx1 - dx0 + 1) * self.TILE_SIZE),
+                            int(self.TILE_SIZE + face_h),
+                        )
+
                     # South (bottom) face: brighter and feature-rich (storefront/readability).
                     south = pygame.Rect(bx, by + bh - self.TILE_SIZE, bw, self.TILE_SIZE + face_h)
                     pygame.draw.rect(surface, front, south)
@@ -12633,7 +12649,16 @@ class HardcoreSurvivalState(State):
                     if style in (2, 3, 5):  # shop/hospital/school: sign + awning band
                         sign_h = int(clamp(int(south.h // 3), 5, 7))
                         sign = pygame.Rect(south.x + 3, south.y + 2, south.w - 6, sign_h)
-                        sign_bg = self._tint(trim, add=(-22, -22, -22)) if style != 3 else self._tint(trim, add=(-4, -4, -4))
+                        if style == 2:
+                            base = (78, 118, 176) if ((var >> 1) & 1) == 0 else (176, 132, 78)
+                            sign_bg = self._tint(base, add=(-10, -10, -10))
+                        elif style == 5:
+                            base = (168, 132, 92)
+                            sign_bg = self._tint(base, add=(-18, -14, -10))
+                        elif style == 3:
+                            sign_bg = self._tint(trim, add=(-4, -4, -4))
+                        else:
+                            sign_bg = self._tint(trim, add=(-22, -22, -22))
                         pygame.draw.rect(surface, sign_bg, sign, border_radius=2)
                         pygame.draw.rect(surface, outline, sign, 1, border_radius=2)
                         # Tiny pseudo text blocks
@@ -12663,6 +12688,29 @@ class HardcoreSurvivalState(State):
                                 surface.fill(col, pygame.Rect(awn.x + i, awn.y, 1, awn.h))
                             pygame.draw.rect(surface, outline, awn, 1)
                             store_header_bottom = int(awn.bottom)
+                            # Small hanging placard on the right.
+                            if awn.w >= 34:
+                                plac = pygame.Rect(int(awn.right - 14), int(awn.bottom + 2), 10, 10)
+                                pygame.draw.rect(surface, self._tint(sign_bg, add=(18, 18, 18)), plac, border_radius=2)
+                                pygame.draw.rect(surface, outline, plac, 1, border_radius=2)
+                                surface.fill((240, 220, 140), pygame.Rect(plac.x + 3, plac.y + 4, 4, 1))
+
+                    if style == 3:
+                        # Hospital: clean stripe band.
+                        stripe = (92, 138, 206)
+                        sy = int(store_header_bottom + 2)
+                        if sy + 2 < south.bottom - 4:
+                            surface.fill(stripe, pygame.Rect(int(south.x + 3), int(sy), int(south.w - 6), 2))
+
+                    if style == 5:
+                        # School: brick columns.
+                        col = self._tint(front, add=(-26, -20, -16))
+                        if south.w >= 26 and south.h >= 14:
+                            surface.fill(col, pygame.Rect(int(south.x + 2), int(south.y + 3), 3, int(south.h - 6)))
+                            surface.fill(col, pygame.Rect(int(south.right - 5), int(south.y + 3), 3, int(south.h - 6)))
+                            # Small banner tabs.
+                            surface.fill(self._tint(trim, add=(-30, -30, -30)), pygame.Rect(int(sign.x + 6), int(sign.bottom), 2, 3))
+                            surface.fill(self._tint(trim, add=(-30, -30, -30)), pygame.Rect(int(sign.right - 8), int(sign.bottom), 2, 3))
 
                     if style == 4:
                         # Prison: barred windows.
@@ -12801,23 +12849,107 @@ class HardcoreSurvivalState(State):
                                 pygame.draw.rect(surface, outline, pygame.Rect(int(cx - 3), int(cy - 3), 7, 7), 1)
 
                     # Re-draw the exterior door if our *front* facade covers it (south only).
-                    if door_tiles:
-                        if door_side == "S":
-                            xs = [p[0] for p in door_tiles]
-                            ys = [p[1] for p in door_tiles]
-                            dx0 = int(min(xs))
-                            dx1 = int(max(xs))
-                            dy = int(max(ys))
-                            dr = pygame.Rect(
-                                int(dx0 * self.TILE_SIZE - cam_x),
-                                int(dy * self.TILE_SIZE - cam_y),
-                                int((dx1 - dx0 + 1) * self.TILE_SIZE),
-                                int(self.TILE_SIZE + face_h),
-                            )
-                            pygame.draw.rect(surface, (34, 30, 26), dr, border_radius=2)
+                    if isinstance(door_px, pygame.Rect):
+                        dr = door_px.copy()
+                        # Slight inset so the door reads as "set into" the wall.
+                        dr.inflate_ip(-2, -2)
+                        dr.w = max(6, int(dr.w))
+                        dr.h = max(10, int(dr.h))
+                        min_x = int(south.x + 1)
+                        max_x = int(south.right - dr.w - 1)
+                        if max_x >= min_x:
+                            dr.x = int(clamp(int(dr.x), min_x, max_x))
+                        min_y = int(south.y + 1)
+                        max_y = int(south.bottom - dr.h - 1)
+                        if max_y >= min_y:
+                            dr.y = int(clamp(int(dr.y), min_y, max_y))
+
+                        if style == 2:
+                            # Shop: glass sliding doors.
+                            door_bg = self._tint(trim, add=(-78, -78, -84))
+                            pygame.draw.rect(surface, door_bg, dr, border_radius=2)
                             pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
-                            surface.fill((46, 40, 34), pygame.Rect(dr.x + 2, dr.y + 2, max(1, dr.w - 4), 3))
+                            hi = self._tint(trim, add=(48, 48, 54))
+                            surface.fill(hi, pygame.Rect(dr.x + 2, dr.y + 3, max(1, dr.w - 4), 1))
+                            mid = int(dr.centerx)
+                            surface.fill(outline, pygame.Rect(mid, dr.y + 2, 1, max(1, dr.h - 4)))
+                            handle = (230, 230, 236)
+                            surface.fill(handle, pygame.Rect(mid - 3, dr.centery - 1, 1, 2))
+                            surface.fill(handle, pygame.Rect(mid + 2, dr.centery - 1, 1, 2))
+                        elif style == 3:
+                            # Hospital: glass door + red cross.
+                            door_bg = self._tint(front, add=(-46, -46, -40))
+                            pygame.draw.rect(surface, door_bg, dr, border_radius=2)
+                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                            hi = self._tint(trim, add=(52, 52, 56))
+                            surface.fill(hi, pygame.Rect(dr.x + 2, dr.y + 3, max(1, dr.w - 4), 1))
+                            mid = int(dr.centerx)
+                            surface.fill(outline, pygame.Rect(mid, dr.y + 2, 1, max(1, dr.h - 4)))
+                            red = (190, 60, 60)
+                            cx = int(dr.x + min(10, max(6, dr.w // 2)))
+                            cy = int(dr.y + 10)
+                            surface.fill(red, pygame.Rect(cx - 1, cy - 3, 2, 7))
+                            surface.fill(red, pygame.Rect(cx - 3, cy - 1, 7, 2))
+                            pygame.draw.rect(surface, outline, pygame.Rect(cx - 3, cy - 3, 7, 7), 1)
+                        elif style == 4:
+                            # Prison: heavy gate + bars + caution band.
+                            metal = self._tint(front, add=(-22, -22, -28))
+                            pygame.draw.rect(surface, metal, dr, border_radius=2)
+                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                            bar = self._tint(trim, add=(-46, -46, -52))
+                            for xx in range(int(dr.x + 2), int(dr.right - 2), 3):
+                                surface.fill(bar, pygame.Rect(int(xx), int(dr.y + 2), 1, max(1, int(dr.h - 4))))
+                            # Caution stripe at the top of the gate.
+                            band = pygame.Rect(int(dr.x + 2), int(dr.y + 2), max(1, int(dr.w - 4)), 4)
+                            a = (210, 190, 90)
+                            bcol = (50, 50, 56)
+                            for i in range(int(band.w)):
+                                col = a if ((i + var) % 6) < 3 else bcol
+                                surface.fill(col, pygame.Rect(int(band.x + i), int(band.y), 1, int(band.h)))
+                            pygame.draw.rect(surface, outline, band, 1)
+                        elif style == 5:
+                            # School: wooden double doors.
+                            wood = self._tint(front, add=(-36, -26, -18))
+                            pygame.draw.rect(surface, wood, dr, border_radius=2)
+                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                            for xx in range(int(dr.x + 3), int(dr.right - 3), 4):
+                                surface.fill(self._tint(wood, add=(18, 12, 6)), pygame.Rect(int(xx), int(dr.y + 2), 1, max(1, int(dr.h - 4))))
+                            mid = int(dr.centerx)
+                            surface.fill(outline, pygame.Rect(mid, dr.y + 2, 1, max(1, dr.h - 4)))
+                            knob = (18, 18, 22)
+                            surface.fill(knob, pygame.Rect(mid - 3, dr.centery, 1, 1))
+                            surface.fill(knob, pygame.Rect(mid + 2, dr.centery, 1, 1))
+                        elif style == 1:
+                            # Residential: simple wood door + small window.
+                            wood = self._tint(front, add=(-34, -22, -14))
+                            pygame.draw.rect(surface, wood, dr, border_radius=2)
+                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                            winr = pygame.Rect(int(dr.centerx - 3), int(dr.y + 4), 6, 4)
+                            pygame.draw.rect(surface, self._tint(trim, add=(-30, -30, -34)), winr, border_radius=1)
+                            pygame.draw.rect(surface, outline, winr, 1, border_radius=1)
+                            pygame.draw.circle(surface, (18, 18, 22), (dr.right - 4, dr.centery), 1)
+                            # Doormat.
+                            mat = pygame.Rect(int(dr.x + 1), int(dr.bottom - 4), max(1, int(dr.w - 2)), 2)
+                            surface.fill(self._tint(front, add=(-44, -44, -44)), mat)
+                        elif style == 6:
+                            # High-rise lobby: big glass door.
+                            door_bg = self._tint(trim, add=(-86, -86, -92))
+                            pygame.draw.rect(surface, door_bg, dr, border_radius=2)
+                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                            hi = self._tint(trim, add=(52, 52, 56))
+                            surface.fill(hi, pygame.Rect(dr.x + 2, dr.y + 3, max(1, dr.w - 4), 1))
+                            for xx in range(int(dr.x + 3), int(dr.right - 3), 4):
+                                surface.fill(outline, pygame.Rect(int(xx), int(dr.y + 2), 1, max(1, int(dr.h - 4))))
+                        else:
+                            # Default: simple door.
+                            door_bg = self._tint(front, add=(-34, -30, -24))
+                            pygame.draw.rect(surface, door_bg, dr, border_radius=2)
+                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                            surface.fill(self._tint(door_bg, add=(18, 14, 10)), pygame.Rect(dr.x + 2, dr.y + 2, max(1, dr.w - 4), 3))
                             pygame.draw.circle(surface, (18, 18, 22), (dr.right - 4, dr.y + dr.h // 2), 1)
+
+                        # Threshold shadow for depth.
+                        surface.fill(self._tint(front, add=(-26, -26, -30)), pygame.Rect(dr.x + 1, dr.bottom - 2, max(1, dr.w - 2), 1))
 
     def _draw_roofs(
         self,
