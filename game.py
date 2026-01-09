@@ -10574,8 +10574,9 @@ class HardcoreSurvivalState(State):
             self.player.pos = self._move_box(self.player.pos, self.player.vel, dt, w=self.player.w, h=self.player.h)
 
         focus = pygame.Vector2(self.player.pos)
-        self.cam_x = int(round(focus.x - INTERNAL_W / 2))
-        self.cam_y = int(round(focus.y - INTERNAL_H / 2))
+        # Pixel-perfect camera: avoid round() jitter while walking.
+        self.cam_x = int(math.floor(focus.x - INTERNAL_W / 2))
+        self.cam_y = int(math.floor(focus.y - INTERNAL_H / 2))
 
         if self.gun is not None and float(self.gun.reload_left) > 0.0 and getattr(self, "_reload_lock_dir", None) is not None:
             lock = pygame.Vector2(self._reload_lock_dir)
@@ -11609,20 +11610,19 @@ class HardcoreSurvivalState(State):
         return base
 
     def _minimap_color(self, tile_id: int) -> tuple[int, int, int]:
-        # Higher-contrast palette for minimap / world map so interiors are readable.
+        # Minimap / world map palette.
+        # Do NOT reveal interior layouts: all building-interior tiles (walls/floors/doors/furniture)
+        # are rendered as a solid "roof" blob.
         tile_id = int(tile_id)
-        if tile_id == int(self.T_WALL):
-            return (8, 8, 10)
-        if tile_id == int(self.T_FLOOR):
-            return (168, 154, 136)
-        if tile_id == int(self.T_DOOR):
-            return (240, 210, 130)
-        if tile_id == int(self.T_TABLE):
-            return (104, 82, 62)
-        if tile_id == int(self.T_SHELF):
-            return (92, 92, 104)
-        if tile_id == int(self.T_BED):
-            return (126, 126, 164)
+        if tile_id in (
+            int(self.T_WALL),
+            int(self.T_FLOOR),
+            int(self.T_DOOR),
+            int(self.T_TABLE),
+            int(self.T_SHELF),
+            int(self.T_BED),
+        ):
+            return (72, 72, 92)
         if tile_id == int(self.T_ROAD):
             return (92, 92, 96)
         if tile_id == int(self.T_PAVEMENT):
@@ -12580,17 +12580,18 @@ class HardcoreSurvivalState(State):
                     roof_kind = int(b[4]) if len(b) > 4 else 0
                     style, var = self._building_roof_style_var(int(roof_kind))
 
-                    # Only draw facades for on-screen buildings.
+                    face_h = int(self._building_face_height_px(style=style, w=w, h=h, var=var))
+                    # Only draw facades when the facade extents are on-screen (prevents
+                    # 1-frame popping/flicker at the edges while walking).
                     bx = int(tx0 * self.TILE_SIZE - cam_x)
                     by = int(ty0 * self.TILE_SIZE - cam_y)
                     bw = int(w * self.TILE_SIZE)
                     bh = int(h * self.TILE_SIZE)
-                    if bx > INTERNAL_W or by > INTERNAL_H:
+                    if bx > (INTERNAL_W + face_h) or by > (INTERNAL_H + face_h):
                         continue
-                    if bx + bw < 0 or by + bh < 0:
+                    if (bx + bw + face_h) < 0 or (by + bh + face_h) < 0:
                         continue
 
-                    face_h = int(self._building_face_height_px(style=style, w=w, h=h, var=var))
                     front, side, trim, shadow = self._building_wall_palette(style=style, var=var)
                     outline = (10, 10, 12)
 
@@ -13288,9 +13289,8 @@ class HardcoreSurvivalState(State):
             if getattr(self, "_gallery_open", False):
                 self._draw_sprite_gallery_ui(surface)
             return
-        focus = pygame.Vector2(self.player.pos)
-        cam_x = int(round(focus.x - INTERNAL_W / 2))
-        cam_y = int(round(focus.y - INTERNAL_H / 2))
+        cam_x = int(getattr(self, "cam_x", 0))
+        cam_y = int(getattr(self, "cam_y", 0))
 
         start_tx = int(math.floor(cam_x / self.TILE_SIZE)) - 1
         start_ty = int(math.floor(cam_y / self.TILE_SIZE)) - 1
@@ -13468,8 +13468,7 @@ class HardcoreSurvivalState(State):
         if bool(getattr(self, "rv_interior", False)) or bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "sch_interior", False)):
             return None
 
-        # Keep the minimap panel size similar, but zoom in so building interiors
-        # (walls/doors/furniture) are easier to read.
+        # Keep the minimap panel size similar (player-centric).
         radius = 15  # tiles
         scale = 3  # px per tile
         tiles = int(radius) * 2 + 1
