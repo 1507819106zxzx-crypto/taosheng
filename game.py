@@ -6220,18 +6220,44 @@ class HardcoreSurvivalState(State):
                 door_my = int(round(sum(int(p[1]) for p in door_tiles) / max(1, len(door_tiles))))
                 out_x = door_mx + int(ox)
                 out_y = door_my + int(oy)
-                sign_candidates: list[tuple[int, int]] = [(int(out_x), int(out_y))]
+                # Avoid placing a sign directly in front of the doorway (looks like it blocks the entrance).
+                sign_candidates: list[tuple[int, int]] = []
+                xs0 = [p[0] for p in door_tiles]
+                ys0 = [p[1] for p in door_tiles]
+                dx0 = int(min(xs0)) if xs0 else int(door_mx)
+                dx1 = int(max(xs0)) if xs0 else int(door_mx)
+                dy0 = int(max(ys0)) if ys0 else int(door_my)
+
+                # Door plates (home/highrise) prefer to mount on the wall next to the door.
+                if str(sign_id) in ("sign_home", "sign_highrise"):
+                    # Prefer placing 2 tiles away so the plate never visually overlaps the doorway.
+                    sign_candidates += [(dx0 - 2, dy0), (dx1 + 2, dy0), (dx0 - 1, dy0), (dx1 + 1, dy0)]
+
                 if door_side in ("N", "S"):
-                    sign_candidates += [(int(out_x) - 1, int(out_y)), (int(out_x) + 1, int(out_y))]
+                    sign_candidates += [
+                        (int(out_x) - 1, int(out_y)),
+                        (int(out_x) + 1, int(out_y)),
+                        (int(out_x) - 2, int(out_y)),
+                        (int(out_x) + 2, int(out_y)),
+                    ]
                 else:
-                    sign_candidates += [(int(out_x), int(out_y) - 1), (int(out_x), int(out_y) + 1)]
+                    sign_candidates += [
+                        (int(out_x), int(out_y) - 1),
+                        (int(out_x), int(out_y) + 1),
+                        (int(out_x), int(out_y) - 2),
+                        (int(out_x), int(out_y) + 2),
+                    ]
 
                 for sx, sy in sign_candidates:
                     if not (0 <= int(sx) < int(self.state.CHUNK_SIZE) and 0 <= int(sy) < int(self.state.CHUNK_SIZE)):
                         continue
                     tdef = self.state._TILES.get(int(tiles[idx(int(sx), int(sy))]))
                     if tdef is not None and bool(getattr(tdef, "solid", False)):
-                        continue
+                        # Allow door plates to mount on wall tiles (otherwise they'd always end up on the ground).
+                        if str(sign_id) not in ("sign_home", "sign_highrise"):
+                            continue
+                        if int(tiles[idx(int(sx), int(sy))]) == int(self.state.T_DOOR):
+                            continue
                     wx = int(base_tx + int(sx))
                     wy = int(base_ty + int(sy))
                     px = (float(wx) + 0.5) * float(self.state.TILE_SIZE)
@@ -12850,19 +12876,32 @@ class HardcoreSurvivalState(State):
 
                     # Re-draw the exterior door if our *front* facade covers it (south only).
                     if isinstance(door_px, pygame.Rect):
-                        dr = door_px.copy()
-                        # Slight inset so the door reads as "set into" the wall.
-                        dr.inflate_ip(-2, -2)
-                        dr.w = max(6, int(dr.w))
-                        dr.h = max(10, int(dr.h))
-                        min_x = int(south.x + 1)
-                        max_x = int(south.right - dr.w - 1)
+                        # Door visual should not scale with the full facade height (especially for high-rises).
+                        # Anchor to the ground (bottom of facade) and clamp size by building type.
+                        door_open_w = int(door_px.w)
+                        if style == 1:  # house
+                            door_w = int(clamp(door_open_w - 10, 10, 14))
+                        elif style in (2, 3, 4):  # shop/hospital/prison
+                            door_w = int(clamp(door_open_w - 2, 16, 20))
+                        elif style == 5:  # school
+                            door_w = int(clamp(door_open_w - 4, 14, 18))
+                        elif style == 6:  # high-rise lobby
+                            door_w = int(clamp(door_open_w - 4, 14, 18))
+                        else:
+                            door_w = int(clamp(door_open_w - 6, 12, 18))
+
+                        if style == 6:
+                            door_h = int(clamp(14 + int(face_h) // 4, 18, 26))
+                        else:
+                            door_h = int(clamp(10 + int(face_h) // 3, 12, 18))
+                        door_h = int(min(int(door_h), max(10, int(south.h - 6))))
+
+                        dr = pygame.Rect(0, 0, int(door_w), int(door_h))
+                        dr.midbottom = (int(door_px.centerx), int(south.bottom - 2))
+                        min_x = int(south.x + 2)
+                        max_x = int(south.right - dr.w - 2)
                         if max_x >= min_x:
                             dr.x = int(clamp(int(dr.x), min_x, max_x))
-                        min_y = int(south.y + 1)
-                        max_y = int(south.bottom - dr.h - 1)
-                        if max_y >= min_y:
-                            dr.y = int(clamp(int(dr.y), min_y, max_y))
 
                         if style == 2:
                             # Shop: glass sliding doors.
