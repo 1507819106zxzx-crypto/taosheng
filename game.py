@@ -12479,16 +12479,29 @@ class HardcoreSurvivalState(State):
         w = int(w)
         h = int(h)
         var = int(var)
+        area = int(w) * int(h)
         # Wall extrusion height: makes building height readable at a glance.
+        # High-rises should read "very tall" even at small internal resolution.
+        if style == 6:
+            base = 18
+            if area >= 520:
+                base += 12
+            elif area >= 320:
+                base += 9
+            elif area >= 200:
+                base += 7
+            else:
+                base += 5
+            base += (int(var) % 9) - 4
+            return int(clamp(int(base), 18, 42))
+
         base = {
             1: 3,  # 住宅
             2: 5,  # 超市/商店
             3: 5,  # 医院
             4: 6,  # 监狱
             5: 5,  # 学校
-            6: 8,  # 高层住宅
         }.get(style, 3)
-        area = int(w) * int(h)
         if area >= 520:
             base += 3
         elif area >= 320:
@@ -12581,15 +12594,15 @@ class HardcoreSurvivalState(State):
                     style, var = self._building_roof_style_var(int(roof_kind))
 
                     face_h = int(self._building_face_height_px(style=style, w=w, h=h, var=var))
-                    # Only draw facades when the facade extents are on-screen (prevents
-                    # 1-frame popping/flicker at the edges while walking).
+                    # Only draw the *front* facade (bottom/S) as requested.
+                    # Keep visibility checks stable to avoid popping at edges while walking.
                     bx = int(tx0 * self.TILE_SIZE - cam_x)
                     by = int(ty0 * self.TILE_SIZE - cam_y)
                     bw = int(w * self.TILE_SIZE)
                     bh = int(h * self.TILE_SIZE)
-                    if bx > (INTERNAL_W + face_h) or by > (INTERNAL_H + face_h):
+                    if bx > INTERNAL_W or by > INTERNAL_H:
                         continue
-                    if (bx + bw + face_h) < 0 or (by + bh + face_h) < 0:
+                    if (bx + bw) < 0 or (by + bh + face_h) < 0:
                         continue
 
                     front, side, trim, shadow = self._building_wall_palette(style=style, var=var)
@@ -12601,25 +12614,6 @@ class HardcoreSurvivalState(State):
                     door_tiles: list[tuple[int, int]] = []
                     if door_info is not None:
                         door_side, door_tiles = door_info
-
-                    # East (right) face: darker to read as shadow.
-                    east = pygame.Rect(bx + bw - self.TILE_SIZE, by, self.TILE_SIZE + face_h, bh)
-                    pygame.draw.rect(surface, side, east)
-                    pygame.draw.rect(surface, outline, east, 1)
-                    surface.fill(self._tint(side, add=(-14, -14, -14)), pygame.Rect(east.x, east.bottom - max(1, face_h // 2), east.w, max(1, face_h // 2)))
-
-                    # Small window columns for tall buildings.
-                    if style in (6,):
-                        win = self._tint(trim, add=(-30, -30, -30))
-                        ink = outline
-                        for row_i, yy in enumerate(range(east.y + 6, east.bottom - 10, 12)):
-                            # IMPORTANT: use local row index (not screen coordinates) so it doesn't flicker while the
-                            # camera moves.
-                            if ((row_i + var) % 2) != 0:
-                                continue
-                            wx = east.x + 3 + (var % 3)
-                            surface.fill(win, pygame.Rect(wx, yy, 5, 4))
-                            pygame.draw.rect(surface, ink, pygame.Rect(wx, yy, 5, 4), 1)
 
                     # South (bottom) face: brighter and feature-rich (storefront/readability).
                     south = pygame.Rect(bx, by + bh - self.TILE_SIZE, bw, self.TILE_SIZE + face_h)
@@ -12680,16 +12674,32 @@ class HardcoreSurvivalState(State):
                         # Residential/high-rise windows.
                         win = self._tint(trim, add=(-40, -40, -46))
                         frame = outline
-                        step = 10 if style == 6 else 12
-                        y1 = south.y + 4
                         start_x = int(south.x + 6 + (var % 4))
-                        for i, xx in enumerate(range(start_x, south.right - 10, step)):
-                            # IMPORTANT: use local window index (not screen coordinates) so it doesn't flicker.
-                            if ((i + var) % 3) == 0:
-                                continue
-                            r = pygame.Rect(xx, y1, 6, 4)
-                            pygame.draw.rect(surface, win, r, border_radius=1)
-                            pygame.draw.rect(surface, frame, r, 1, border_radius=1)
+                        if style == 6:
+                            # Multiple rows so height reads as "high-rise".
+                            step_x = 10
+                            step_y = 8
+                            y0w = int(south.y + 4)
+                            y1w = int(south.bottom - 7)
+                            for row_i, yy in enumerate(range(y0w, y1w, step_y)):
+                                for col_i, xx in enumerate(range(start_x, south.right - 10, step_x)):
+                                    # IMPORTANT: use local indices (not screen coords) so it doesn't flicker.
+                                    if ((col_i + row_i + var) % 4) == 0:
+                                        continue
+                                    r = pygame.Rect(int(xx), int(yy), 6, 4)
+                                    pygame.draw.rect(surface, win, r, border_radius=1)
+                                    pygame.draw.rect(surface, frame, r, 1, border_radius=1)
+                        else:
+                            # Single row for small residential buildings.
+                            step_x = 12
+                            y1 = int(south.y + 4)
+                            for i, xx in enumerate(range(start_x, south.right - 10, step_x)):
+                                # IMPORTANT: use local window index (not screen coordinates) so it doesn't flicker.
+                                if ((i + var) % 3) == 0:
+                                    continue
+                                r = pygame.Rect(int(xx), int(y1), 6, 4)
+                                pygame.draw.rect(surface, win, r, border_radius=1)
+                                pygame.draw.rect(surface, frame, r, 1, border_radius=1)
 
                     # "Front interior" storefront hint (like the reference): show a cutout window strip with
                     # silhouettes of shelves/props synced to the actual interior tiles.
@@ -12790,7 +12800,7 @@ class HardcoreSurvivalState(State):
                                 surface.fill(red, pygame.Rect(int(cx - 3), int(cy - 1), 7, 2))
                                 pygame.draw.rect(surface, outline, pygame.Rect(int(cx - 3), int(cy - 3), 7, 7), 1)
 
-                    # Re-draw the exterior door if our facade covers it (south/east).
+                    # Re-draw the exterior door if our *front* facade covers it (south only).
                     if door_tiles:
                         if door_side == "S":
                             xs = [p[0] for p in door_tiles]
@@ -12808,22 +12818,6 @@ class HardcoreSurvivalState(State):
                             pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
                             surface.fill((46, 40, 34), pygame.Rect(dr.x + 2, dr.y + 2, max(1, dr.w - 4), 3))
                             pygame.draw.circle(surface, (18, 18, 22), (dr.right - 4, dr.y + dr.h // 2), 1)
-                        elif door_side == "E":
-                            xs = [p[0] for p in door_tiles]
-                            ys = [p[1] for p in door_tiles]
-                            dx = int(max(xs))
-                            dy0 = int(min(ys))
-                            dy1 = int(max(ys))
-                            dr = pygame.Rect(
-                                int(dx * self.TILE_SIZE - cam_x),
-                                int(dy0 * self.TILE_SIZE - cam_y),
-                                int(self.TILE_SIZE + face_h),
-                                int((dy1 - dy0 + 1) * self.TILE_SIZE),
-                            )
-                            pygame.draw.rect(surface, (30, 28, 26), dr, border_radius=2)
-                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
-                            surface.fill((46, 40, 34), pygame.Rect(dr.x + 2, dr.y + 2, 3, max(1, dr.h - 4)))
-                            pygame.draw.circle(surface, (18, 18, 22), (dr.x + dr.w // 2, dr.bottom - 4), 1)
 
     def _draw_roofs(
         self,
