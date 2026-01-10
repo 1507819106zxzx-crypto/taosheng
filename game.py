@@ -6162,11 +6162,11 @@ class HardcoreSurvivalState(State):
                         continue
                     # Avoid spawning right next to building walls/doors (looks like bikes are "on the facade").
                     near_wall = False
-                    for ny in range(int(y) - 1, int(y) + 2):
-                        for nx in range(int(x) - 1, int(x) + 2):
+                    for ny in range(int(y) - 2, int(y) + 3):
+                        for nx in range(int(x) - 2, int(x) + 3):
                             if not (0 <= int(nx) < int(self.state.CHUNK_SIZE) and 0 <= int(ny) < int(self.state.CHUNK_SIZE)):
                                 continue
-                            nt = int(tiles[idx(int(nx), int(ny))])
+                            nt = int(tiles[idx(int(nx), int(ny))])        
                             if nt in (int(self.state.T_WALL), int(self.state.T_DOOR)):
                                 near_wall = True
                                 break
@@ -7580,24 +7580,76 @@ class HardcoreSurvivalState(State):
         tx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
         ty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
         spawn_chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
-        for sb in getattr(spawn_chunk, "special_buildings", []):
-            if getattr(sb, "kind", "") != "highrise":
-                continue
-            if getattr(sb, "door_tiles", None):
-                self.home_highrise_door = tuple(sb.door_tiles)[0]        
-            floors = int(getattr(sb, "floors", 0) or 0)
-            if floors <= 0:
-                floors = int(self._HR_INT_MAX_FLOORS_DEFAULT)
-            # Fixed "Chinese community" home for now: 6F room 604.
-            self.home_highrise_floor = int(clamp(6, 2, int(floors)))
-            # Unit numbering follows the door list order: 01..N
-            self.home_highrise_unit = 4
-            door_count = int(max(1, len(self._HR_INT_APT_DOORS)))
-            self.home_highrise_unit = int(clamp(int(self.home_highrise_unit), 1, door_count))
-            self.home_highrise_door_index = int(self.home_highrise_unit - 1)
-            self.home_highrise_room = f"{int(self.home_highrise_floor)}{int(self.home_highrise_unit):02d}"
-            self._set_hint(f"你的家：{self.home_highrise_room}", seconds=2.0)
-            break
+        # Pick a reliable home entrance near spawn (guarantees the map marker exists).
+        spawn_cx = int(spawn_tx) // self.CHUNK_SIZE
+        spawn_cy = int(spawn_ty) // self.CHUNK_SIZE
+        best_home: tuple[int, int, int, int] | None = None  # (d2, tx, ty, floors)
+        for cy2 in range(int(spawn_cy) - 1, int(spawn_cy) + 2):
+            for cx2 in range(int(spawn_cx) - 1, int(spawn_cx) + 2):
+                chunk2 = self.world.get_chunk(int(cx2), int(cy2))
+                for sb in getattr(chunk2, "special_buildings", []):
+                    if getattr(sb, "kind", "") != "highrise":
+                        continue
+                    floors2 = int(getattr(sb, "floors", 0) or 0)
+                    if floors2 <= 0:
+                        floors2 = int(self._HR_INT_MAX_FLOORS_DEFAULT)
+                    for dtile in tuple(getattr(sb, "door_tiles", ()) or ()):
+                        hx, hy = int(dtile[0]), int(dtile[1])
+                        d2 = (hx - int(spawn_tx)) ** 2 + (hy - int(spawn_ty)) ** 2
+                        if best_home is None or d2 < int(best_home[0]):
+                            best_home = (int(d2), int(hx), int(hy), int(floors2))
+
+        floors = int(self._HR_INT_MAX_FLOORS_DEFAULT)
+        if best_home is not None:
+            _d2, hx, hy, floors = best_home
+            self.home_highrise_door = (int(hx), int(hy))
+        else:
+            # Fallback: still show a marker instead of having "no home".
+            self.home_highrise_door = (int(spawn_tx), int(spawn_ty))
+
+        # Fixed "Chinese community" home for now: 6F room 604.
+        self.home_highrise_floor = int(clamp(6, 2, int(floors)))
+        # Unit numbering follows the door list order: 01..N
+        self.home_highrise_unit = 4
+        door_count = int(max(1, len(self._HR_INT_APT_DOORS)))
+        self.home_highrise_unit = int(clamp(int(self.home_highrise_unit), 1, door_count))
+        self.home_highrise_door_index = int(self.home_highrise_unit - 1)
+        self.home_highrise_room = f"{int(self.home_highrise_floor)}{int(self.home_highrise_unit):02d}"
+        self._set_hint(f"你的家：{self.home_highrise_room}", seconds=2.0)
+
+        # Ensure the starter vehicles don't spawn "inside" a building.
+        def vehicle_clear(p: pygame.Vector2, w: int, h: int) -> bool:
+            r = pygame.Rect(int(round(p.x - w / 2)), int(round(p.y - h / 2)), int(w), int(h))
+            return len(self._collide_rect_world_vehicle(r)) == 0
+
+        def find_clear_vehicle_pos(desired: pygame.Vector2, *, w: int, h: int, max_r_tiles: int = 18) -> pygame.Vector2:
+            base_tx = int(math.floor(float(desired.x) / float(self.TILE_SIZE)))
+            base_ty = int(math.floor(float(desired.y) / float(self.TILE_SIZE)))
+            if vehicle_clear(desired, int(w), int(h)):
+                return pygame.Vector2(desired)
+            for r in range(1, int(max_r_tiles) + 1):
+                for dy2 in (-r, r):
+                    for dx2 in range(-r, r + 1):
+                        tx2 = int(base_tx + dx2)
+                        ty2 = int(base_ty + dy2)
+                        px = (float(tx2) + 0.5) * float(self.TILE_SIZE)
+                        py = (float(ty2) + 0.5) * float(self.TILE_SIZE)
+                        cand = pygame.Vector2(px, py)
+                        if vehicle_clear(cand, int(w), int(h)):
+                            return cand
+                for dx2 in (-r, r):
+                    for dy2 in range(-r + 1, r):
+                        tx2 = int(base_tx + dx2)
+                        ty2 = int(base_ty + dy2)
+                        px = (float(tx2) + 0.5) * float(self.TILE_SIZE)
+                        py = (float(ty2) + 0.5) * float(self.TILE_SIZE)
+                        cand = pygame.Vector2(px, py)
+                        if vehicle_clear(cand, int(w), int(h)):
+                            return cand
+            return pygame.Vector2(desired)
+
+        self.rv.pos = find_clear_vehicle_pos(pygame.Vector2(self.rv.pos), w=int(self.rv.w), h=int(self.rv.h))
+        self.bike.pos = find_clear_vehicle_pos(pygame.Vector2(self.bike.pos), w=int(self.bike.w), h=int(self.bike.h))
         spawn_chunk.items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(self.player.pos) + pygame.Vector2(18, 0), item_id="pistol", qty=1))
         spawn_chunk.items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(self.player.pos) + pygame.Vector2(18, 10), item_id="ammo_9mm", qty=24))
         # Default start: spring morning (season is derived from day index).
@@ -13392,6 +13444,8 @@ class HardcoreSurvivalState(State):
         end_tx: int,
         start_ty: int,
         end_ty: int,
+        *,
+        min_ground_y: int | None = None,
     ) -> None:
         # Expand by a full chunk in each direction so facades from large
         # buildings don't pop in/out at the screen edges while walking.
@@ -13447,6 +13501,11 @@ class HardcoreSurvivalState(State):
                         )
 
                     ground_y = int(by + bh)
+                    # Optional occlusion pass: only draw facades that are "in front"
+                    # of a given screen-space y (used to keep vehicles from looking
+                    # like they're on top of the building when behind it).
+                    if min_ground_y is not None and int(ground_y) <= int(min_ground_y):
+                        continue
                     # South (bottom) face: draw the "front facade".
                     # For high-rises, extend the facade upward so multiple
                     # window rows can read as "tall" (roof is clipped for
@@ -14369,6 +14428,8 @@ class HardcoreSurvivalState(State):
         self._draw_bullets(surface, cam_x, cam_y)
         if self.mount is None:
             self._draw_player(surface, cam_x, cam_y)
+        # Occlude the mounted vehicle by front facades when it is behind buildings.
+        self._occlude_mounted_vehicle_with_facades(surface, cam_x, cam_y, start_tx - 3, end_tx + 3, start_ty - 3, end_ty + 3)
         self._draw_roofs(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
         self._draw_day_night_overlay(surface, in_rv=False)
         self._draw_weather_effects(surface, in_rv=False)
@@ -14387,6 +14448,51 @@ class HardcoreSurvivalState(State):
             self._draw_inventory_ui(surface)
         if getattr(self, "_gallery_open", False):
             self._draw_sprite_gallery_ui(surface)
+
+    def _occlude_mounted_vehicle_with_facades(
+        self,
+        surface: pygame.Surface,
+        cam_x: int,
+        cam_y: int,
+        start_tx: int,
+        end_tx: int,
+        start_ty: int,
+        end_ty: int,
+    ) -> None:
+        mount = getattr(self, "mount", None)
+        if mount == "bike":
+            if not hasattr(self, "bike") or self.bike is None:
+                return
+            w = int(getattr(self.bike, "w", 14))
+            h = int(getattr(self.bike, "h", 10))
+            rect = self.bike.rect().move(-int(cam_x), -int(cam_y)).inflate(36, 46)
+            ground_y = int(round((float(self.bike.pos.y) - float(cam_y)) + float(h) / 2.0))
+        elif mount == "rv":
+            if not hasattr(self, "rv") or self.rv is None:
+                return
+            rect = self.rv.rect().move(-int(cam_x), -int(cam_y)).inflate(72, 62)
+            ground_y = int(round((float(self.rv.pos.y) - float(cam_y)) + float(self.rv.h) / 2.0))
+        else:
+            return
+
+        clip = rect.clip(pygame.Rect(0, 0, INTERNAL_W, INTERNAL_H))
+        if clip.w <= 0 or clip.h <= 0:
+            return
+        prev_clip = surface.get_clip()
+        surface.set_clip(clip)
+        try:
+            self._draw_building_facades(
+                surface,
+                int(cam_x),
+                int(cam_y),
+                int(start_tx),
+                int(end_tx),
+                int(start_ty),
+                int(end_ty),
+                min_ground_y=int(ground_y) + 1,
+            )
+        finally:
+            surface.set_clip(prev_clip)
 
     def _draw_player(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         p = self.player.pos - pygame.Vector2(cam_x, cam_y)
@@ -14587,8 +14693,9 @@ class HardcoreSurvivalState(State):
             if abs(dx_t) <= int(radius) and abs(dy_t) <= int(radius):
                 mx = int(map_x0 + (dx_t + int(radius)) * int(scale) + int(scale) // 2)
                 my = int(map_y0 + (dy_t + int(radius)) * int(scale) + int(scale) // 2)
-                pygame.draw.circle(surface, (255, 220, 140), (mx, my), 3)
-                pygame.draw.circle(surface, (0, 0, 0), (mx, my), 3, 1)
+                pygame.draw.circle(surface, (255, 220, 140), (mx, my), 4)
+                pygame.draw.circle(surface, (0, 0, 0), (mx, my), 4, 1)
+                surface.fill((255, 245, 190), pygame.Rect(int(mx - 1), int(my - 1), 2, 2))
             else:
                 m = max(abs(dx_t), abs(dy_t))
                 if m <= 0:
@@ -14613,6 +14720,9 @@ class HardcoreSurvivalState(State):
                 tip = (tip_x, tip_y)
                 pygame.draw.polygon(surface, (255, 220, 140), [tip, left, right])
                 pygame.draw.polygon(surface, (0, 0, 0), [tip, left, right], 1)
+                lx = int(round(base_x + px * 5.0))
+                ly = int(round(base_y + py * 5.0))
+                draw_text(surface, self.app.font_s, "家", (lx, ly), pygame.Color(240, 240, 244), anchor="center")
 
         def draw_edge_arrow(
             *,
@@ -15107,13 +15217,14 @@ class HardcoreSurvivalState(State):
             scale=int(scale),
         )
 
-        def draw_marker(tx: int, ty: int, col: tuple[int, int, int], label: str | None = None) -> None:
+        def draw_marker(tx: int, ty: int, col: tuple[int, int, int], label: str | None = None, *, r: int = 3) -> None:
             if not (start_tx <= int(tx) < start_tx + view_w and start_ty <= int(ty) < start_ty + view_h):
                 return
             mx = int(draw_x + (int(tx) - start_tx) * scale + scale // 2)
             my = int(draw_y + (int(ty) - start_ty) * scale + scale // 2)
-            pygame.draw.circle(surface, col, (mx, my), 3)
-            pygame.draw.circle(surface, (0, 0, 0), (mx, my), 3, 1)
+            rr = int(max(2, int(r)))
+            pygame.draw.circle(surface, col, (mx, my), rr)
+            pygame.draw.circle(surface, (0, 0, 0), (mx, my), rr, 1)
             if label:
                 draw_text(surface, self.app.font_s, label, (mx + 6, my - 6), pygame.Color(240, 240, 240), anchor="topleft")
 
@@ -15127,7 +15238,7 @@ class HardcoreSurvivalState(State):
 
         home = getattr(self, "home_highrise_door", None)
         if isinstance(home, tuple) and len(home) == 2:
-            draw_marker(int(home[0]), int(home[1]), (255, 220, 140), "家")
+            draw_marker(int(home[0]), int(home[1]), (255, 220, 140), "家", r=4)
 
         for m in getattr(self, "world_map_markers", []):
             draw_marker(int(getattr(m, "tx", 0)), int(getattr(m, "ty", 0)), tuple(getattr(m, "color", (255, 220, 140))), str(getattr(m, "label", "")))
