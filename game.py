@@ -5924,6 +5924,20 @@ class HardcoreSurvivalState(State):
                         int(self.state.T_CONCRETE),
                     ):
                         continue
+                    # Avoid spawning right next to building walls/doors (looks like bikes are "on the facade").
+                    near_wall = False
+                    for ny in range(int(y) - 1, int(y) + 2):
+                        for nx in range(int(x) - 1, int(x) + 2):
+                            if not (0 <= int(nx) < int(self.state.CHUNK_SIZE) and 0 <= int(ny) < int(self.state.CHUNK_SIZE)):
+                                continue
+                            nt = int(tiles[idx(int(nx), int(ny))])
+                            if nt in (int(self.state.T_WALL), int(self.state.T_DOOR)):
+                                near_wall = True
+                                break
+                        if near_wall:
+                            break
+                    if near_wall:
+                        continue
                     candidates.append((int(x), int(y)))
             if not candidates:
                 return
@@ -6228,10 +6242,8 @@ class HardcoreSurvivalState(State):
                 dx1 = int(max(xs0)) if xs0 else int(door_mx)
                 dy0 = int(max(ys0)) if ys0 else int(door_my)
 
-                # Door plates (home/highrise) prefer to mount on the wall next to the door.
-                if str(sign_id) in ("sign_home", "sign_highrise"):
-                    # Prefer placing 2 tiles away so the plate never visually overlaps the doorway.
-                    sign_candidates += [(dx0 - 2, dy0), (dx1 + 2, dy0), (dx0 - 1, dy0), (dx1 + 1, dy0)]
+                # Prefer placing signs on the ground outside the entrance (never on wall tiles),
+                # so they don't look like they're floating on the facade.
 
                 if door_side in ("N", "S"):
                     sign_candidates += [
@@ -6253,11 +6265,7 @@ class HardcoreSurvivalState(State):
                         continue
                     tdef = self.state._TILES.get(int(tiles[idx(int(sx), int(sy))]))
                     if tdef is not None and bool(getattr(tdef, "solid", False)):
-                        # Allow door plates to mount on wall tiles (otherwise they'd always end up on the ground).
-                        if str(sign_id) not in ("sign_home", "sign_highrise"):
-                            continue
-                        if int(tiles[idx(int(sx), int(sy))]) == int(self.state.T_DOOR):
-                            continue
+                        continue
                     wx = int(base_tx + int(sx))
                     wy = int(base_ty + int(sy))
                     px = (float(wx) + 0.5) * float(self.state.TILE_SIZE)
@@ -10167,7 +10175,7 @@ class HardcoreSurvivalState(State):
 
     def _collide_rect_world(self, rect: pygame.Rect) -> list[pygame.Rect]:
         left = int(math.floor(rect.left / self.TILE_SIZE))
-        right = int(math.floor((rect.right - 1) / self.TILE_SIZE))
+        right = int(math.floor((rect.right - 1) / self.TILE_SIZE))       
         top = int(math.floor(rect.top / self.TILE_SIZE))
         bottom = int(math.floor((rect.bottom - 1) / self.TILE_SIZE))
 
@@ -10182,6 +10190,57 @@ class HardcoreSurvivalState(State):
                     hits.append(tile_rect)
 
         # Solid world props (signs/toys/etc).
+        start_cx = left // self.CHUNK_SIZE
+        end_cx = right // self.CHUNK_SIZE
+        start_cy = top // self.CHUNK_SIZE
+        end_cy = bottom // self.CHUNK_SIZE
+        for cy in range(int(start_cy), int(end_cy) + 1):
+            for cx in range(int(start_cx), int(end_cx) + 1):
+                chunk = self.world.get_chunk(int(cx), int(cy))
+                for pr in getattr(chunk, "props", []):
+                    pdef = self._PROP_DEFS.get(str(getattr(pr, "prop_id", "")))
+                    if pdef is None or not bool(getattr(pdef, "solid", False)):
+                        continue
+                    w, h = getattr(pdef, "collider", (10, 10))
+                    w = max(2, int(w))
+                    h = max(2, int(h))
+                    prect = pygame.Rect(
+                        int(round(float(pr.pos.x) - w / 2)),
+                        int(round(float(pr.pos.y) - h / 2)),
+                        int(w),
+                        int(h),
+                    )
+                    if rect.colliderect(prect):
+                        hits.append(prect)
+        return hits
+
+    def _collide_rect_world_vehicle(self, rect: pygame.Rect) -> list[pygame.Rect]:
+        left = int(math.floor(rect.left / self.TILE_SIZE))
+        right = int(math.floor((rect.right - 1) / self.TILE_SIZE))
+        top = int(math.floor(rect.top / self.TILE_SIZE))
+        bottom = int(math.floor((rect.bottom - 1) / self.TILE_SIZE))
+
+        hits: list[pygame.Rect] = []
+        for ty in range(top, bottom + 1):
+            for tx in range(left, right + 1):
+                tile = int(self.world.get_tile(tx, ty))
+                # Vehicles must not enter buildings: treat interior floor/doors as solid.
+                if tile in (int(self.T_FLOOR), int(self.T_DOOR)):
+                    solid = True
+                else:
+                    solid = bool(self._tile_solid(tile))
+                if not solid:
+                    continue
+                tile_rect = pygame.Rect(
+                    int(tx * self.TILE_SIZE),
+                    int(ty * self.TILE_SIZE),
+                    int(self.TILE_SIZE),
+                    int(self.TILE_SIZE),
+                )
+                if rect.colliderect(tile_rect):
+                    hits.append(tile_rect)
+
+        # Solid world props (signs/toys/etc) still block vehicles.
         start_cx = left // self.CHUNK_SIZE
         end_cx = right // self.CHUNK_SIZE
         start_cy = top // self.CHUNK_SIZE
@@ -10245,6 +10304,29 @@ class HardcoreSurvivalState(State):
         if dy != 0.0:
             rect.y += int(round(dy))
             for hit in self._collide_rect_world(rect):
+                if dy > 0:
+                    rect.bottom = hit.top
+                else:
+                    rect.top = hit.bottom
+
+        return pygame.Vector2(rect.centerx, rect.centery)
+
+    def _move_box_vehicle(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
+        rect = pygame.Rect(int(round(pos.x - w / 2)), int(round(pos.y - h / 2)), int(w), int(h))
+        dx = float(vel.x * dt)
+        dy = float(vel.y * dt)
+
+        if dx != 0.0:
+            rect.x += int(round(dx))
+            for hit in self._collide_rect_world_vehicle(rect):
+                if dx > 0:
+                    rect.right = hit.left
+                else:
+                    rect.left = hit.right
+
+        if dy != 0.0:
+            rect.y += int(round(dy))
+            for hit in self._collide_rect_world_vehicle(rect):
                 if dy > 0:
                     rect.bottom = hit.top
                 else:
@@ -10484,7 +10566,7 @@ class HardcoreSurvivalState(State):
                 self.rv_anim *= 0.85
 
             before = pygame.Vector2(self.rv.pos)
-            self.rv.pos = self._move_box(self.rv.pos, self.rv.vel, dt, w=self.rv.w, h=self.rv.h)
+            self.rv.pos = self._move_box_vehicle(self.rv.pos, self.rv.vel, dt, w=self.rv.w, h=self.rv.h)
             dist = float((self.rv.pos - before).length())
             if dist > 0.001:
                 self.rv.fuel = max(0.0, float(self.rv.fuel) - dist * float(getattr(model, "fuel_per_px", 0.0125)))
@@ -10545,7 +10627,7 @@ class HardcoreSurvivalState(State):
                 self.bike_anim *= 0.85
 
             before = pygame.Vector2(self.bike.pos)
-            self.bike.pos = self._move_box(self.bike.pos, self.bike.vel, dt, w=self.bike.w, h=self.bike.h)
+            self.bike.pos = self._move_box_vehicle(self.bike.pos, self.bike.vel, dt, w=self.bike.w, h=self.bike.h)
             dist = float((self.bike.pos - before).length())
             if uses_fuel and dist > 0.001:
                 fuel_per_px = {
@@ -12639,7 +12721,7 @@ class HardcoreSurvivalState(State):
                     bh = int(h * self.TILE_SIZE)
                     if bx > INTERNAL_W or by > INTERNAL_H:
                         continue
-                    if (bx + bw) < 0 or (by + bh + face_h) < 0:
+                    if (bx + bw) < 0 or (by + bh) < 0:
                         continue
 
                     front, side, trim, shadow = self._building_wall_palette(style=style, var=var)
@@ -12666,16 +12748,25 @@ class HardcoreSurvivalState(State):
                             int(self.TILE_SIZE + face_h),
                         )
 
-                    # South (bottom) face: front facade extrusion (downward) so the doorway sits on the ground.
-                    south = pygame.Rect(int(bx), int(by + bh - self.TILE_SIZE), int(bw), int(self.TILE_SIZE + face_h))
+                    ground_y = int(by + bh)
+                    # South (bottom) face: draw only the ground-floor wall strip (prevents props/vehicles
+                    # from looking like they are "on the facade").
+                    south = pygame.Rect(
+                        int(bx),
+                        int(ground_y - self.TILE_SIZE),
+                        int(bw),
+                        int(self.TILE_SIZE),
+                    )
                     pygame.draw.rect(surface, front, south)
                     pygame.draw.rect(surface, outline, south, 1)
                     # Ground shadow under the facade.
                     shadow_h = int(clamp(2 + int(face_h) // 10, 2, 5))
-                    sh = pygame.Rect(int(south.x + 2), int(south.bottom - 1), int(south.w - 2), int(shadow_h))
+                    sh = pygame.Rect(int(south.x + 2), int(south.bottom), int(south.w - 2), int(shadow_h))
                     pygame.draw.rect(surface, shadow, sh)
+                    # Lower-half shade for depth (independent of "building height").
+                    shade_h = int(max(2, int(south.h) // 2))
                     shade = self._tint(front, add=(-18, -18, -18))
-                    surface.fill(shade, pygame.Rect(south.x, south.bottom - max(2, face_h // 2), south.w, max(2, face_h // 2)))
+                    surface.fill(shade, pygame.Rect(int(south.x), int(south.bottom - shade_h), int(south.w), int(shade_h)))
 
                     # Trim line under the roof.
                     surface.fill(trim, pygame.Rect(south.x, south.y + 1, south.w, 2))
@@ -12907,7 +12998,7 @@ class HardcoreSurvivalState(State):
                         door_h = int(min(int(door_h), max(10, int(south.h - 6))))
 
                         dr = pygame.Rect(0, 0, int(door_w), int(door_h))
-                        dr.midbottom = (int(door_px.centerx), int(south.bottom - 2))
+                        dr.midbottom = (int(door_px.centerx), int(south.bottom - 1))
                         min_x = int(south.x + 2)
                         max_x = int(south.right - dr.w - 2)
                         if max_x >= min_x:
@@ -12930,13 +13021,13 @@ class HardcoreSurvivalState(State):
                             door_bg = self._tint(front, add=(-46, -46, -40))
                             pygame.draw.rect(surface, door_bg, dr, border_radius=2)
                             pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
-                            hi = self._tint(trim, add=(52, 52, 56))
+                            hi = self._tint(trim, add=(52, 52, 56))      
                             surface.fill(hi, pygame.Rect(dr.x + 2, dr.y + 3, max(1, dr.w - 4), 1))
                             mid = int(dr.centerx)
                             surface.fill(outline, pygame.Rect(mid, dr.y + 2, 1, max(1, dr.h - 4)))
                             red = (190, 60, 60)
-                            cx = int(dr.x + min(10, max(6, dr.w // 2)))
-                            cy = int(dr.y + 10)
+                            cx = int(dr.x + min(10, max(6, dr.w // 2)))  
+                            cy = int(clamp(int(dr.y + dr.h // 2), int(dr.y + 4), int(dr.bottom - 4)))
                             surface.fill(red, pygame.Rect(cx - 1, cy - 3, 2, 7))
                             surface.fill(red, pygame.Rect(cx - 3, cy - 1, 7, 2))
                             pygame.draw.rect(surface, outline, pygame.Rect(cx - 3, cy - 3, 7, 7), 1)
