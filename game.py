@@ -2159,6 +2159,10 @@ class HardcoreSurvivalState(State):
     T_SIDEWALK = 14
     T_BRICK = 15
     T_CONCRETE = 16
+    T_SAND = 17
+    T_BOARDWALK = 18
+    T_MARSH = 19
+    T_HIGHWAY = 20
 
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
@@ -2192,6 +2196,7 @@ class HardcoreSurvivalState(State):
         T_FOREST: _TileDef("forest", (22, 86, 42), solid=False, slow=0.82),
         T_WATER: _TileDef("water", (22, 56, 98), solid=True),
         T_ROAD: _TileDef("road", (72, 72, 74), solid=False),
+        T_HIGHWAY: _TileDef("highway", (58, 58, 62), solid=False),
         T_FLOOR: _TileDef("floor", (58, 56, 52), solid=False),
         T_WALL: _TileDef("wall", (28, 28, 30), solid=True),
         T_DOOR: _TileDef("door", (120, 96, 52), solid=False),
@@ -2199,11 +2204,14 @@ class HardcoreSurvivalState(State):
         T_SHELF: _TileDef("shelf", (50, 50, 54), solid=True),
         T_BED: _TileDef("bed", (84, 84, 110), solid=True),
         T_PAVEMENT: _TileDef("pavement", (92, 92, 96), solid=False),
-        T_PARKING: _TileDef("parking", (82, 82, 90), solid=False),
+        T_PARKING: _TileDef("parking", (66, 66, 78), solid=False),
         T_COURT: _TileDef("court", (116, 86, 66), solid=False),
         T_SIDEWALK: _TileDef("sidewalk", (156, 132, 86), solid=False),
         T_BRICK: _TileDef("brick", (140, 94, 80), solid=False),
         T_CONCRETE: _TileDef("concrete", (112, 112, 118), solid=False),
+        T_SAND: _TileDef("sand", (192, 176, 112), solid=False, slow=0.92),
+        T_BOARDWALK: _TileDef("boardwalk", (156, 116, 68), solid=False),
+        T_MARSH: _TileDef("marsh", (56, 92, 62), solid=False, slow=0.78),
     }
 
     _PLAYER_PAL = {
@@ -4507,13 +4515,13 @@ class HardcoreSurvivalState(State):
     _HR_INT_HOME_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWW",
         "WVV.................VVW",
-        "W..BBBBB....SS........W",
-        "W..BBBBB....SS........W",
-        "W...........TT........W",
-        "W..KKKKK....TT........D",
-        "W..KKKKK..............W",
-        "W........SS...........W",
-        "W........SS...........W",
+        "W..BBBBBB....SS.......W",
+        "W..BBBBBB....SS...CCC.W",
+        "W...........TTTT..CCC.W",
+        "W..KKKKK....TTTT......D",
+        "W..KKKKK........SS....W",
+        "W......CCCC.....SS....W",
+        "W....SS.........TTTT..W",
         "W.....................W",
         "WWWWWWWWWWWWWWWWWWWWWWW",
     ]
@@ -5068,6 +5076,21 @@ class HardcoreSurvivalState(State):
             pygame.draw.rect(surf, steel, pygame.Rect(cx - 1, cy - 2, 1, 1))
             pygame.draw.rect(surf, steel, pygame.Rect(cx + 1, cy - 1, 1, 1))
             pygame.draw.rect(surf, steel, pygame.Rect(cx - 1, cy + 1, 1, 1))
+        elif icon == "book":
+            ink = (240, 240, 240)
+            pygame.draw.rect(surf, ink, pygame.Rect(cx - 4, cy - 2, 4, 5), 1)
+            pygame.draw.rect(surf, ink, pygame.Rect(cx, cy - 2, 4, 5), 1)
+            pygame.draw.line(surf, ink, (cx, cy - 2), (cx, cy + 2), 1)
+            surf.set_at((cx - 3, cy - 1), ink)
+            surf.set_at((cx + 2, cy), ink)
+        elif icon == "pagoda":
+            gold = (240, 210, 130)
+            red = (220, 90, 80)
+            pygame.draw.line(surf, gold, (cx - 4, cy - 2), (cx + 4, cy - 2), 1)
+            pygame.draw.line(surf, gold, (cx - 3, cy - 1), (cx + 3, cy - 1), 1)
+            pygame.draw.line(surf, red, (cx - 4, cy), (cx + 4, cy), 1)
+            pygame.draw.rect(surf, red, pygame.Rect(cx - 2, cy, 5, 3), 1)
+            surf.set_at((cx, cy - 3), gold)
         else:
             steel = (220, 220, 230)
             pygame.draw.rect(surf, steel, pygame.Rect(cx - 2, cy - 2, 4, 4), 1)
@@ -5198,6 +5221,22 @@ class HardcoreSurvivalState(State):
             solid=False,
             collider=(10, 8),
             sprites=(_make_prop_sprite_sign(bg=(50, 50, 60), accent=(120, 120, 132), icon="tower"),),
+        ),
+        "sign_bookstore": _PropDef(
+            id="sign_bookstore",
+            name="新华书店招牌",
+            category="招牌",
+            solid=False,
+            collider=(12, 8),
+            sprites=(_make_prop_sprite_sign(bg=(38, 52, 88), accent=(240, 210, 130), icon="book"),),
+        ),
+        "sign_chinese": _PropDef(
+            id="sign_chinese",
+            name="中式建筑牌匾",
+            category="招牌",
+            solid=False,
+            collider=(12, 8),
+            sprites=(_make_prop_sprite_sign(bg=(70, 36, 36), accent=(240, 210, 130), icon="pagoda"),),
         ),
         "sign_home": _PropDef(
             id="sign_home",
@@ -5523,7 +5562,7 @@ class HardcoreSurvivalState(State):
         cy: int
         tiles: list[int]
         items: list["HardcoreSurvivalState._WorldItem"] = field(default_factory=list)
-        buildings: list[tuple[int, int, int, int]] = field(default_factory=list)  # (tx0, ty0, w, h) in world tiles
+        buildings: list[tuple[int, int, int, int, int, int]] = field(default_factory=list)  # (tx0, ty0, w, h, roof_kind, floors) in world tiles
         special_buildings: list["HardcoreSurvivalState._SpecialBuilding"] = field(default_factory=list)
         cars: list["HardcoreSurvivalState._ParkedCar"] = field(default_factory=list)
         bikes: list["HardcoreSurvivalState._ParkedBike"] = field(default_factory=list)
@@ -5548,6 +5587,25 @@ class HardcoreSurvivalState(State):
             self.city_off_x = state._hash2_u32(29, 37, self.seed) % max(1, int(self.city_period))
             self.city_off_y = state._hash2_u32(41, 53, self.seed) % max(1, int(self.city_period))
 
+            # Coastline (sea) near the city (for beach / boardwalk / wetlands).
+            self.coast_dir = int(state._hash2_u32(61, 67, self.seed) % 4)  # 0=N,1=E,2=S,3=W
+            coast_offset_chunks = int(self.city_radius) + 4
+            if self.coast_dir == 0:  # north
+                self.coast_line = (int(self.city_cy) - coast_offset_chunks) * int(state.CHUNK_SIZE)
+            elif self.coast_dir == 1:  # east
+                self.coast_line = (int(self.city_cx) + coast_offset_chunks) * int(state.CHUNK_SIZE)
+            elif self.coast_dir == 2:  # south
+                self.coast_line = (int(self.city_cy) + coast_offset_chunks) * int(state.CHUNK_SIZE)
+            else:  # west
+                self.coast_line = (int(self.city_cx) - coast_offset_chunks) * int(state.CHUNK_SIZE)
+
+            # Abandoned highways: two wide bands around the city outskirts.
+            self.highway_w = 4  # half-width (tiles)
+            hw_off_y = int(state._hash2_u32(97, 101, self.seed) % (state.CHUNK_SIZE * 2)) - int(state.CHUNK_SIZE)
+            hw_off_x = int(state._hash2_u32(103, 107, self.seed) % (state.CHUNK_SIZE * 2)) - int(state.CHUNK_SIZE)
+            self.highway_y = (int(self.city_cy) + int(self.city_radius) + 2) * int(state.CHUNK_SIZE) + int(hw_off_y)
+            self.highway_x = (int(self.city_cx) - int(self.city_radius) - 2) * int(state.CHUNK_SIZE) + int(hw_off_x)
+
         def spawn_tile(self) -> tuple[int, int]:
             tx = self.state.ROAD_HALF - int(self.road_off_x)
             ty = self.state.ROAD_HALF - int(self.road_off_y)
@@ -5563,6 +5621,30 @@ class HardcoreSurvivalState(State):
 
         def is_road(self, tx: int, ty: int) -> bool:
             return self._is_road_x(tx) or self._is_road_y(ty)
+
+        def is_highway(self, tx: int, ty: int) -> bool:
+            tx = int(tx)
+            ty = int(ty)
+            w = int(getattr(self, "highway_w", 0))
+            if w <= 0:
+                return False
+            hx = int(getattr(self, "highway_x", 0))
+            hy = int(getattr(self, "highway_y", 0))
+            return abs(tx - hx) <= w or abs(ty - hy) <= w
+
+        def _coast_distance(self, tx: int, ty: int) -> int:
+            # Signed distance from coastline (>=0 is sea side).
+            tx = int(tx)
+            ty = int(ty)
+            cd = int(getattr(self, "coast_dir", 0)) & 3
+            line = int(getattr(self, "coast_line", 0))
+            if cd == 0:  # north
+                return int(line - ty)
+            if cd == 2:  # south
+                return int(ty - line)
+            if cd == 1:  # east
+                return int(tx - line)
+            return int(line - tx)  # west
 
         def _is_city_chunk(self, cx: int, cy: int) -> bool:
             dx = abs(int(cx) - int(getattr(self, "city_cx", 0)))
@@ -5623,11 +5705,12 @@ class HardcoreSurvivalState(State):
             base_tx = cx * self.state.CHUNK_SIZE
             base_ty = cy * self.state.CHUNK_SIZE
             items: list[HardcoreSurvivalState._WorldItem] = []
-            buildings: list[tuple[int, int, int, int]] = []
+            buildings: list[tuple[int, int, int, int, int, int]] = []
             special_buildings: list[HardcoreSurvivalState._SpecialBuilding] = []
             cars: list[HardcoreSurvivalState._ParkedCar] = []
             bikes: list[HardcoreSurvivalState._ParkedBike] = []
             props: list[HardcoreSurvivalState._WorldProp] = []
+            door_reserved: set[tuple[int, int]] = set()
 
             is_city = self._is_city_chunk(int(cx), int(cy))
 
@@ -5636,13 +5719,18 @@ class HardcoreSurvivalState(State):
                 for lx in range(self.state.CHUNK_SIZE):
                     tx = base_tx + lx
                     if is_city:
-                        # City ground zoning: roads -> sidewalks -> district floors.
-                        roadlike = bool(self.is_road(tx, ty) or self.is_city_street(tx, ty))
-                        if roadlike:
+                        # City ground zoning: highways -> roads -> sidewalks -> district floors.
+                        if self.is_highway(tx, ty):
+                            tile = int(self.state.T_HIGHWAY)
+                        elif self.is_road(tx, ty) or self.is_city_street(tx, ty):
                             tile = int(self.state.T_ROAD)
                         else:
                             near_road = bool(
-                                self.is_road(tx - 1, ty)
+                                self.is_highway(tx - 1, ty)
+                                or self.is_highway(tx + 1, ty)
+                                or self.is_highway(tx, ty - 1)
+                                or self.is_highway(tx, ty + 1)
+                                or self.is_road(tx - 1, ty)
                                 or self.is_road(tx + 1, ty)
                                 or self.is_road(tx, ty - 1)
                                 or self.is_road(tx, ty + 1)
@@ -5677,30 +5765,76 @@ class HardcoreSurvivalState(State):
                                 park = float(
                                     self.state._noise2(float(tx) / 48.0, float(ty) / 48.0, self.seed ^ 0x51C17011)
                                 )
-                                if park > 0.915:
+                                if park > 0.905:
                                     tile = int(self.state.T_FOREST)
-                                elif park > 0.86:
+                                elif park > 0.84:
                                     tile = int(self.state.T_GRASS)
                     else:
                         n = self.state._fractal(float(tx), float(ty), self.seed)
-                        if n < 0.24:
+                        coast_d = int(self._coast_distance(tx, ty))
+                        if coast_d >= 10:
                             tile = self.state.T_WATER
-                        elif n < 0.36:
-                            tile = self.state.T_FOREST
+                        elif coast_d >= 3:
+                            # Shallows with occasional sand bars.
+                            tile = self.state.T_WATER
+                            shoal = float(self.state._noise2(float(tx) / 18.0, float(ty) / 18.0, self.seed ^ 0x0CEAD511))
+                            if shoal > 0.88:
+                                tile = self.state.T_SAND
+                        elif coast_d >= 0:
+                            tile = self.state.T_WATER
+                        elif coast_d >= -4:
+                            tile = self.state.T_SAND
+                        elif coast_d >= -7:
+                            # Boardwalk band just inland from the beach.
+                            bw = float(self.state._noise2(float(tx) / 12.0, float(ty) / 12.0, self.seed ^ 0xB04A7A1C))
+                            tile = self.state.T_BOARDWALK if bw > 0.55 else self.state.T_SAND
+                        elif coast_d >= -18:
+                            # Coastal wetlands behind the beach.
+                            wet = float(self.state._noise2(float(tx) / 24.0, float(ty) / 24.0, self.seed ^ 0x717E17D5))
+                            if wet > 0.92:
+                                tile = self.state.T_WATER
+                            elif wet > 0.78:
+                                tile = self.state.T_MARSH
+                            else:
+                                if n < 0.30:
+                                    tile = self.state.T_FOREST
+                                else:
+                                    tile = self.state.T_GRASS
                         else:
-                            tile = self.state.T_GRASS
-                        if self.is_road(tx, ty):
+                            if n < 0.24:
+                                tile = self.state.T_WATER
+                            elif n < 0.36:
+                                tile = self.state.T_FOREST
+                            else:
+                                tile = self.state.T_GRASS
+
+                        # Roads/highways override terrain (but keep deep sea water intact).
+                        if tile != self.state.T_WATER and self.is_highway(tx, ty):
+                            tile = self.state.T_HIGHWAY
+                        elif self.is_road(tx, ty):
                             tile = self.state.T_ROAD
                     tiles[ly * self.state.CHUNK_SIZE + lx] = tile
 
             town_kind: str | None = None
             if is_city:
                 rng = random.Random(self.state._hash2_u32(cx, cy, self.seed ^ 0xC17C1701))
-                self._stamp_city_chunk(tiles, items, buildings, special_buildings, cars, bikes, props, cx, cy, rng)
+                self._stamp_city_chunk(
+                    tiles,
+                    items,
+                    buildings,
+                    special_buildings,
+                    cars,
+                    bikes,
+                    props,
+                    cx,
+                    cy,
+                    rng,
+                    reserved=door_reserved,
+                )
                 town_kind = "城市"
             elif self._is_town_chunk(cx, cy):
-                rng = random.Random(self.state._hash2_u32(cx, cy, self.seed))   
-                kinds = ["超市", "医院", "监狱", "学校", "高层住宅"]
+                rng = random.Random(self.state._hash2_u32(cx, cy, self.seed))
+                kinds = ["超市", "新华书店", "医院", "监狱", "学校", "高层住宅"]
                 stx, sty = self.spawn_tile()
                 is_spawn_chunk = (int(stx) // self.state.CHUNK_SIZE == int(cx)) and (int(sty) // self.state.CHUNK_SIZE == int(cy))
                 if is_spawn_chunk:
@@ -5714,7 +5848,23 @@ class HardcoreSurvivalState(State):
 
                 town_kind = "+".join(plan)
                 for kind in plan:
-                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, kind)
+                    self._stamp_buildings(
+                        tiles,
+                        items,
+                        buildings,
+                        special_buildings,
+                        props,
+                        cx,
+                        cy,
+                        rng,
+                        kind,
+                        reserved=door_reserved,
+                    )
+
+            if not is_city:
+                # Beach / wetlands / highway decoration on non-city chunks.
+                rng2 = random.Random(self.state._hash2_u32(cx, cy, self.seed ^ 0x0D00BDEC))
+                self._stamp_outdoor_decor(tiles, props, cx, cy, rng=rng2)
 
             return HardcoreSurvivalState._Chunk(
                 cx=cx,
@@ -5733,7 +5883,7 @@ class HardcoreSurvivalState(State):
             self,
             tiles: list[int],
             items: list["HardcoreSurvivalState._WorldItem"],
-            buildings: list[tuple[int, int, int, int]],
+            buildings: list[tuple[int, int, int, int, int, int]],
             special_buildings: list["HardcoreSurvivalState._SpecialBuilding"],
             cars: list["HardcoreSurvivalState._ParkedCar"],
             bikes: list["HardcoreSurvivalState._ParkedBike"],
@@ -5741,6 +5891,7 @@ class HardcoreSurvivalState(State):
             cx: int,
             cy: int,
             rng: random.Random,
+            reserved: set[tuple[int, int]] | None = None,
         ) -> None:
             # Dense city composition: mix facilities + residential blocks.
             roll = float(rng.random())
@@ -5749,13 +5900,29 @@ class HardcoreSurvivalState(State):
             density = 1.0 - float(dist) / float(radius)
             buildings_n = int(clamp(3 + int(round(5.0 * density)), 3, 8))
 
+            # Chunk-level districts so city blocks feel different.
+            district = float(self.state._noise2(float(cx) / 3.4, float(cy) / 3.4, self.seed ^ 0x4C17C0DE))
+            chinese_district = bool(district > 0.78)
+            commercial_district = bool(district < 0.22)
+
             core = bool(density >= 0.72)
             stx, sty = self.spawn_tile()
-            is_spawn_chunk = (int(stx) // self.state.CHUNK_SIZE == int(cx)) and (int(sty) // self.state.CHUNK_SIZE == int(cy))
+            spawn_cx = int(stx) // self.state.CHUNK_SIZE
+            spawn_cy = int(sty) // self.state.CHUNK_SIZE
+            is_spawn_chunk = (int(spawn_cx) == int(cx)) and (int(spawn_cy) == int(cy))
+            # Starter "Chinese community": a small cluster of high-rises near spawn.
+            in_community = (int(spawn_cx) <= int(cx) <= int(spawn_cx) + 1) and (int(spawn_cy) <= int(cy) <= int(spawn_cy) + 1)
+            school_chunk = (int(cx) == int(spawn_cx) + 1) and (int(cy) == int(spawn_cy))
             if is_spawn_chunk:
-                # Spawn block: guarantee a home high-rise + a school nearby.
-                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅")
-                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "学校")
+                # Spawn block: guarantee a home high-rise; the school is in an adjacent
+                # community chunk to keep this block more residential.
+                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
+                # Add a few extra towers so it reads like a "小区".
+                for _ in range(int(rng.randint(1, 3))):
+                    if rng.random() < 0.85:
+                        self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
+                if rng.random() < 0.35:
+                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅大", reserved=reserved)
                 self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True)
                 self._spawn_two_wheelers(
                     tiles,
@@ -5767,41 +5934,76 @@ class HardcoreSurvivalState(State):
                     models=["bike_lady", "bike_mountain", "bike_auto", "moto", "moto_lux", "moto_long"],
                 )
                 buildings_n = max(3, buildings_n - 2)
+            elif in_community:
+                # Community chunks: mostly residential towers; one chunk hosts the school.
+                if school_chunk:
+                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "学校", reserved=reserved)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True)
+                else:
+                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
+                    if rng.random() < 0.55:
+                        self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
+                    if core and rng.random() < 0.22:
+                        self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅大", reserved=reserved)
+                    if rng.random() < 0.55:
+                        self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                buildings_n = max(3, buildings_n - 1)
             elif core:
                 big_roll = float(rng.random())
                 if big_roll < 0.07:
-                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "大型超市")
+                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "大型超市", reserved=reserved)
                     self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
                     buildings_n = max(3, buildings_n - 1)
                 elif big_roll < 0.12:
-                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅大")
+                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅大", reserved=reserved)
                     if rng.random() < 0.35:
-                        self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅")
+                        self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
                     buildings_n = max(3, buildings_n - 1)
                 elif big_roll < 0.18:
-                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "大型监狱")
+                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "大型监狱", reserved=reserved)
                     buildings_n = max(3, buildings_n - 1)
+                elif big_roll < 0.24 and commercial_district:
+                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "新华书店", reserved=reserved)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                    buildings_n = max(3, buildings_n - 1)
+
+            if chinese_district and (not is_spawn_chunk) and rng.random() < (0.55 + 0.25 * density):
+                # A small cluster of Chinese-style buildings.
+                n = 2 if (density > 0.55 and rng.random() < 0.55) else 1
+                for _ in range(int(n)):
+                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "中式建筑", reserved=reserved)
+                buildings_n = max(3, int(buildings_n) - int(n))
 
             if roll < 0.16:
                 self._stamp_basketball_court(tiles, rng=rng)
                 self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
             elif roll < 0.32:
-                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "学校")
+                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "学校", reserved=reserved)
                 self._stamp_basketball_court(tiles, rng=rng)
                 self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True)
                 self._spawn_two_wheelers(tiles, bikes, cx, cy, rng=rng, count=rng.randint(5, 12), models=["bike_lady", "bike_mountain", "bike_auto", "moto", "moto_lux", "moto_long"])
                 buildings_n = max(3, buildings_n - 1)
             elif roll < 0.46:
-                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "医院")
+                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "医院", reserved=reserved)
                 self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
             elif roll < 0.60:
-                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "超市")
+                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "超市", reserved=reserved)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+            elif roll < 0.68 and commercial_district:
+                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "新华书店", reserved=reserved)
                 self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
             elif roll < 0.74:
-                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅")
+                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
 
             for _ in range(int(buildings_n)):
-                kind = rng.choice(["住宅", "住宅", "住宅", "住宅", "住宅", "住宅", "超市", "医院", "高层住宅", "监狱"])
+                if chinese_district and rng.random() < 0.55:
+                    kind = "中式建筑"
+                else:
+                    if commercial_district:
+                        pool = ["住宅", "住宅", "住宅", "住宅", "超市", "医院", "新华书店", "高层住宅", "监狱"]
+                    else:
+                        pool = ["住宅", "住宅", "住宅", "住宅", "住宅", "住宅", "超市", "医院", "高层住宅", "监狱"]
+                    kind = str(rng.choice(pool))
                 if core:
                     if kind == "超市" and rng.random() < 0.45:
                         kind = "大型超市"
@@ -5811,7 +6013,16 @@ class HardcoreSurvivalState(State):
                         kind = "大型监狱"
                 if kind in ("超市", "医院", "大型超市") and rng.random() < 0.55:
                     kind = "住宅"
-                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, kind)
+                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, kind, reserved=reserved)
+
+            # Make parking lots common/visible in city blocks (esp. near core).
+            # (Parking stamping is safe: it avoids overwriting buildings/roads.)
+            if not is_spawn_chunk:
+                lot_chance = float(clamp(0.24 + 0.40 * density, 0.18, 0.72))
+                if rng.random() < lot_chance:
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                if core and rng.random() < 0.28:
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
 
             self._stamp_city_decor(tiles, props, cx, cy, rng=rng)
 
@@ -5845,18 +6056,43 @@ class HardcoreSurvivalState(State):
             school: bool = False,
         ) -> None:
             # Parking lot: stamp tiles + spawn parked vehicles (visual props).
-            w = rng.randint(10, 16)
-            h = rng.randint(8, 12)
-            x0 = rng.randint(2, self.state.CHUNK_SIZE - w - 2)
-            y0 = rng.randint(2, self.state.CHUNK_SIZE - h - 2)
+            allowed_base = {
+                int(self.state.T_GRASS),
+                int(self.state.T_FOREST),
+                int(self.state.T_PAVEMENT),
+                int(self.state.T_PARKING),
+                int(self.state.T_SIDEWALK),
+                int(self.state.T_BRICK),
+                int(self.state.T_CONCRETE),
+            }
 
             def idx(x: int, y: int) -> int:
                 return y * self.state.CHUNK_SIZE + x
 
-            for y in range(int(y0), int(y0 + h)):
-                for x in range(int(x0), int(x0 + w)):
-                    if int(tiles[idx(x, y)]) == int(self.state.T_ROAD):
-                        return
+            placed: tuple[int, int, int, int] | None = None
+            for _ in range(18):
+                w = rng.randint(12, 20)
+                h = rng.randint(9, 14)
+                x0 = rng.randint(2, self.state.CHUNK_SIZE - w - 2)
+                y0 = rng.randint(2, self.state.CHUNK_SIZE - h - 2)
+
+                blocked = False
+                for y in range(int(y0), int(y0 + h)):
+                    for x in range(int(x0), int(x0 + w)):
+                        t = int(tiles[idx(x, y)])
+                        if t not in allowed_base:
+                            blocked = True
+                            break
+                    if blocked:
+                        break
+                if blocked:
+                    continue
+                placed = (int(x0), int(y0), int(w), int(h))
+                break
+            if placed is None:
+                return
+
+            x0, y0, w, h = placed
             for y in range(int(y0), int(y0 + h)):
                 for x in range(int(x0), int(x0 + w)):
                     tiles[idx(x, y)] = int(self.state.T_PARKING)
@@ -5958,6 +6194,116 @@ class HardcoreSurvivalState(State):
                 elif str(mid) == "bike_auto":
                     fuel = float(rng.uniform(40.0, 100.0))
                 bikes.append(HardcoreSurvivalState._ParkedBike(pos=pygame.Vector2(px, py), model_id=mid, dir=d, fuel=float(fuel)))
+
+        def _stamp_outdoor_decor(
+            self,
+            tiles: list[int],
+            props: list["HardcoreSurvivalState._WorldProp"],
+            cx: int,
+            cy: int,
+            *,
+            rng: random.Random,
+        ) -> None:
+            def idx(x: int, y: int) -> int:
+                return y * self.state.CHUNK_SIZE + x
+
+            base_tx = int(cx) * int(self.state.CHUNK_SIZE)
+            base_ty = int(cy) * int(self.state.CHUNK_SIZE)
+
+            def far_from_existing(px: float, py: float, *, min_d: float) -> bool:
+                md2 = float(min_d) * float(min_d)
+                for p in props:
+                    pos = getattr(p, "pos", None)
+                    if pos is None:
+                        continue
+                    d2 = float((pygame.Vector2(pos) - pygame.Vector2(px, py)).length_squared())
+                    if d2 < md2:
+                        return False
+                return True
+
+            t_sand = int(self.state.T_SAND)
+            t_board = int(self.state.T_BOARDWALK)
+            t_water = int(self.state.T_WATER)
+            t_highway = int(self.state.T_HIGHWAY)
+
+            # Beach amusements: place a couple of abandoned toys near the boardwalk.
+            beach_cand: list[tuple[int, int]] = []
+            for y in range(2, int(self.state.CHUNK_SIZE) - 2):
+                for x in range(2, int(self.state.CHUNK_SIZE) - 2):
+                    t = int(tiles[idx(int(x), int(y))])
+                    if t not in (t_sand, t_board):
+                        continue
+                    near = False
+                    for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                        nt = int(tiles[idx(int(nx), int(ny))])
+                        if nt in (t_board, t_water):
+                            near = True
+                            break
+                    if near:
+                        beach_cand.append((int(x), int(y)))
+            if len(beach_cand) >= 36:
+                rng.shuffle(beach_cand)
+                want = int(rng.randint(1, 3))
+                toy_pool = ["toy_seesaw", "toy_carousel", "toy_swing"]
+                for x, y in beach_cand:
+                    if want <= 0:
+                        break
+                    wx = int(base_tx + int(x))
+                    wy = int(base_ty + int(y))
+                    px = (float(wx) + 0.5) * float(self.state.TILE_SIZE)
+                    py = (float(wy) + 0.5) * float(self.state.TILE_SIZE)
+                    if not far_from_existing(px, py, min_d=30.0):
+                        continue
+                    props.append(
+                        HardcoreSurvivalState._WorldProp(
+                            pos=pygame.Vector2(px, py),
+                            prop_id=str(rng.choice(toy_pool)),
+                            variant=int(rng.randint(0, 7)),
+                            dir=str(rng.choice(["left", "right", "up", "down"])),
+                        )
+                    )
+                    want -= 1
+
+            # Abandoned highways: occasional billboards near the shoulder.
+            bill_cand: list[tuple[int, int]] = []
+            for y in range(2, int(self.state.CHUNK_SIZE) - 2):
+                for x in range(2, int(self.state.CHUNK_SIZE) - 2):
+                    t = int(tiles[idx(int(x), int(y))])
+                    if t in (t_highway, int(self.state.T_WALL), int(self.state.T_DOOR)):
+                        continue
+                    if not (
+                        int(tiles[idx(int(x) + 1, int(y))]) == t_highway
+                        or int(tiles[idx(int(x) - 1, int(y))]) == t_highway
+                        or int(tiles[idx(int(x), int(y) + 1)]) == t_highway
+                        or int(tiles[idx(int(x), int(y) - 1)]) == t_highway
+                    ):
+                        continue
+                    tdef = self.state._TILES.get(int(t))
+                    if tdef is not None and bool(getattr(tdef, "solid", False)):
+                        continue
+                    bill_cand.append((int(x), int(y)))
+
+            if bill_cand and rng.random() < 0.55:
+                rng.shuffle(bill_cand)
+                want = 1 if len(bill_cand) >= 18 else 0
+                for x, y in bill_cand:
+                    if want <= 0:
+                        break
+                    wx = int(base_tx + int(x))
+                    wy = int(base_ty + int(y))
+                    px = (float(wx) + 0.5) * float(self.state.TILE_SIZE)
+                    py = (float(wy) + 0.5) * float(self.state.TILE_SIZE)
+                    if not far_from_existing(px, py, min_d=26.0):
+                        continue
+                    props.append(
+                        HardcoreSurvivalState._WorldProp(
+                            pos=pygame.Vector2(px, py),
+                            prop_id="billboard",
+                            variant=int(rng.randint(0, 7)),
+                            dir=str(rng.choice(["left", "right", "up", "down"])),
+                        )
+                    )
+                    want -= 1
 
         def _stamp_city_decor(
             self,
@@ -6081,13 +6427,14 @@ class HardcoreSurvivalState(State):
             self,
             tiles: list[int],
             items: list["HardcoreSurvivalState._WorldItem"],
-            buildings: list[tuple[int, int, int, int]],
+            buildings: list[tuple[int, int, int, int, int, int]],
             special_buildings: list["HardcoreSurvivalState._SpecialBuilding"],  
             props: list["HardcoreSurvivalState._WorldProp"],
             cx: int,
             cy: int,
             rng: random.Random,
             town_kind: str,
+            reserved: set[tuple[int, int]] | None = None,
         ) -> None:
             tries = 0
             placed = 0
@@ -6103,12 +6450,16 @@ class HardcoreSurvivalState(State):
 
             while placed < want and tries < max_tries:
                 tries += 1
+                building_floors = 0
                 if town_kind == "大型超市":
                     w = rng.randint(20, 28)
                     h = rng.randint(14, 22)
                 elif town_kind == "超市":
                     w = rng.randint(13, 19)
                     h = rng.randint(10, 16)
+                elif town_kind == "新华书店":
+                    w = rng.randint(12, 18)
+                    h = rng.randint(10, 15)
                 elif town_kind == "医院":
                     w = rng.randint(14, 20)
                     h = rng.randint(12, 18)
@@ -6116,17 +6467,20 @@ class HardcoreSurvivalState(State):
                     w = rng.randint(16, 23)
                     h = rng.randint(13, 19)
                 elif town_kind == "高层住宅大":
-                    w = rng.randint(18, 26)
-                    h = rng.randint(18, 26)
+                    w = rng.randint(16, 24)
+                    h = rng.randint(16, 24)
                 elif town_kind == "高层住宅":
-                    w = rng.randint(12, 17)
-                    h = rng.randint(12, 18)
+                    w = rng.randint(10, 15)
+                    h = rng.randint(10, 16)
                 elif town_kind == "大型监狱":
                     w = rng.randint(22, 28)
                     h = rng.randint(20, 28)
                 elif town_kind == "监狱":
                     w = rng.randint(14, 20)
                     h = rng.randint(13, 19)
+                elif town_kind == "中式建筑":
+                    w = rng.randint(9, 15)
+                    h = rng.randint(8, 13)
                 elif town_kind == "住宅":
                     w = rng.randint(6, 10)
                     h = rng.randint(6, 10)
@@ -6139,6 +6493,9 @@ class HardcoreSurvivalState(State):
                 blocked = False
                 for y in range(y0, y0 + h):
                     for x in range(x0, x0 + w):
+                        if reserved is not None and (int(x), int(y)) in reserved:
+                            blocked = True
+                            break
                         t = tiles[idx(x, y)]
                         if int(t) == int(self.state.T_ROAD):
                             wx = int(base_tx + int(x))
@@ -6167,13 +6524,8 @@ class HardcoreSurvivalState(State):
                 if blocked:
                     continue
 
-                for y in range(y0, y0 + h):
-                    for x in range(x0, x0 + w):
-                        border = x in (x0, x0 + w - 1) or y in (y0, y0 + h - 1)
-                        tiles[idx(x, y)] = self.state.T_WALL if border else self.state.T_FLOOR
-
                 # Always use south-facing entrances so the single "front facade"
-                # (bottom/S) matches the actual doorway + collision.
+                # (bottom/S) matches the actual doorway + collision.     
                 door_side = "S"
                 door_tiles: list[tuple[int, int]] = []
                 if door_side == "N":
@@ -6181,8 +6533,30 @@ class HardcoreSurvivalState(State):
                     dy = y0
                     door_tiles = [(dx, dy), (dx + 1, dy)]
                 elif door_side == "S":
-                    dx = rng.randint(x0 + 1, x0 + w - 3)
                     dy = y0 + h - 1
+
+                    def approach_clear(ddx0: int, ddy0: int) -> bool:
+                        for ddx, ddy in ((ddx0, ddy0), (ddx0 + 1, ddy0)):
+                            for step in range(1, 9):
+                                px = int(ddx)
+                                py = int(ddy + step)
+                                if not (0 <= px < int(self.state.CHUNK_SIZE) and 0 <= py < int(self.state.CHUNK_SIZE)):
+                                    break
+                                tcur = int(tiles[idx(int(px), int(py))])
+                                if tcur in (
+                                    int(self.state.T_WALL),
+                                    int(self.state.T_FLOOR),
+                                    int(self.state.T_DOOR),
+                                ):
+                                    return False
+                        return True
+
+                    door_x_candidates = [int(x) for x in range(int(x0 + 1), int(x0 + w - 2))]
+                    rng.shuffle(door_x_candidates)
+                    door_x_candidates = [int(x) for x in door_x_candidates if approach_clear(int(x), int(dy))]
+                    if not door_x_candidates:
+                        continue
+                    dx = int(rng.choice(door_x_candidates))
                     door_tiles = [(dx, dy), (dx + 1, dy)]
                 elif door_side == "W":
                     dx = x0
@@ -6192,6 +6566,11 @@ class HardcoreSurvivalState(State):
                     dx = x0 + w - 1
                     dy = rng.randint(y0 + 1, y0 + h - 3)
                     door_tiles = [(dx, dy), (dx, dy + 1)]
+
+                for y in range(y0, y0 + h):
+                    for x in range(x0, x0 + w):
+                        border = x in (x0, x0 + w - 1) or y in (y0, y0 + h - 1)
+                        tiles[idx(x, y)] = self.state.T_WALL if border else self.state.T_FLOOR
 
                 for dx, dy in door_tiles:
                     tiles[idx(dx, dy)] = self.state.T_DOOR
@@ -6213,7 +6592,12 @@ class HardcoreSurvivalState(State):
                         py = dy + oy * step
                         if not (0 <= px < self.state.CHUNK_SIZE and 0 <= py < self.state.CHUNK_SIZE):
                             break
+                        tcur = int(tiles[idx(int(px), int(py))])
+                        if tcur in (int(self.state.T_WALL), int(self.state.T_FLOOR), int(self.state.T_DOOR)):
+                            break
                         tiles[idx(px, py)] = path_tile
+                        if reserved is not None:
+                            reserved.add((int(px), int(py)))
 
                 # Exterior signage so building type reads from outside.
                 sign_id = "sign_home"
@@ -6223,12 +6607,16 @@ class HardcoreSurvivalState(State):
                     sign_id = "sign_shop"
                 elif town_kind == "大型超市":
                     sign_id = "sign_shop_big"
+                elif town_kind == "新华书店":
+                    sign_id = "sign_bookstore"
                 elif town_kind == "学校":
                     sign_id = "sign_school"
                 elif town_kind in ("监狱", "大型监狱"):
                     sign_id = "sign_prison"
                 elif town_kind in ("高层住宅", "高层住宅大"):
                     sign_id = "sign_highrise"
+                elif town_kind == "中式建筑":
+                    sign_id = "sign_chinese"
 
                 door_mx = int(round(sum(int(p[0]) for p in door_tiles) / max(1, len(door_tiles))))
                 door_my = int(round(sum(int(p[1]) for p in door_tiles) / max(1, len(door_tiles))))
@@ -6402,9 +6790,66 @@ class HardcoreSurvivalState(State):
                         return dx, dy
                     return None
 
-                if town_kind in ("超市", "大型超市"):
-                    # Optional back room.
+                if town_kind == "新华书店":
+                    # Bookstore: shelves in aisles + a small reading area.
                     backroom: tuple[int, int, int, int] | None = None
+                    if w >= 12 and h >= 9 and rng.random() < 0.75:
+                        rw = min(4, int(w) - 6)
+                        rh = min(3, int(h) - 5)
+                        rx = x0 + 2 if door_side in ("N", "S") else (x0 + w - rw - 2)
+                        ry = y0 + h - rh - 2 if door_side == "N" else (y0 + 2)
+                        backroom = (int(rx), int(ry), int(rw), int(rh))
+                        build_room(int(rx), int(ry), int(rw), int(rh))
+
+                    # Shelf islands (leave walkable aisles).
+                    for y in range(y0 + 3, y0 + h - 3, 3):
+                        for x in range(x0 + 2, x0 + w - 3, 4):
+                            if backroom is not None:
+                                bx, by, bw, bh = backroom
+                                if (bx - 1) <= int(x) <= (bx + bw) and (by - 1) <= int(y) <= (by + bh):
+                                    continue
+                            if tiles[idx(int(x), int(y))] == self.state.T_FLOOR:
+                                set_interior(int(x), int(y), self.state.T_SHELF)
+                            if tiles[idx(int(x) + 1, int(y))] == self.state.T_FLOOR:
+                                set_interior(int(x) + 1, int(y), self.state.T_SHELF)
+
+                    # Reading tables nearer the entrance.
+                    if door_side in ("N", "S"):
+                        y = y0 + 3 if door_side == "N" else y0 + h - 4
+                        for x in range(x0 + 3, x0 + w - 3, 5):
+                            if tiles[idx(int(x), int(y))] == self.state.T_FLOOR:
+                                set_interior(int(x), int(y), self.state.T_TABLE)
+
+                    # Checkout counter near entrance.
+                    if door_side in ("N", "S"):
+                        y = y0 + 2 if door_side == "N" else y0 + h - 3
+                        x0c = int(round(door_cx)) - 1
+                        x1c = int(round(door_cx)) + 1
+                        for x in range(x0c, x1c + 1):
+                            if (int(x), int(y)) in corridor or near_door(int(x), int(y)):
+                                continue
+                            set_interior(int(x), int(y), self.state.T_TABLE)
+                    else:
+                        x = x0 + 2 if door_side == "W" else x0 + w - 3
+                        y0c = int(round(door_cy)) - 1
+                        y1c = int(round(door_cy)) + 1
+                        for y in range(y0c, y1c + 1):
+                            if (int(x), int(y)) in corridor or near_door(int(x), int(y)):
+                                continue
+                            set_interior(int(x), int(y), self.state.T_TABLE)
+
+                    # Backroom storage shelves.
+                    if backroom is not None:
+                        bx, by, bw, bh = backroom
+                        for x in range(bx, bx + bw):
+                            if (x - bx) % 2 == 0:
+                                for y in range(by, by + bh):
+                                    if tiles[idx(x, y)] == self.state.T_FLOOR:
+                                        tiles[idx(x, y)] = self.state.T_SHELF
+
+                elif town_kind in ("超市", "大型超市"):
+                    # Optional back room.
+                    backroom: tuple[int, int, int, int] | None = None     
                     if w >= 12 and h >= 9:
                         rw = min(5, int(w) - 6)
                         rh = min(4, int(h) - 5)
@@ -6455,10 +6900,32 @@ class HardcoreSurvivalState(State):
                                     if tiles[idx(x, y)] == self.state.T_FLOOR:
                                         tiles[idx(x, y)] = self.state.T_SHELF
 
+                elif town_kind == "中式建筑":
+                    # Chinese-style small house: bed + table + side storage.
+                    bx = in_left + 1
+                    if door_side in ("N", "S"):
+                        if int(round(door_cx)) <= int((in_left + in_right) // 2):
+                            bx = in_right - 2
+                        else:
+                            bx = in_left + 1
+                    by = in_top + 1
+                    if tiles[idx(bx, by)] == self.state.T_FLOOR and tiles[idx(bx + 1, by)] == self.state.T_FLOOR:
+                        tiles[idx(bx, by)] = self.state.T_BED
+                        tiles[idx(bx + 1, by)] = self.state.T_BED
+
+                    tx0c = int(clamp(int(round((in_left + in_right) / 2.0)), in_left + 1, in_right - 1))
+                    ty0c = int(clamp(int(round((in_top + in_bottom) / 2.0)), in_top + 1, in_bottom - 1))
+                    if tiles[idx(tx0c, ty0c)] == self.state.T_FLOOR:
+                        tiles[idx(tx0c, ty0c)] = self.state.T_TABLE
+
+                    shelf_x = in_left if bx > int((in_left + in_right) // 2) else in_right
+                    for y in range(in_top + 2, in_bottom - 1, 2):
+                        set_interior(int(shelf_x), int(y), self.state.T_SHELF)
+
                 elif town_kind == "医院":
                     # Reception + ward split.
                     if door_side in ("N", "S"):
-                        wy = y0 + 4 if door_side == "N" else y0 + h - 5    
+                        wy = y0 + 4 if door_side == "N" else y0 + h - 5   
                         if in_top + 1 <= wy <= in_bottom - 1:
                             for x in range(in_left, in_right + 1):
                                 if not near_door(x, wy):
@@ -6601,13 +7068,41 @@ class HardcoreSurvivalState(State):
                             if tiles[idx(x, y)] != self.state.T_DOOR:
                                 tiles[idx(x, y)] = self.state.T_WALL
 
+                    # Leave a small lobby behind the entrance so you can walk
+                    # inside instead of hitting a wall at the door.
+                    if door_side == "S" and door_tiles:
+                        door_xs = [int(p[0]) for p in door_tiles]
+                        door_cx = int(round(sum(door_xs) / max(1, len(door_xs))))
+                        lobby_w = int(clamp(8 if int(w) >= 14 else 6, 4, int(w) - 4))
+                        lobby_h = int(clamp(6 if int(h) >= 14 else 5, 4, int(h) - 4))
+                        lobby_x0 = int(
+                            clamp(
+                                int(door_cx - lobby_w // 2),
+                                int(x0 + 2),
+                                int(x0 + w - 2 - lobby_w),
+                            )
+                        )
+                        lobby_y1 = int(y0 + h - 2)  # just inside the south wall
+                        lobby_y0 = int(clamp(int(lobby_y1 - lobby_h + 1), int(y0 + 2), int(y0 + h - 2)))
+                        for yy in range(int(lobby_y0), int(lobby_y1) + 1):
+                            for xx in range(int(lobby_x0), int(lobby_x0 + lobby_w)):
+                                tiles[idx(int(xx), int(yy))] = int(self.state.T_FLOOR)
+
+                        # Ensure the tiles immediately behind the door are floor.
+                        for ddx, ddy in door_tiles:
+                            ix = int(ddx)
+                            iy = int(ddy) - 1
+                            if int(x0 + 1) <= ix <= int(x0 + w - 2) and int(y0 + 1) <= iy <= int(y0 + h - 2):
+                                tiles[idx(int(ix), int(iy))] = int(self.state.T_FLOOR)
+
                     tx0w = cx * self.state.CHUNK_SIZE + x0
                     ty0w = cy * self.state.CHUNK_SIZE + y0
                     doors_w = tuple((cx * self.state.CHUNK_SIZE + int(dx), cy * self.state.CHUNK_SIZE + int(dy)) for dx, dy in door_tiles)
                     if town_kind == "高层住宅大":
-                        floors = int(rng.randint(60, 120))
+                        floors = int(rng.randint(12, 20))
                     else:
-                        floors = int(rng.randint(30, 60))
+                        floors = int(rng.randint(6, 12))
+                    building_floors = int(floors)
                     special_buildings.append(
                         HardcoreSurvivalState._SpecialBuilding(
                             kind="highrise",
@@ -6828,7 +7323,9 @@ class HardcoreSurvivalState(State):
 
                 loot_choices: list[str]
                 if town_kind == "医院":
-                    loot_choices = ["bandage", "medkit", "water"]        
+                    loot_choices = ["bandage", "medkit", "water"]
+                elif town_kind == "新华书店":
+                    loot_choices = ["food_can", "water", "cola", "cola", "bandage", "scrap", "wood"]
                 elif town_kind == "监狱":
                     loot_choices = ["pistol", "ammo_9mm", "ammo_9mm", "scrap", "bandage"]
                 elif town_kind == "学校":
@@ -6838,7 +7335,7 @@ class HardcoreSurvivalState(State):
                 else:
                     loot_choices = ["food_can", "water", "cola", "cola", "ammo_9mm", "scrap", "wood"]
 
-                loot_n = rng.randint(2, 4) if town_kind in ("超市", "医院") else rng.randint(2, 3)
+                loot_n = rng.randint(2, 4) if town_kind in ("超市", "大型超市", "新华书店", "医院") else rng.randint(2, 3)
 
                 # Place loot only on tiles reachable from the entrance, so we
                 # don't create "see the item but cannot enter" situations.
@@ -6922,6 +7419,8 @@ class HardcoreSurvivalState(State):
                     roof_style = 1
                 elif town_kind in ("超市", "大型超市"):
                     roof_style = 2
+                elif town_kind == "新华书店":
+                    roof_style = 7
                 elif town_kind == "医院":
                     roof_style = 3
                 elif town_kind in ("监狱", "大型监狱"):
@@ -6930,9 +7429,20 @@ class HardcoreSurvivalState(State):
                     roof_style = 5
                 elif town_kind in ("高层住宅", "高层住宅大"):
                     roof_style = 6
+                elif town_kind == "中式建筑":
+                    roof_style = 8
                 roof_var = int(rng.randrange(0, 256))
                 roof_kind = (int(roof_style) << 8) | int(roof_var)
-                buildings.append((cx * self.state.CHUNK_SIZE + x0, cy * self.state.CHUNK_SIZE + y0, w, h, int(roof_kind)))
+                buildings.append(
+                    (
+                        cx * self.state.CHUNK_SIZE + x0,
+                        cy * self.state.CHUNK_SIZE + y0,
+                        w,
+                        h,
+                        int(roof_kind),
+                        int(building_floors),
+                    )
+                )
                 placed += 1
 
     @dataclass
@@ -7043,6 +7553,8 @@ class HardcoreSurvivalState(State):
         self.home_highrise_door: tuple[int, int] | None = None
         self.home_highrise_floor = 0
         self.home_highrise_door_index = 0
+        self.home_highrise_unit = 0
+        self.home_highrise_room = ""
 
         self.hr_elevator_ui_open = False
         self.hr_elevator_sel = 0
@@ -7072,14 +7584,19 @@ class HardcoreSurvivalState(State):
             if getattr(sb, "kind", "") != "highrise":
                 continue
             if getattr(sb, "door_tiles", None):
-                self.home_highrise_door = tuple(sb.door_tiles)[0]
+                self.home_highrise_door = tuple(sb.door_tiles)[0]        
             floors = int(getattr(sb, "floors", 0) or 0)
             if floors <= 0:
                 floors = int(self._HR_INT_MAX_FLOORS_DEFAULT)
-            rng_home = random.Random(int(self.seed) ^ int(sb.tx0 * 0x1F123BB5) ^ int(sb.ty0 * 0x05491333) ^ 0xA11CE551)
-            self.home_highrise_floor = int(clamp(int(rng_home.randint(2, max(2, floors))), 2, floors))
-            self.home_highrise_door_index = int(rng_home.randrange(max(1, len(self._HR_INT_APT_DOORS))))
-            self._set_hint(f"你的家：高层住宅 {int(self.home_highrise_floor)} 层", seconds=2.0)
+            # Fixed "Chinese community" home for now: 6F room 604.
+            self.home_highrise_floor = int(clamp(6, 2, int(floors)))
+            # Unit numbering follows the door list order: 01..N
+            self.home_highrise_unit = 4
+            door_count = int(max(1, len(self._HR_INT_APT_DOORS)))
+            self.home_highrise_unit = int(clamp(int(self.home_highrise_unit), 1, door_count))
+            self.home_highrise_door_index = int(self.home_highrise_unit - 1)
+            self.home_highrise_room = f"{int(self.home_highrise_floor)}{int(self.home_highrise_unit):02d}"
+            self._set_hint(f"你的家：{self.home_highrise_room}", seconds=2.0)
             break
         spawn_chunk.items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(self.player.pos) + pygame.Vector2(18, 0), item_id="pistol", qty=1))
         spawn_chunk.items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(self.player.pos) + pygame.Vector2(18, 10), item_id="ammo_9mm", qty=24))
@@ -7349,7 +7866,34 @@ class HardcoreSurvivalState(State):
             return False
         return True
 
-    def _two_wheel_shadow_rect(self, spr_rect: pygame.Rect, d: str) -> pygame.Rect:
+    def _sprite_baseline_y(self, spr: pygame.Surface) -> int:
+        cache = getattr(self, "_sprite_baseline_cache", None)
+        if cache is None:
+            cache = {}
+            self._sprite_baseline_cache = cache
+        key = int(id(spr))
+        by = cache.get(key)
+        if by is not None:
+            return int(by)
+
+        w, h = spr.get_size()
+        baseline = int(h - 1)
+        for y in range(int(h) - 1, -1, -1):
+            for x in range(int(w)):
+                if int(spr.get_at((int(x), int(y))).a) > 0:
+                    baseline = int(y)
+                    cache[key] = int(baseline)
+                    return int(baseline)
+        cache[key] = int(baseline)
+        return int(baseline)
+
+    def _two_wheel_shadow_rect(
+        self,
+        spr_rect: pygame.Rect,
+        d: str,
+        *,
+        ground_y: int | None = None,
+    ) -> pygame.Rect:
         d = str(d)
         if d in ("left", "right"):
             shadow_w = max(12, int(spr_rect.w) - 3)
@@ -7357,7 +7901,7 @@ class HardcoreSurvivalState(State):
             shadow_w = max(10, int(spr_rect.w) - 6)
         shadow_h = 4
         shadow = pygame.Rect(0, 0, int(shadow_w), int(shadow_h))
-        cy = int(spr_rect.bottom - 2)
+        cy = int(spr_rect.bottom - 2) if ground_y is None else int(ground_y - 2)
         shadow.center = (int(spr_rect.centerx), int(cy))
         return shadow
 
@@ -8114,9 +8658,13 @@ class HardcoreSurvivalState(State):
             self.hr_int_pos = pygame.Vector2((sx + 0.5) * tile, (sy + 0.5) * tile)
 
         if is_home and int(self.hr_home_floor) > 0:
-            self._set_hint(f"高层住宅：你的家在 {int(self.hr_home_floor)} 层", seconds=2.0)
+            home_room = str(getattr(self, "home_highrise_room", "")).strip()
+            if home_room:
+                self._set_hint(f"高层住宅：你的家 {home_room}", seconds=2.0)
+            else:
+                self._set_hint(f"高层住宅：你的家在 {int(self.hr_home_floor)} 层", seconds=2.0)
         else:
-            self._set_hint("高层住宅：E进入电梯选择楼层", seconds=1.6)
+            self._set_hint("高层住宅：E进入电梯选择楼层", seconds=1.6)   
 
     def _hr_interior_exit(self) -> None:
         if not getattr(self, "hr_interior", False):
@@ -11738,6 +12286,8 @@ class HardcoreSurvivalState(State):
             return (72, 72, 92)
         if tile_id == int(self.T_ROAD):
             return (92, 92, 96)
+        if tile_id == int(self.T_HIGHWAY):
+            return (82, 82, 88)
         if tile_id == int(self.T_PAVEMENT):
             return (72, 72, 76)
         if tile_id == int(self.T_PARKING):
@@ -11750,6 +12300,12 @@ class HardcoreSurvivalState(State):
             return (166, 112, 96)
         if tile_id == int(self.T_CONCRETE):
             return (118, 118, 128)
+        if tile_id == int(self.T_SAND):
+            return (194, 176, 112)
+        if tile_id == int(self.T_BOARDWALK):
+            return (156, 116, 68)
+        if tile_id == int(self.T_MARSH):
+            return (62, 98, 66)
         return self._tile_color(tile_id)
 
     def _draw_world_tile(self, surface: pygame.Surface, rect: pygame.Rect, *, tx: int, ty: int, tile_id: int) -> None:
@@ -11765,6 +12321,7 @@ class HardcoreSurvivalState(State):
         # Simple gritty texture pass (cheap pixel-noise), inspired by the reference tone.
         hard = tile_id in (
             self.T_ROAD,
+            self.T_HIGHWAY,
             self.T_PAVEMENT,
             self.T_PARKING,
             self.T_COURT,
@@ -11772,8 +12329,9 @@ class HardcoreSurvivalState(State):
             self.T_SIDEWALK,
             self.T_BRICK,
             self.T_CONCRETE,
+            self.T_BOARDWALK,
         )
-        soft = tile_id in (self.T_GRASS, self.T_FOREST, self.T_WATER)
+        soft = tile_id in (self.T_GRASS, self.T_FOREST, self.T_WATER, self.T_SAND, self.T_MARSH)
 
         if hard or soft:
             for j in range(2):
@@ -11815,12 +12373,85 @@ class HardcoreSurvivalState(State):
             if (ty % 4) == 0:
                 surface.fill(seam, pygame.Rect(rect.x + 1, rect.y, rect.w - 2, 1))
 
-        if tile_id == self.T_PARKING:
-            mark = self._tint(col, add=(42, 42, 46))
+        if tile_id == self.T_SAND:
+            # Beach speckles + dune hints.
+            grain = self._tint(col, add=(18, 14, -8))
+            if ((h >> 3) & 3) == 0:
+                surface.fill(grain, pygame.Rect(rect.x + 2, rect.y + 2, 1, 1))
+            if ((h >> 6) & 3) == 0:
+                surface.fill(grain, pygame.Rect(rect.right - 3, rect.y + 3, 1, 1))
+            if (ty % 5) == 0:
+                dune = self._tint(col, add=(-14, -10, -6))
+                surface.fill(dune, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, 1))
+
+        if tile_id == self.T_MARSH:
+            # Mud + shallow puddles.
+            mud = self._tint(col, add=(-16, -10, -16))
+            if ((h >> 4) & 7) == 0:
+                surface.fill(mud, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, 1))
+            if ((h >> 7) & 7) == 0:
+                water = (40, 70, 96)
+                surface.fill(water, pygame.Rect(rect.x + 2, rect.y + 3, 2, 1))
+
+        if tile_id == self.T_BOARDWALK:
+            # Wood planks.
+            plank = self._tint(col, add=(-24, -18, -10))
+            if (ty % 2) == 0:
+                surface.fill(plank, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, 1))
             if (tx % 4) == 0:
-                surface.fill(mark, pygame.Rect(rect.x + 1, rect.y + 1, 1, rect.h - 2))
-            if (ty % 4) == 0:
-                surface.fill(mark, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, 1))
+                seam = self._tint(col, add=(-34, -26, -18))
+                surface.fill(seam, pygame.Rect(rect.x + 1, rect.y + 1, 1, rect.h - 2))
+            if ((h >> 5) & 31) == 0:
+                nail = self._tint(col, add=(26, 18, 10))
+                surface.fill(nail, pygame.Rect(rect.centerx, rect.centery, 1, 1))
+
+        if tile_id == self.T_PARKING:
+            # Painted stall lines + curb edge so parking lots read clearly.
+            line = self._tint(col, add=(86, 86, 92))
+            line2 = self._tint(col, add=(58, 58, 64))
+            if (tx % 3) == 0:
+                surface.fill(line, pygame.Rect(rect.x + 1, rect.y + 1, 1, rect.h - 2))
+            if (ty % 6) == 0:
+                surface.fill(line, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, 1))
+            # Occasional wheel-stop / marking block.
+            if ((tx + ty + (h & 7)) % 17) == 0:
+                surface.fill(line2, pygame.Rect(rect.centerx - 2, rect.centery + 2, 4, 1))
+
+            curb = self._tint(col, add=(-34, -34, -34))
+            if int(self.world.get_tile(tx, ty - 1)) != int(self.T_PARKING):
+                surface.fill(curb, pygame.Rect(rect.x, rect.y, rect.w, 1))
+            if int(self.world.get_tile(tx, ty + 1)) != int(self.T_PARKING):
+                surface.fill(curb, pygame.Rect(rect.x, rect.bottom - 1, rect.w, 1))
+            if int(self.world.get_tile(tx - 1, ty)) != int(self.T_PARKING):
+                surface.fill(curb, pygame.Rect(rect.x, rect.y, 1, rect.h))
+            if int(self.world.get_tile(tx + 1, ty)) != int(self.T_PARKING):
+                surface.fill(curb, pygame.Rect(rect.right - 1, rect.y, 1, rect.h))
+
+        if tile_id == self.T_HIGHWAY:
+            # Abandoned highway: lane marks + cracks.
+            mark = self._tint(col, add=(44, 44, 50))
+            left = int(self.world.get_tile(tx - 1, ty)) == int(self.T_HIGHWAY)
+            right = int(self.world.get_tile(tx + 1, ty)) == int(self.T_HIGHWAY)
+            up = int(self.world.get_tile(tx, ty - 1)) == int(self.T_HIGHWAY)
+            down = int(self.world.get_tile(tx, ty + 1)) == int(self.T_HIGHWAY)
+            horiz = (left or right) and not (up or down)
+            vert = (up or down) and not (left or right)
+            if horiz and (tx % 6) == 0:
+                surface.fill((210, 190, 110), pygame.Rect(rect.centerx - 2, rect.centery, 4, 1))
+            elif vert and (ty % 6) == 0:
+                surface.fill((210, 190, 110), pygame.Rect(rect.centerx, rect.centery - 2, 1, 4))
+            # Shoulder edges.
+            edge = self._tint(col, add=(32, 32, 36))
+            if horiz:
+                surface.fill(edge, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, 1))
+                surface.fill(edge, pygame.Rect(rect.x + 1, rect.bottom - 2, rect.w - 2, 1))
+            elif vert:
+                surface.fill(edge, pygame.Rect(rect.x + 1, rect.y + 1, 1, rect.h - 2))
+                surface.fill(edge, pygame.Rect(rect.right - 2, rect.y + 1, 1, rect.h - 2))
+            # Cracks.
+            if (h & 31) == 0:
+                crack = self._tint(col, add=(-30, -30, -30))
+                pygame.draw.line(surface, crack, (rect.x + 2, rect.y + 7), (rect.right - 3, rect.y + 3), 1)
 
         if tile_id == self.T_ROAD:
             mark = self._tint(col, add=(32, 32, 36))
@@ -11835,16 +12466,16 @@ class HardcoreSurvivalState(State):
             elif vert and (ty % 4) == 0:
                 surface.fill(mark, pygame.Rect(rect.centerx, rect.centery - 2, 1, 4))
 
-        if tile_id in (self.T_PAVEMENT, self.T_SIDEWALK, self.T_BRICK, self.T_CONCRETE):
+        if tile_id in (self.T_PAVEMENT, self.T_SIDEWALK, self.T_BRICK, self.T_CONCRETE, self.T_BOARDWALK):
             curb = self._tint(col, add=(-26, -26, -26))
-            if int(self.world.get_tile(tx, ty - 1)) == int(self.T_ROAD):
+            if int(self.world.get_tile(tx, ty - 1)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
                 surface.fill(curb, pygame.Rect(rect.x, rect.y, rect.w, 1))
-            if int(self.world.get_tile(tx - 1, ty)) == int(self.T_ROAD):
+            if int(self.world.get_tile(tx - 1, ty)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
                 surface.fill(curb, pygame.Rect(rect.x, rect.y, 1, rect.h))
             curb_hi = self._tint(col, add=(16, 16, 16))
-            if int(self.world.get_tile(tx, ty + 1)) == int(self.T_ROAD):
+            if int(self.world.get_tile(tx, ty + 1)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
                 surface.fill(curb_hi, pygame.Rect(rect.x, rect.bottom - 1, rect.w, 1))
-            if int(self.world.get_tile(tx + 1, ty)) == int(self.T_ROAD):
+            if int(self.world.get_tile(tx + 1, ty)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
                 surface.fill(curb_hi, pygame.Rect(rect.right - 1, rect.y, 1, rect.h))
 
         if tile_id == self.T_FLOOR:
@@ -11985,9 +12616,12 @@ class HardcoreSurvivalState(State):
                         continue
                     spr = frames[min(int(frm), len(frames) - 1)]
                     _cw, ch = self._two_wheel_collider_px(mid)
+                    ground_y = int(round(float(sy) + float(ch) / 2.0))
                     rect = spr.get_rect()
-                    rect.midbottom = (int(sx), int(sy + ch // 2))
-                    shadow = self._two_wheel_shadow_rect(rect, d)        
+                    baseline_y = int(self._sprite_baseline_y(spr))
+                    rect.centerx = int(sx)
+                    rect.bottom = int(round(float(ground_y) + float(rect.h - baseline_y)))
+                    shadow = self._two_wheel_shadow_rect(rect, d, ground_y=int(ground_y))
                     sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
                     pygame.draw.ellipse(sh, (0, 0, 0, 80), sh.get_rect())
                     surface.blit(sh, shadow.topleft)
@@ -12236,14 +12870,14 @@ class HardcoreSurvivalState(State):
         if not frames:
             return
         spr = frames[min(int(frame), len(frames) - 1)]
+        ground_y = int(round(float(bp.y) + float(getattr(self.bike, "h", 10)) / 2.0))
         rect = spr.get_rect()
-        rect.midbottom = (
-            int(round(bp.x)),
-            int(round(bp.y + float(getattr(self.bike, "h", 10)) / 2.0)),
-        )
+        baseline_y = int(self._sprite_baseline_y(spr))
+        rect.centerx = int(round(bp.x))
+        rect.bottom = int(round(float(ground_y) + float(rect.h - baseline_y)))
 
         # Soft ground shadow so the two-wheeler doesn't look like it's floating.
-        shadow = self._two_wheel_shadow_rect(rect, str(d))
+        shadow = self._two_wheel_shadow_rect(rect, str(d), ground_y=int(ground_y))
         sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)       
         pygame.draw.ellipse(sh, (0, 0, 0, 90), sh.get_rect())
         surface.blit(sh, shadow.topleft)
@@ -12355,6 +12989,14 @@ class HardcoreSurvivalState(State):
             base_rgb = (42, 46, 62)
             stripe_rgb = (62, 66, 86)
             accent_rgb = (104, 110, 142)
+        elif style == 7:  # 新华书店
+            base_rgb = (36, 44, 66)
+            stripe_rgb = (56, 66, 98)
+            accent_rgb = (232, 200, 120)
+        elif style == 8:  # 中式建筑
+            base_rgb = (34, 64, 44)
+            stripe_rgb = (52, 92, 62)
+            accent_rgb = (200, 170, 110)
 
         base_rgb = tint(base_rgb, dv)
         stripe_rgb = tint(stripe_rgb, dv)
@@ -12472,6 +13114,33 @@ class HardcoreSurvivalState(State):
                 roof.fill((*tint(accent_rgb, 30), alpha), core)
                 pygame.draw.rect(roof, (*outline_rgb, alpha), core, 1, border_radius=1)
                 roof.fill((*tint(accent_rgb, 52), alpha), pygame.Rect(core.x + 3, core.y + 3, core.w - 6, 1))
+        elif style == 7:
+            # Bookstore: flat roof + small skylights.
+            for y in range(0, h_px, 5):
+                pygame.draw.line(roof, (*stripe_rgb, alpha), (0, y), (w_px - 1, y), 1)
+            if w_px >= 22 and h_px >= 16:
+                glass = (110, 140, 168, alpha)
+                frame = (*outline_rgb, alpha)
+                for uy in range(6 + (var % 4), h_px - 8, 14):
+                    for ux in range(6 + ((var >> 2) % 4), w_px - 10, 18):
+                        if ((ux + uy + var) % 3) != 0:
+                            continue
+                        sky = pygame.Rect(int(ux), int(uy), 8, 4)
+                        roof.fill(glass, sky)
+                        pygame.draw.rect(roof, frame, sky, 1, border_radius=1)
+        elif style == 8:
+            # Chinese-style tiled roof + ridge line.
+            for y in range(0, h_px, 3):
+                pygame.draw.line(roof, (*stripe_rgb, alpha), (0, y), (w_px - 1, y), 1)
+            if w_px >= 16 and h_px >= 12:
+                ry = int(h_px // 2)
+                ridge = (*tint(accent_rgb, 18), alpha)
+                pygame.draw.line(roof, ridge, (2, ry), (w_px - 3, ry), 1)
+                eave = (*tint(accent_rgb, 34), alpha)
+                roof.fill(eave, pygame.Rect(1, 1, 2, 2))
+                roof.fill(eave, pygame.Rect(w_px - 3, 1, 2, 2))
+                roof.fill(eave, pygame.Rect(1, h_px - 3, 2, 2))
+                roof.fill(eave, pygame.Rect(w_px - 3, h_px - 3, 2, 2))
         else:
             # Default subtle stripes.
             for y in range(0, h_px, 4):
@@ -12499,6 +13168,21 @@ class HardcoreSurvivalState(State):
                 logo = pygame.Rect(int(w_px // 2 - 4), int(h_px // 2 - 4), 8, 8)
                 pygame.draw.rect(roof, (232, 190, 88, alpha), logo, border_radius=2)
                 pygame.draw.rect(roof, (*outline_rgb, alpha), logo, 1, border_radius=2)
+            elif style == 7 and w_px >= 18 and h_px >= 18:
+                # Bookstore: simple "book" mark.
+                cx = int(w_px // 2)
+                cy = int(h_px // 2)
+                ink = (232, 200, 120, alpha)
+                pygame.draw.rect(roof, ink, pygame.Rect(cx - 8, cy - 5, 7, 10), 1, border_radius=1)
+                pygame.draw.rect(roof, ink, pygame.Rect(cx + 1, cy - 5, 7, 10), 1, border_radius=1)
+                roof.fill((10, 10, 12, alpha), pygame.Rect(cx - 1, cy - 5, 2, 10))
+            elif style == 8 and w_px >= 18 and h_px >= 18:
+                # Chinese roof: central ridge ornament.
+                cx = int(w_px // 2)
+                cy = int(h_px // 2)
+                gold = (210, 180, 110, alpha)
+                roof.fill(gold, pygame.Rect(cx - 1, cy - 7, 2, 15))
+                roof.fill(gold, pygame.Rect(cx - 5, cy - 1, 10, 2))
             elif style == 4 and w_px >= 18 and h_px >= 18:
                 # Prison: perimeter wire marks.
                 wire = (*tint(stripe_rgb, 28), alpha)
@@ -12593,26 +13277,30 @@ class HardcoreSurvivalState(State):
         var = int(roof_kind & 0xFF)
         return style, var
 
-    def _building_face_height_px(self, *, style: int, w: int, h: int, var: int) -> int:
+    def _building_face_height_px(self, *, style: int, w: int, h: int, var: int, floors: int = 0) -> int:
         style = int(style)
         w = int(w)
         h = int(h)
         var = int(var)
+        floors = int(floors)
         area = int(w) * int(h)
         # Wall extrusion height: makes building height readable at a glance.
         # High-rises should read "very tall" even at small internal resolution.
         if style == 6:
-            base = 18
+            f = int(floors) if int(floors) > 0 else 10
+            f = int(clamp(int(f), 6, 30))
+            base = 26 + int(f) * 3
             if area >= 520:
-                base += 12
-            elif area >= 320:
-                base += 9
-            elif area >= 200:
-                base += 7
-            else:
-                base += 5
-            base += (int(var) % 9) - 4
-            return int(clamp(int(base), 18, 42))
+                base += 14
+            elif area >= 360:
+                base += 10
+            elif area >= 240:
+                base += 6
+            base += (int(var) % 11) - 5
+
+            roof_h = int(max(1, (int(h) - 2) * int(self.TILE_SIZE)))
+            max_face = int(max(36, int(roof_h - 18)))
+            return int(clamp(int(base), 36, int(min(max_face, 140))))
 
         base = {
             1: 3,  # 住宅
@@ -12620,6 +13308,8 @@ class HardcoreSurvivalState(State):
             3: 5,  # 医院
             4: 6,  # 监狱
             5: 5,  # 学校
+            7: 5,  # 书店
+            8: 4,  # 中式建筑
         }.get(style, 3)
         if area >= 520:
             base += 3
@@ -12650,6 +13340,10 @@ class HardcoreSurvivalState(State):
             front, side, trim = (132, 102, 68), (102, 76, 50), (186, 146, 96)
         elif style == 6:  # 高层住宅
             front, side, trim = (88, 92, 122), (66, 70, 94), (142, 150, 186)
+        elif style == 7:  # 书店
+            front, side, trim = (72, 80, 108), (52, 58, 78), (210, 180, 110)
+        elif style == 8:  # 中式建筑
+            front, side, trim = (148, 58, 46), (112, 42, 34), (210, 180, 110)
         dv = (int(var) % 7) - 3
         dv2 = (int(var) % 5) - 2
         front = self._tint(front, add=(dv * 2, dv * 2, dv * 2))
@@ -12699,10 +13393,13 @@ class HardcoreSurvivalState(State):
         start_ty: int,
         end_ty: int,
     ) -> None:
-        start_cx = start_tx // self.CHUNK_SIZE
-        end_cx = end_tx // self.CHUNK_SIZE
-        start_cy = start_ty // self.CHUNK_SIZE
-        end_cy = end_ty // self.CHUNK_SIZE
+        # Expand by a full chunk in each direction so facades from large
+        # buildings don't pop in/out at the screen edges while walking.
+        chunk_pad = 1
+        start_cx = start_tx // self.CHUNK_SIZE - chunk_pad
+        end_cx = end_tx // self.CHUNK_SIZE + chunk_pad
+        start_cy = start_ty // self.CHUNK_SIZE - chunk_pad
+        end_cy = end_ty // self.CHUNK_SIZE + chunk_pad
 
         for cy in range(start_cy, end_cy + 1):
             for cx in range(start_cx, end_cx + 1):
@@ -12712,7 +13409,8 @@ class HardcoreSurvivalState(State):
                     roof_kind = int(b[4]) if len(b) > 4 else 0
                     style, var = self._building_roof_style_var(int(roof_kind))
 
-                    face_h = int(self._building_face_height_px(style=style, w=w, h=h, var=var))
+                    floors = int(b[5]) if len(b) > 5 else 0
+                    face_h = int(self._building_face_height_px(style=style, w=w, h=h, var=var, floors=floors))
                     # Only draw the *front* facade (bottom/S) as requested.
                     # Keep visibility checks stable to avoid popping at edges while walking.
                     bx = int(tx0 * self.TILE_SIZE - cam_x)
@@ -12749,14 +13447,16 @@ class HardcoreSurvivalState(State):
                         )
 
                     ground_y = int(by + bh)
-                    # South (bottom) face: draw only the ground-floor wall strip (prevents props/vehicles
-                    # from looking like they are "on the facade").
-                    south = pygame.Rect(
-                        int(bx),
-                        int(ground_y - self.TILE_SIZE),
-                        int(bw),
-                        int(self.TILE_SIZE),
-                    )
+                    # South (bottom) face: draw the "front facade".
+                    # For high-rises, extend the facade upward so multiple
+                    # window rows can read as "tall" (roof is clipped for
+                    # style==6 to avoid overlap).
+                    south_y = int(ground_y - self.TILE_SIZE)
+                    south_h = int(self.TILE_SIZE)
+                    if style == 6:
+                        south_y = int(ground_y - self.TILE_SIZE - int(face_h))
+                        south_h = int(self.TILE_SIZE + int(face_h))
+                    south = pygame.Rect(int(bx), int(south_y), int(bw), int(south_h))
                     pygame.draw.rect(surface, front, south)
                     pygame.draw.rect(surface, outline, south, 1)
                     # Ground shadow under the facade.
@@ -12773,12 +13473,15 @@ class HardcoreSurvivalState(State):
 
                     # Facade details by building type.
                     store_header_bottom = int(south.y + 3)
-                    if style in (2, 3, 5):  # shop/hospital/school: sign + awning band
+                    if style in (2, 3, 5, 7):  # shop/hospital/school/bookstore: sign + band
                         sign_h = int(clamp(int(south.h // 3), 5, 7))
                         sign = pygame.Rect(south.x + 3, south.y + 2, south.w - 6, sign_h)
                         if style == 2:
                             base = (78, 118, 176) if ((var >> 1) & 1) == 0 else (176, 132, 78)
                             sign_bg = self._tint(base, add=(-10, -10, -10))
+                        elif style == 7:
+                            base = (46, 70, 110)
+                            sign_bg = self._tint(base, add=(-8, -8, -8))
                         elif style == 5:
                             base = (168, 132, 92)
                             sign_bg = self._tint(base, add=(-18, -14, -10))
@@ -12802,6 +13505,14 @@ class HardcoreSurvivalState(State):
                             surface.fill(red, pygame.Rect(cx - 1, cy - 3, 2, 7))
                             surface.fill(red, pygame.Rect(cx - 3, cy - 1, 7, 2))
                             pygame.draw.rect(surface, outline, pygame.Rect(cx - 3, cy - 3, 7, 7), 1)
+                        if style == 7 and sign.w >= 18:
+                            # Tiny book icon.
+                            cx = sign.centerx
+                            cy = sign.centery
+                            ink = (232, 200, 120)
+                            pygame.draw.rect(surface, ink, pygame.Rect(cx - 6, cy - 3, 5, 7), 1, border_radius=1)
+                            pygame.draw.rect(surface, ink, pygame.Rect(cx + 1, cy - 3, 5, 7), 1, border_radius=1)
+                            surface.fill(outline, pygame.Rect(cx, cy - 3, 1, 7))
 
                         # Awning stripes just below sign for shops.
                         store_header_bottom = int(sign.bottom)
@@ -12831,7 +13542,7 @@ class HardcoreSurvivalState(State):
 
                     if style == 5:
                         # School: brick columns.
-                        col = self._tint(front, add=(-26, -20, -16))
+                        col = self._tint(front, add=(-26, -20, -16))     
                         if south.w >= 26 and south.h >= 14:
                             surface.fill(col, pygame.Rect(int(south.x + 2), int(south.y + 3), 3, int(south.h - 6)))
                             surface.fill(col, pygame.Rect(int(south.right - 5), int(south.y + 3), 3, int(south.h - 6)))
@@ -12839,9 +13550,25 @@ class HardcoreSurvivalState(State):
                             surface.fill(self._tint(trim, add=(-30, -30, -30)), pygame.Rect(int(sign.x + 6), int(sign.bottom), 2, 3))
                             surface.fill(self._tint(trim, add=(-30, -30, -30)), pygame.Rect(int(sign.right - 8), int(sign.bottom), 2, 3))
 
+                    if style == 8:
+                        # Chinese: red pillars + a small plaque.
+                        if south.w >= 24 and south.h >= 14:
+                            pillar = self._tint(front, add=(18, 0, 0))
+                            surface.fill(pillar, pygame.Rect(int(south.x + 2), int(south.y + 3), 3, int(south.h - 6)))
+                            surface.fill(pillar, pygame.Rect(int(south.right - 5), int(south.y + 3), 3, int(south.h - 6)))
+                            plaque = pygame.Rect(int(south.centerx - 8), int(south.y + 2), 16, 6)
+                            bg = self._tint(trim, add=(-26, -26, -26))
+                            pygame.draw.rect(surface, bg, plaque, border_radius=2)
+                            pygame.draw.rect(surface, outline, plaque, 1, border_radius=2)
+                            ink = self._tint(trim, add=(22, 18, 0))
+                            for xx in range(int(plaque.x + 4), int(plaque.right - 4), 3):
+                                if ((xx + var) % 4) == 0:
+                                    continue
+                                surface.fill(ink, pygame.Rect(int(xx), int(plaque.y + 3), 2, 1))
+
                     if style == 4:
                         # Prison: barred windows.
-                        bar = self._tint(trim, add=(-30, -30, -30))
+                        bar = self._tint(trim, add=(-30, -30, -30))      
                         for xx in range(south.x + 6, south.right - 6, 6):
                             surface.fill(bar, pygame.Rect(xx, south.y + 3, 1, south.h - 6))
 
@@ -12878,7 +13605,7 @@ class HardcoreSurvivalState(State):
 
                     # "Front interior" storefront hint (like the reference): show a cutout window strip with
                     # silhouettes of shelves/props synced to the actual interior tiles.
-                    if style in (2, 3, 5):
+                    if style in (2, 3, 5, 7):
                         open_y = int(store_header_bottom + 1)
                         open_h = int(south.bottom - 2 - open_y)
                         open_x = int(south.x + 4)
@@ -12981,15 +13708,15 @@ class HardcoreSurvivalState(State):
                         # Anchor to the ground (bottom of facade) and clamp size by building type.
                         door_open_w = int(door_px.w)
                         if style == 1:  # house
-                            door_w = int(clamp(door_open_w - 10, 10, 14))
-                        elif style in (2, 3, 4):  # shop/hospital/prison
-                            door_w = int(clamp(door_open_w - 2, 16, 20))
-                        elif style == 5:  # school
-                            door_w = int(clamp(door_open_w - 4, 14, 18))
+                            door_w = int(clamp(door_open_w - 10, 10, 14))       
+                        elif style in (2, 3, 4, 7):  # shop/hospital/prison/bookstore
+                            door_w = int(clamp(door_open_w - 2, 16, 20))        
+                        elif style in (5, 8):  # school/chinese
+                            door_w = int(clamp(door_open_w - 4, 14, 18))        
                         elif style == 6:  # high-rise lobby
-                            door_w = int(clamp(door_open_w - 4, 14, 18))
+                            door_w = int(clamp(door_open_w - 4, 14, 18))        
                         else:
-                            door_w = int(clamp(door_open_w - 6, 12, 18))
+                            door_w = int(clamp(door_open_w - 6, 12, 18))        
 
                         if style == 6:
                             door_h = int(clamp(14 + int(face_h) // 4, 18, 26))
@@ -13007,7 +13734,7 @@ class HardcoreSurvivalState(State):
 
                         if style == 2:
                             # Shop: glass sliding doors.
-                            door_bg = self._tint(trim, add=(-78, -78, -84))
+                            door_bg = self._tint(trim, add=(-78, -78, -84))     
                             pygame.draw.rect(surface, door_bg, dr, border_radius=2)
                             pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
                             hi = self._tint(trim, add=(48, 48, 54))
@@ -13017,17 +13744,32 @@ class HardcoreSurvivalState(State):
                             handle = (230, 230, 236)
                             surface.fill(handle, pygame.Rect(mid - 3, dr.centery - 1, 1, 2))
                             surface.fill(handle, pygame.Rect(mid + 2, dr.centery - 1, 1, 2))
+                        elif style == 7:
+                            # Bookstore: glass door + small book decal.
+                            door_bg = self._tint(trim, add=(-82, -82, -90))
+                            pygame.draw.rect(surface, door_bg, dr, border_radius=2)
+                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                            hi = self._tint(trim, add=(52, 52, 56))
+                            surface.fill(hi, pygame.Rect(dr.x + 2, dr.y + 3, max(1, dr.w - 4), 1))
+                            mid = int(dr.centerx)
+                            surface.fill(outline, pygame.Rect(mid, dr.y + 2, 1, max(1, dr.h - 4)))
+                            ink = (232, 200, 120)
+                            bx = int(dr.centerx)
+                            by = int(dr.y + 5)
+                            pygame.draw.rect(surface, ink, pygame.Rect(bx - 5, by, 4, 6), 1, border_radius=1)
+                            pygame.draw.rect(surface, ink, pygame.Rect(bx + 2, by, 4, 6), 1, border_radius=1)
+                            surface.fill(outline, pygame.Rect(bx, by, 1, 6))
                         elif style == 3:
                             # Hospital: glass door + red cross.
                             door_bg = self._tint(front, add=(-46, -46, -40))
                             pygame.draw.rect(surface, door_bg, dr, border_radius=2)
                             pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
-                            hi = self._tint(trim, add=(52, 52, 56))      
+                            hi = self._tint(trim, add=(52, 52, 56))
                             surface.fill(hi, pygame.Rect(dr.x + 2, dr.y + 3, max(1, dr.w - 4), 1))
                             mid = int(dr.centerx)
                             surface.fill(outline, pygame.Rect(mid, dr.y + 2, 1, max(1, dr.h - 4)))
                             red = (190, 60, 60)
-                            cx = int(dr.x + min(10, max(6, dr.w // 2)))  
+                            cx = int(dr.x + min(10, max(6, dr.w // 2)))
                             cy = int(clamp(int(dr.y + dr.h // 2), int(dr.y + 4), int(dr.bottom - 4)))
                             surface.fill(red, pygame.Rect(cx - 1, cy - 3, 2, 7))
                             surface.fill(red, pygame.Rect(cx - 3, cy - 1, 7, 2))
@@ -13060,6 +13802,19 @@ class HardcoreSurvivalState(State):
                             knob = (18, 18, 22)
                             surface.fill(knob, pygame.Rect(mid - 3, dr.centery, 1, 1))
                             surface.fill(knob, pygame.Rect(mid + 2, dr.centery, 1, 1))
+                        elif style == 8:
+                            # Chinese: red double door + gold studs.
+                            red = self._tint(front, add=(10, -4, -6))
+                            pygame.draw.rect(surface, red, dr, border_radius=2)
+                            pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                            mid = int(dr.centerx)
+                            surface.fill(outline, pygame.Rect(mid, dr.y + 2, 1, max(1, dr.h - 4)))
+                            gold = (210, 180, 110)
+                            for yy in range(int(dr.y + 4), int(dr.bottom - 4), 4):
+                                surface.fill(gold, pygame.Rect(int(mid - 3), int(yy), 1, 1))
+                                surface.fill(gold, pygame.Rect(int(mid + 2), int(yy), 1, 1))
+                            surface.fill(gold, pygame.Rect(int(mid - 3), int(dr.centery), 1, 1))
+                            surface.fill(gold, pygame.Rect(int(mid + 2), int(dr.centery), 1, 1))
                         elif style == 1:
                             # Residential: simple wood door + small window.
                             wood = self._tint(front, add=(-34, -22, -14))
@@ -13118,14 +13873,27 @@ class HardcoreSurvivalState(State):
                 for b in chunk.buildings:
                     tx0, ty0, w, h = int(b[0]), int(b[1]), int(b[2]), int(b[3])
                     roof_kind = int(b[4]) if len(b) > 4 else 0
+                    style, var = self._building_roof_style_var(int(roof_kind))
+                    floors = int(b[5]) if len(b) > 5 else 0
+                    face_h = int(self._building_face_height_px(style=style, w=w, h=h, var=var, floors=floors))
                     inside = bool(can_be_inside and (tx0 <= ptx < tx0 + w) and (ty0 <= pty < ty0 + h))
                     alpha = 110 if inside else 255
                     rw = max(1, int(w) - 2)
                     rh = max(1, int(h) - 2)
                     roof = self._roof_surface(rw, rh, alpha, roof_kind=roof_kind)
+                    roof_draw = roof
+                    if style == 6:
+                        # High-rise: the facade is tall; clip a chunk off the
+                        # roof bottom so the facade isn't covered by the roof.
+                        cut = int(max(0, int(face_h) - 2))
+                        min_vis = 18
+                        max_cut = max(0, int(roof.get_height()) - int(min_vis))
+                        cut = int(min(int(cut), int(max_cut)))
+                        if cut > 0:
+                            roof_draw = roof.subsurface(pygame.Rect(0, 0, int(roof.get_width()), int(roof.get_height() - cut)))
 
-                    sx = (int(tx0) + 1) * self.TILE_SIZE - int(cam_x)    
-                    sy = (int(ty0) + 1) * self.TILE_SIZE - int(cam_y)    
+                    sx = (int(tx0) + 1) * self.TILE_SIZE - int(cam_x)
+                    sy = (int(ty0) + 1) * self.TILE_SIZE - int(cam_y)
                     # Slight roof offset to reveal the "front" (bottom/right) walls like MiniDayZ.
                     roof_off_x = -2
                     roof_off_y = -2
@@ -13133,13 +13901,13 @@ class HardcoreSurvivalState(State):
                     ry = int(sy + roof_off_y)
                     if rx > INTERNAL_W or ry > INTERNAL_H:
                         continue
-                    if rx + roof.get_width() < 0 or ry + roof.get_height() < 0:
+                    if rx + roof_draw.get_width() < 0 or ry + roof_draw.get_height() < 0:
                         continue
                     if not inside:
-                        sh = pygame.Surface((roof.get_width(), roof.get_height()), pygame.SRCALPHA)
+                        sh = pygame.Surface((roof_draw.get_width(), roof_draw.get_height()), pygame.SRCALPHA)
                         sh.fill((0, 0, 0, 70))
                         surface.blit(sh, (int(rx + 2), int(ry + 2)))
-                    surface.blit(roof, (int(rx), int(ry)))
+                    surface.blit(roof_draw, (int(rx), int(ry)))
 
     def _draw_zombies(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         for z in self.zombies:
@@ -14004,6 +14772,33 @@ class HardcoreSurvivalState(State):
             pygame.draw.line(surface, col, (r.left + 2, r.top + 3), (r.right - 3, r.top + 3), 1)
             return
 
+        if kind == "bookstore":
+            col = (232, 200, 120)
+            r = pygame.Rect(0, 0, s, s)
+            r.center = (x, y)
+            pygame.draw.rect(surface, (0, 0, 0), r)
+            pygame.draw.rect(surface, (80, 100, 150), r.inflate(-2, -2))
+            # Book
+            bx = int(r.centerx)
+            by = int(r.centery)
+            pygame.draw.rect(surface, col, pygame.Rect(bx - 5, by - 4, 4, 8), 1, border_radius=1)
+            pygame.draw.rect(surface, col, pygame.Rect(bx + 1, by - 4, 4, 8), 1, border_radius=1)
+            surface.fill((0, 0, 0), pygame.Rect(bx, by - 4, 1, 8))
+            return
+
+        if kind == "chinese":
+            col = (210, 180, 110)
+            r = pygame.Rect(0, 0, s, s)
+            r.center = (x, y)
+            pygame.draw.rect(surface, (0, 0, 0), r)
+            pygame.draw.rect(surface, (150, 60, 50), r.inflate(-2, -2))
+            # Roof + pillars
+            pygame.draw.line(surface, col, (r.left + 2, r.top + 3), (r.right - 3, r.top + 3), 1)
+            pygame.draw.line(surface, col, (r.left + 3, r.top + 2), (r.right - 4, r.top + 2), 1)
+            surface.fill(col, pygame.Rect(r.left + 3, r.top + 4, 1, max(1, s - 7)))
+            surface.fill(col, pygame.Rect(r.right - 4, r.top + 4, 1, max(1, s - 7)))
+            return
+
         if kind == "school":
             col = (110, 170, 240)
             r = pygame.Rect(0, 0, s, s)
@@ -14070,6 +14865,8 @@ class HardcoreSurvivalState(State):
             4: "prison",
             5: "school",
             6: "highrise",
+            7: "bookstore",
+            8: "chinese",
         }
 
         for cy in range(int(start_cy), int(end_cy) + 1):
@@ -14094,7 +14891,7 @@ class HardcoreSurvivalState(State):
                     self._draw_world_map_icon(surface, mx, my, str(kind), scale=scale)
 
     def _draw_world_map_legend(self, surface: pygame.Surface, *, map_area: pygame.Rect) -> None:
-        legend = pygame.Rect(0, 0, 162, 104)
+        legend = pygame.Rect(0, 0, 162, 132)
         legend.bottomright = (int(map_area.right) - 8, int(map_area.bottom) - 8)
 
         ui = pygame.Surface((legend.w, legend.h), pygame.SRCALPHA)
@@ -14121,9 +14918,11 @@ class HardcoreSurvivalState(State):
         entries: list[tuple[str, str]] = [
             ("hospital", "医院"),
             ("market", "超市"),
+            ("bookstore", "书店"),
             ("school", "学校"),
             ("prison", "监狱"),
             ("highrise", "高层"),
+            ("chinese", "中式"),
         ]
         for kind, label in entries:
             self._draw_world_map_icon(surface, x0 + 6, y + 6, kind, scale=icon_scale)
