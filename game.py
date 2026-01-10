@@ -5606,6 +5606,45 @@ class HardcoreSurvivalState(State):
             self.highway_y = (int(self.city_cy) + int(self.city_radius) + 2) * int(state.CHUNK_SIZE) + int(hw_off_y)
             self.highway_x = (int(self.city_cx) - int(self.city_radius) - 2) * int(state.CHUNK_SIZE) + int(hw_off_x)
 
+            # Chinese residential compound (小区) near spawn: walled and packed
+            # with tall (20+ floors) high-rises.
+            self.compound_w_chunks = 7
+            self.compound_h_chunks = 7
+            self.compound_cx0 = int(self.city_cx) - int(self.compound_w_chunks // 2)
+            # Place spawn closer to the south side so the gate/wall are nearby.
+            self.compound_cy0 = int(self.city_cy) - int(self.compound_h_chunks - 2)
+            self.compound_cx1 = int(self.compound_cx0) + int(self.compound_w_chunks) - 1
+            self.compound_cy1 = int(self.compound_cy0) + int(self.compound_h_chunks) - 1
+            self.compound_tx0 = int(self.compound_cx0) * int(state.CHUNK_SIZE)
+            self.compound_ty0 = int(self.compound_cy0) * int(state.CHUNK_SIZE)
+            self.compound_tx1 = (int(self.compound_cx1) + 1) * int(state.CHUNK_SIZE) - 1
+            self.compound_ty1 = (int(self.compound_cy1) + 1) * int(state.CHUNK_SIZE) - 1
+
+            # Internal road stripes (local coords within each chunk).
+            self.compound_road_v_x0 = 14
+            self.compound_road_v_x1 = 17
+            self.compound_road_h_y0 = 24
+            self.compound_road_h_y1 = 26
+
+            # Gate opening (south wall) aligned with the central chunk column.
+            gate_cx = int(self.compound_cx0) + int(self.compound_w_chunks // 2)
+            self.compound_gate_x0 = int(gate_cx) * int(state.CHUNK_SIZE) + int(self.compound_road_v_x0)
+            self.compound_gate_x1 = int(gate_cx) * int(state.CHUNK_SIZE) + int(self.compound_road_v_x1)
+
+            # Reserve entrance/parking chunks near the gate.
+            self.compound_gate_chunks: set[tuple[int, int]] = {
+                (int(gate_cx), int(self.compound_cy1)),
+                (int(gate_cx) - 1, int(self.compound_cy1)),
+                (int(gate_cx) + 1, int(self.compound_cy1)),
+            }
+            self.compound_parking_chunks: set[tuple[int, int]] = {
+                (int(gate_cx) - 1, int(self.compound_cy1)),
+                (int(gate_cx) + 1, int(self.compound_cy1)),
+            }
+            self.compound_towers_by_chunk: dict[
+                tuple[int, int], list[tuple[int, int, int, int, int, int]]
+            ] = self._plan_compound_towers(target=67)
+
         def spawn_tile(self) -> tuple[int, int]:
             tx = self.state.ROAD_HALF - int(self.road_off_x)
             ty = self.state.ROAD_HALF - int(self.road_off_y)
@@ -5651,6 +5690,100 @@ class HardcoreSurvivalState(State):
             dy = abs(int(cy) - int(getattr(self, "city_cy", 0)))
             r = max(0, int(getattr(self, "city_radius", 0)))
             return max(dx, dy) <= r
+
+        def _is_compound_chunk(self, cx: int, cy: int) -> bool:
+            cx0 = int(getattr(self, "compound_cx0", 0))
+            cy0 = int(getattr(self, "compound_cy0", 0))
+            cx1 = int(getattr(self, "compound_cx1", -1))
+            cy1 = int(getattr(self, "compound_cy1", -1))
+            return int(cx0) <= int(cx) <= int(cx1) and int(cy0) <= int(cy) <= int(cy1)
+
+        def _plan_compound_towers(
+            self,
+            *,
+            target: int,
+        ) -> dict[tuple[int, int], list[tuple[int, int, int, int, int, int]]]:
+            target = int(target)
+            if target <= 0:
+                return {}
+
+            cx0 = int(getattr(self, "compound_cx0", 0))
+            cy0 = int(getattr(self, "compound_cy0", 0))
+            cx1 = int(getattr(self, "compound_cx1", -1))
+            cy1 = int(getattr(self, "compound_cy1", -1))
+            if cx1 < cx0 or cy1 < cy0:
+                return {}
+
+            # Two tower sites per chunk; leave room for the road stripe and door approach.
+            tower_w = 12
+            tower_h = 22
+            sites = ((2, 2), (18, 2))
+
+            stx, sty = self.spawn_tile()
+            spawn_tx = int(stx)
+            spawn_ty = int(sty)
+
+            no_tower_chunks = set(getattr(self, "compound_gate_chunks", set()))
+
+            candidates: list[tuple[int, int, int, int, int]] = []  # (cx, cy, x0, y0, d2)
+            for cy in range(int(cy0), int(cy1) + 1):
+                for cx in range(int(cx0), int(cx1) + 1):
+                    if (int(cx), int(cy)) in no_tower_chunks:
+                        continue
+                    base_tx = int(cx) * int(self.state.CHUNK_SIZE)
+                    base_ty = int(cy) * int(self.state.CHUNK_SIZE)
+                    for x0, y0 in sites:
+                        tx0 = int(base_tx + int(x0))
+                        ty0 = int(base_ty + int(y0))
+                        # Never block the spawn tile.
+                        if int(tx0) <= int(spawn_tx) < int(tx0 + tower_w) and int(ty0) <= int(
+                            spawn_ty
+                        ) < int(ty0 + tower_h):
+                            continue
+                        cxm = float(tx0) + float(tower_w) * 0.5
+                        cym = float(ty0) + float(tower_h) * 0.5
+                        d2 = (cxm - float(spawn_tx)) ** 2 + (cym - float(spawn_ty)) ** 2
+                        candidates.append((int(cx), int(cy), int(x0), int(y0), int(d2)))
+
+            if not candidates:
+                return {}
+
+            candidates.sort(key=lambda t: int(t[4]))
+            keep_near = min(10, int(target))
+            selected: list[tuple[int, int, int, int]] = []
+            selected_set: set[tuple[int, int, int, int]] = set()
+            for cx, cy, x0, y0, _d2 in candidates:
+                key = (int(cx), int(cy), int(x0), int(y0))
+                selected.append(key)
+                selected_set.add(key)
+                if len(selected) >= int(keep_near):
+                    break
+
+            rest = [c for c in candidates if (int(c[0]), int(c[1]), int(c[2]), int(c[3])) not in selected_set]
+            rng = random.Random(self.state._hash2_u32(211, 223, self.seed ^ 0x51C17011))
+            rng.shuffle(rest)
+            for cx, cy, x0, y0, _d2 in rest:
+                if len(selected) >= int(target):
+                    break
+                key = (int(cx), int(cy), int(x0), int(y0))
+                if key in selected_set:
+                    continue
+                selected.append(key)
+                selected_set.add(key)
+
+            plan: dict[tuple[int, int], list[tuple[int, int, int, int, int, int]]] = {}
+            for cx, cy, x0, y0 in selected:
+                base_tx = int(cx) * int(self.state.CHUNK_SIZE)
+                base_ty = int(cy) * int(self.state.CHUNK_SIZE)
+                tx0 = int(base_tx + int(x0))
+                ty0 = int(base_ty + int(y0))
+                rr = random.Random(self.state._hash2_u32(int(tx0), int(ty0), self.seed ^ 0xA17F1A2B))
+                roof_var = int(rr.randrange(0, 256))
+                floors = int(rr.randint(20, 30))
+                plan.setdefault((int(cx), int(cy)), []).append(
+                    (int(x0), int(y0), int(tower_w), int(tower_h), int(roof_var), int(floors))
+                )
+            return plan
 
         def _is_city_street_x(self, tx: int) -> bool:
             period = max(8, int(getattr(self, "city_period", 24)))
@@ -5879,6 +6012,184 @@ class HardcoreSurvivalState(State):
                 town_kind=town_kind,
             )
 
+        def _stamp_compound_highrise_tower(
+            self,
+            tiles: list[int],
+            buildings: list[tuple[int, int, int, int, int, int]],
+            special_buildings: list["HardcoreSurvivalState._SpecialBuilding"],
+            cx: int,
+            cy: int,
+            *,
+            x0: int,
+            y0: int,
+            w: int,
+            h: int,
+            roof_var: int,
+            floors: int,
+        ) -> None:
+            def idx(x: int, y: int) -> int:
+                return y * self.state.CHUNK_SIZE + x
+
+            x0 = int(x0)
+            y0 = int(y0)
+            w = int(w)
+            h = int(h)
+            roof_var = int(roof_var) & 0xFF
+            floors = int(floors)
+
+            # Fill the whole footprint with walls (sealed on the world-map) then carve a small lobby.
+            for y in range(int(y0), int(y0 + h)):
+                for x in range(int(x0), int(x0 + w)):
+                    if 0 <= x < int(self.state.CHUNK_SIZE) and 0 <= y < int(self.state.CHUNK_SIZE):
+                        tiles[idx(int(x), int(y))] = int(self.state.T_WALL)
+
+            # South-facing entrance (2 tiles wide).
+            door_y = int(y0 + h - 1)
+            door_x0 = int(clamp(int(x0 + w // 2 - 1), int(x0 + 1), int(x0 + w - 3)))
+            door_tiles_local = [(int(door_x0), int(door_y)), (int(door_x0 + 1), int(door_y))]
+            for dx, dy in door_tiles_local:
+                if 0 <= dx < int(self.state.CHUNK_SIZE) and 0 <= dy < int(self.state.CHUNK_SIZE):
+                    tiles[idx(int(dx), int(dy))] = int(self.state.T_DOOR)
+
+            # Lobby floor just inside the door so you can step in.
+            door_cx = int(round(sum(int(p[0]) for p in door_tiles_local) / max(1, len(door_tiles_local))))
+            lobby_w = int(clamp(8 if int(w) >= 14 else 6, 4, int(w) - 4))
+            lobby_h = int(clamp(6 if int(h) >= 14 else 5, 4, int(h) - 4))
+            lobby_x0 = int(
+                clamp(
+                    int(door_cx - lobby_w // 2),
+                    int(x0 + 2),
+                    int(x0 + w - 2 - lobby_w),
+                )
+            )
+            lobby_y1 = int(y0 + h - 2)  # just inside the south wall
+            lobby_y0 = int(clamp(int(lobby_y1 - lobby_h + 1), int(y0 + 2), int(y0 + h - 2)))
+            for yy in range(int(lobby_y0), int(lobby_y1) + 1):
+                for xx in range(int(lobby_x0), int(lobby_x0 + lobby_w)):
+                    if 0 <= xx < int(self.state.CHUNK_SIZE) and 0 <= yy < int(self.state.CHUNK_SIZE):
+                        tiles[idx(int(xx), int(yy))] = int(self.state.T_FLOOR)
+
+            # Ensure the tiles immediately behind the door are floor.
+            for ddx, ddy in door_tiles_local:
+                ix = int(ddx)
+                iy = int(ddy) - 1
+                if int(x0 + 1) <= ix <= int(x0 + w - 2) and int(y0 + 1) <= iy <= int(y0 + h - 2):
+                    if 0 <= ix < int(self.state.CHUNK_SIZE) and 0 <= iy < int(self.state.CHUNK_SIZE):
+                        tiles[idx(int(ix), int(iy))] = int(self.state.T_FLOOR)
+
+            # Register as a high-rise portal.
+            tx0w = int(cx) * int(self.state.CHUNK_SIZE) + int(x0)
+            ty0w = int(cy) * int(self.state.CHUNK_SIZE) + int(y0)
+            doors_w = tuple(
+                (int(cx) * int(self.state.CHUNK_SIZE) + int(dx), int(cy) * int(self.state.CHUNK_SIZE) + int(dy))
+                for dx, dy in door_tiles_local
+            )
+            special_buildings.append(
+                HardcoreSurvivalState._SpecialBuilding(
+                    kind="highrise",
+                    name="楂樺眰浣忓畢",
+                    tx0=int(tx0w),
+                    ty0=int(ty0w),
+                    w=int(w),
+                    h=int(h),
+                    door_tiles=doors_w,
+                    floors=int(floors),
+                )
+            )
+            roof_kind = (6 << 8) | int(roof_var)
+            buildings.append((int(tx0w), int(ty0w), int(w), int(h), int(roof_kind), int(floors)))
+
+        def _stamp_compound_chunk(
+            self,
+            tiles: list[int],
+            buildings: list[tuple[int, int, int, int, int, int]],
+            special_buildings: list["HardcoreSurvivalState._SpecialBuilding"],
+            cars: list["HardcoreSurvivalState._ParkedCar"],
+            bikes: list["HardcoreSurvivalState._ParkedBike"],
+            props: list["HardcoreSurvivalState._WorldProp"],
+            cx: int,
+            cy: int,
+            rng: random.Random,
+        ) -> None:
+            # Walled "小区": 67 tall towers (20+ floors), Chinese gated-community vibe.
+            cx = int(cx)
+            cy = int(cy)
+
+            def idx(x: int, y: int) -> int:
+                return y * self.state.CHUNK_SIZE + x
+
+            base_tx = int(cx) * int(self.state.CHUNK_SIZE)
+            base_ty = int(cy) * int(self.state.CHUNK_SIZE)
+
+            tx0 = int(getattr(self, "compound_tx0", 0))
+            ty0 = int(getattr(self, "compound_ty0", 0))
+            tx1 = int(getattr(self, "compound_tx1", 0))
+            ty1 = int(getattr(self, "compound_ty1", 0))
+            gate_x0 = int(getattr(self, "compound_gate_x0", 0))
+            gate_x1 = int(getattr(self, "compound_gate_x1", -1))
+            rvx0 = int(getattr(self, "compound_road_v_x0", 14))
+            rvx1 = int(getattr(self, "compound_road_v_x1", 17))
+            rhy0 = int(getattr(self, "compound_road_h_y0", 24))
+            rhy1 = int(getattr(self, "compound_road_h_y1", 26))
+
+            parking_chunks = set(getattr(self, "compound_parking_chunks", set()))
+            is_parking_chunk = (int(cx), int(cy)) in parking_chunks
+
+            # Base ground (overwrite the city district pattern in the compound area).
+            for y in range(int(self.state.CHUNK_SIZE)):
+                wy = int(base_ty + y)
+                for x in range(int(self.state.CHUNK_SIZE)):
+                    wx = int(base_tx + x)
+
+                    tile = int(self.state.T_CONCRETE)
+                    # Sparse greenery between blocks.
+                    g = float(self.state._noise2(float(wx) / 18.0, float(wy) / 18.0, self.seed ^ 0x7A11C1D3))
+                    if g > 0.94:
+                        tile = int(self.state.T_GRASS)
+
+                    if not is_parking_chunk:
+                        if int(rvx0) <= int(x) <= int(rvx1) or int(rhy0) <= int(y) <= int(rhy1):
+                            tile = int(self.state.T_ROAD)
+
+                    # Outer compound wall.
+                    if int(wx) == int(tx0) or int(wx) == int(tx1) or int(wy) == int(ty0) or int(wy) == int(ty1):
+                        if int(wy) == int(ty1) and int(gate_x0) <= int(wx) <= int(gate_x1):
+                            tile = int(self.state.T_ROAD)  # gate opening
+                        else:
+                            tile = int(self.state.T_WALL)
+
+                    tiles[idx(int(x), int(y))] = int(tile)
+
+            # Parking lots near the gate (visual interest).
+            if is_parking_chunk:
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                self._spawn_two_wheelers(
+                    tiles,
+                    bikes,
+                    cx,
+                    cy,
+                    rng=rng,
+                    count=int(rng.randint(1, 3)),
+                    models=["bike_lady", "bike_mountain", "bike_auto", "moto"],
+                )
+
+            # Stamp planned towers for this chunk.
+            towers = (getattr(self, "compound_towers_by_chunk", {}) or {}).get((int(cx), int(cy)), [])
+            for x0, y0, w, h, roof_var, floors in towers:
+                self._stamp_compound_highrise_tower(
+                    tiles,
+                    buildings,
+                    special_buildings,
+                    cx,
+                    cy,
+                    x0=int(x0),
+                    y0=int(y0),
+                    w=int(w),
+                    h=int(h),
+                    roof_var=int(roof_var),
+                    floors=int(floors),
+                )
+
         def _stamp_city_chunk(
             self,
             tiles: list[int],
@@ -5909,6 +6220,19 @@ class HardcoreSurvivalState(State):
             stx, sty = self.spawn_tile()
             spawn_cx = int(stx) // self.state.CHUNK_SIZE
             spawn_cy = int(sty) // self.state.CHUNK_SIZE
+            if self._is_compound_chunk(int(cx), int(cy)):
+                self._stamp_compound_chunk(
+                    tiles,
+                    buildings,
+                    special_buildings,
+                    cars,
+                    bikes,
+                    props,
+                    cx,
+                    cy,
+                    rng,
+                )
+                return
             is_spawn_chunk = (int(spawn_cx) == int(cx)) and (int(spawn_cy) == int(cy))
             # Starter "Chinese community": a small cluster of high-rises near spawn.
             in_community = (int(spawn_cx) <= int(cx) <= int(spawn_cx) + 1) and (int(spawn_cy) <= int(cy) <= int(spawn_cy) + 1)
@@ -13936,7 +14260,10 @@ class HardcoreSurvivalState(State):
                     floors = int(b[5]) if len(b) > 5 else 0
                     face_h = int(self._building_face_height_px(style=style, w=w, h=h, var=var, floors=floors))
                     inside = bool(can_be_inside and (tx0 <= ptx < tx0 + w) and (ty0 <= pty < ty0 + h))
-                    alpha = 110 if inside else 255
+                    if inside:
+                        # When the player is inside a building, hide that building's roof completely.
+                        continue
+                    alpha = 255
                     rw = max(1, int(w) - 2)
                     rh = max(1, int(h) - 2)
                     roof = self._roof_surface(rw, rh, alpha, roof_kind=roof_kind)
