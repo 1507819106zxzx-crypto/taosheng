@@ -12998,7 +12998,8 @@ class HardcoreSurvivalState(State):
                         door_h = int(min(int(door_h), max(10, int(south.h - 6))))
 
                         dr = pygame.Rect(0, 0, int(door_w), int(door_h))
-                        dr.midbottom = (int(door_px.centerx), int(south.bottom - 1))
+                        # Door bottom line should align with the tile baseline (no "floating").
+                        dr.midbottom = (int(door_px.centerx), int(south.bottom))
                         min_x = int(south.x + 2)
                         max_x = int(south.right - dr.w - 2)
                         if max_x >= min_x:
