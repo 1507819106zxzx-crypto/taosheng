@@ -14538,12 +14538,46 @@ class HardcoreSurvivalState(State):
         if float(getattr(self, "punch_cooldown_left", 0.0)) > 0.0:
             return
 
-        d = pygame.Vector2(getattr(self, "aim_dir", pygame.Vector2(0, 0)))
-        if d.length_squared() <= 0.001:
-            d = pygame.Vector2(self.player.facing)
-        if d.length_squared() <= 0.001:
-            d = pygame.Vector2(1, 0)
-        self.punch_dir = d.normalize()
+        # Punch direction follows movement/facing (NOT mouse aim), so left
+        # punch always extends to the left when facing left.
+        keys = pygame.key.get_pressed()
+        move = pygame.Vector2(0, 0)
+        if keys[pygame.K_w] or keys[pygame.K_UP]:
+            move.y -= 1
+        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+            move.y += 1
+        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+            move.x -= 1
+        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+            move.x += 1
+
+        dname: str | None = None
+        if move.length_squared() > 0.001:
+            if abs(float(move.x)) >= abs(float(move.y)):
+                dname = "right" if float(move.x) >= 0.0 else "left"
+            else:
+                dname = "down" if float(move.y) >= 0.0 else "up"
+        else:
+            dname = str(getattr(self.player, "dir", "down"))
+            if dname not in ("left", "right", "up", "down"):
+                dname = None
+
+        if dname is None:
+            f = pygame.Vector2(self.player.facing)
+            if f.length_squared() <= 0.001:
+                f = pygame.Vector2(1, 0)
+            if abs(float(f.x)) >= abs(float(f.y)):
+                dname = "right" if float(f.x) >= 0.0 else "left"
+            else:
+                dname = "down" if float(f.y) >= 0.0 else "up"
+
+        dir_map = {
+            "right": pygame.Vector2(1, 0),
+            "left": pygame.Vector2(-1, 0),
+            "down": pygame.Vector2(0, 1),
+            "up": pygame.Vector2(0, -1),
+        }
+        self.punch_dir = pygame.Vector2(dir_map.get(dname, pygame.Vector2(1, 0)))
         self.punch_left = float(self._PUNCH_TOTAL_S)
         self.punch_hit_done = False
         self.punch_cooldown_left = float(self._PUNCH_COOLDOWN_S)
