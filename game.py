@@ -8368,6 +8368,7 @@ class HardcoreSurvivalState(State):
         self.punch_cooldown_left = 0.0
         self.punch_hit_done = False
         self.punch_dir = pygame.Vector2(1, 0)
+        self.punch_hand = 0  # 0=left, 1=right (alternates each punch)
         self.hit_fx: list[HardcoreSurvivalState._HitFX] = []
         # Visual-only RNG: keep it separate so FX doesn't affect gameplay RNG.
         self.fx_rng = random.Random(self.seed ^ 0x51C0B1A7)
@@ -14578,6 +14579,7 @@ class HardcoreSurvivalState(State):
             "up": pygame.Vector2(0, -1),
         }
         self.punch_dir = pygame.Vector2(dir_map.get(dname, pygame.Vector2(1, 0)))
+        self.punch_hand = 1 - int(getattr(self, "punch_hand", 0))
         self.punch_left = float(self._PUNCH_TOTAL_S)
         self.punch_hit_done = False
         self.punch_cooldown_left = float(self._PUNCH_COOLDOWN_S)
@@ -18136,24 +18138,26 @@ class HardcoreSurvivalState(State):
             )
             # Pick a sane punch anchor from the skeleton:
             # - left/right punches use the hand on that side
-            # - up/down punches use the midpoint of both hands (so it reads "forward")
+            # - up/down punches alternate left/right hand (feels more natural)
             lh = sk.get("l_hand")
             rh = sk.get("r_hand")
             base_hand: pygame.Vector2
             if lh is not None and rh is not None:
                 lhx, lhy = int(lh[0]), int(lh[1])
                 rhx, rhy = int(rh[0]), int(rh[1])
+                left_pt = (lhx, lhy) if lhx <= rhx else (rhx, rhy)
+                right_pt = (lhx, lhy) if lhx >= rhx else (rhx, rhy)
                 if abs(float(pdir.x)) >= abs(float(pdir.y)) and float(pdir.x) != 0.0:
                     # Horizontal punch: choose the hand on the punch side.
                     if float(pdir.x) < 0.0:
-                        hx, hy = (lhx, lhy) if lhx <= rhx else (rhx, rhy)
+                        hx, hy = left_pt
                     else:
-                        hx, hy = (lhx, lhy) if lhx >= rhx else (rhx, rhy)
+                        hx, hy = right_pt
                     base_hand = pygame.Vector2(int(rect.left + hx), int(rect.top + hy))
                 else:
-                    # Vertical punch: center the fist between hands.
-                    hx = int(round((lhx + rhx) * 0.5))
-                    hy = int(round((lhy + rhy) * 0.5))
+                    # Vertical punch: alternate which hand "leads".
+                    use_right = bool(getattr(self, "punch_hand", 0))
+                    hx, hy = (right_pt if use_right else left_pt)
                     base_hand = pygame.Vector2(int(rect.left + hx), int(rect.top + hy))
             else:
                 hand_key = "r_hand"
@@ -18170,9 +18174,13 @@ class HardcoreSurvivalState(State):
 
             fx = int(round(float(fist.x)))
             fy = int(round(float(fist.y)))
-            # Arm connection (short + pixel-perfect).
-            pygame.draw.line(surface, outline, (int(base_hand.x), int(base_hand.y)), (int(fx), int(fy)), 2)
-            pygame.draw.line(surface, skin, (int(base_hand.x), int(base_hand.y)), (int(fx), int(fy)), 1)
+            # Arm connection: bridge pixels (cute, less "stick-arm" than lines).
+            step_n = int(clamp(int(round(float(reach))), 0, 6))
+            for s in range(1, int(step_n)):
+                bx = int(round(float(base_hand.x) + float(pdir.x) * float(s)))
+                by = int(round(float(base_hand.y) + float(pdir.y) * float(s)))
+                if 0 <= bx < INTERNAL_W and 0 <= by < INTERNAL_H:
+                    surface.set_at((bx, by), skin)
             fr = pygame.Rect(int(fx - 1), int(fy - 1), 3, 3)
             surface.fill(skin, fr)
             pygame.draw.rect(surface, outline, fr, 1)
