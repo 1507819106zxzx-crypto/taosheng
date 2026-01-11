@@ -2196,6 +2196,8 @@ class HardcoreSurvivalState(State):
     T_BOARDWALK = 18
     T_MARSH = 19
     T_HIGHWAY = 20
+    T_STAIRS_UP = 21
+    T_STAIRS_DOWN = 22
 
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
@@ -2245,6 +2247,8 @@ class HardcoreSurvivalState(State):
         T_SAND: _TileDef("sand", (192, 176, 112), solid=False, slow=0.92),
         T_BOARDWALK: _TileDef("boardwalk", (156, 116, 68), solid=False),
         T_MARSH: _TileDef("marsh", (56, 92, 62), solid=False, slow=0.78),
+        T_STAIRS_UP: _TileDef("stairs_up", (84, 76, 62), solid=False),
+        T_STAIRS_DOWN: _TileDef("stairs_down", (84, 76, 62), solid=False),
     }
 
     _PLAYER_PAL = {
@@ -5812,6 +5816,16 @@ class HardcoreSurvivalState(State):
         floors: int = 0
 
     @dataclass
+    class _MultiHouse:
+        tx0: int
+        ty0: int
+        w: int
+        h: int
+        floors: int
+        cur_floor: int = 1
+        floor_tiles: dict[int, list[int]] = field(default_factory=dict)  # floor -> w*h snapshot
+
+    @dataclass
     class _Chunk:
         cx: int
         cy: int
@@ -5819,6 +5833,7 @@ class HardcoreSurvivalState(State):
         items: list["HardcoreSurvivalState._WorldItem"] = field(default_factory=list)
         buildings: list[tuple[int, int, int, int, int, int]] = field(default_factory=list)  # (tx0, ty0, w, h, roof_kind, floors) in world tiles
         special_buildings: list["HardcoreSurvivalState._SpecialBuilding"] = field(default_factory=list)
+        multi_houses: list["HardcoreSurvivalState._MultiHouse"] = field(default_factory=list)
         cars: list["HardcoreSurvivalState._ParkedCar"] = field(default_factory=list)
         bikes: list["HardcoreSurvivalState._ParkedBike"] = field(default_factory=list)
         props: list["HardcoreSurvivalState._WorldProp"] = field(default_factory=list)
@@ -6111,10 +6126,15 @@ class HardcoreSurvivalState(State):
             items: list[HardcoreSurvivalState._WorldItem] = []
             buildings: list[tuple[int, int, int, int, int, int]] = []
             special_buildings: list[HardcoreSurvivalState._SpecialBuilding] = []
+            multi_houses: list[HardcoreSurvivalState._MultiHouse] = []
             cars: list[HardcoreSurvivalState._ParkedCar] = []
             bikes: list[HardcoreSurvivalState._ParkedBike] = []
             props: list[HardcoreSurvivalState._WorldProp] = []
             door_reserved: set[tuple[int, int]] = set()
+
+            # Allow stamping helpers to register 2F house floor snapshots without
+            # threading an extra parameter through every call site.
+            self._multi_houses_out = multi_houses
 
             is_city = self._is_city_chunk(int(cx), int(cy))
 
@@ -6308,6 +6328,12 @@ class HardcoreSurvivalState(State):
                 cars[:] = [c for c in cars if keep_vehicle_at(float(c.pos.x), float(c.pos.y))]
                 bikes[:] = [b for b in bikes if keep_vehicle_at(float(b.pos.x), float(b.pos.y))]
 
+            # Clear the transient registration hook for stamping helpers.
+            try:
+                self._multi_houses_out = None
+            except Exception:
+                pass
+
             return HardcoreSurvivalState._Chunk(
                 cx=cx,
                 cy=cy,
@@ -6315,6 +6341,7 @@ class HardcoreSurvivalState(State):
                 items=items,
                 buildings=buildings,
                 special_buildings=special_buildings,
+                multi_houses=multi_houses,
                 cars=cars,
                 bikes=bikes,
                 props=props,
@@ -7214,6 +7241,7 @@ class HardcoreSurvivalState(State):
             tries = 0
             placed = 0
             want = 1
+            mh_out: list[HardcoreSurvivalState._MultiHouse] | None = getattr(self, "_multi_houses_out", None)
             max_tries = 120 if town_kind in ("大型超市", "大型监狱", "高层住宅大") else 60
 
             def idx(x: int, y: int) -> int:
@@ -7760,28 +7788,23 @@ class HardcoreSurvivalState(State):
                         set_interior(int(shelf_x), int(y), self.state.T_SHELF)
 
                 elif town_kind == "住宅":
-                    # Residential: city houses can be 2–3 floors and become a portal
-                    # to a separate interior scene with stairs.
+                    # Residential: 2F houses stay on the world-map (no full-screen portal).
                     is_city = bool(self._is_city_chunk(int(cx), int(cy)))
                     r = float(rng.random())
                     floors = 1
                     if is_city:
-                        if r < 0.08:
-                            floors = 3
-                        elif r < 0.55:
+                        if r < 0.35:
                             floors = 2
                     else:
-                        # Some multi-floor houses also exist outside the dense city blocks.
-                        if r < 0.03:
-                            floors = 3
-                        elif r < 0.22:
+                        # Some 2F houses also exist outside the dense city blocks.
+                        if r < 0.18:
                             floors = 2
                     # Tiny footprints read better as 1F.
                     if int(w) < 7 or int(h) < 7:
                         floors = 1
                     building_floors = int(floors)
 
-                    if floors > 1:
+                    if False and floors > 1:
                         # Seal the world-map interior; enter via the door portal.
                         for y in range(int(y0 + 1), int(y0 + h - 1)):
                             for x in range(int(x0 + 1), int(x0 + w - 1)):
@@ -7826,6 +7849,56 @@ class HardcoreSurvivalState(State):
                         shelf_x = in_left if bx > int((in_left + in_right) // 2) else in_right
                         for y in range(in_top + 2, in_bottom - 1, 2):
                             set_interior(int(shelf_x), int(y), self.state.T_SHELF)
+
+                        if int(floors) > 1:
+                            # Add a simple staircase for 2F houses and register a 2F tile snapshot.
+                            stair_pos: tuple[int, int] | None = None
+                            cand = [
+                                (int(tx0c), int(ty0c) - 2),
+                                (int(tx0c) - 2, int(ty0c)),
+                                (int(tx0c) + 2, int(ty0c)),
+                                (int(in_left + 2), int(in_bottom - 2)),
+                                (int(in_right - 2), int(in_bottom - 2)),
+                            ]
+                            for sx, sy in cand:
+                                if not (int(in_left) <= int(sx) <= int(in_right) and int(in_top) <= int(sy) <= int(in_bottom)):
+                                    continue
+                                if tiles[idx(int(sx), int(sy))] != int(self.state.T_FLOOR):
+                                    continue
+                                tiles[idx(int(sx), int(sy))] = int(self.state.T_STAIRS_UP)
+                                stair_pos = (int(sx), int(sy))
+                                break
+
+                            if stair_pos is None:
+                                # No space: fall back to a normal 1F house.
+                                building_floors = 1
+                            else:
+                                tx0w = cx * self.state.CHUNK_SIZE + x0
+                                ty0w = cy * self.state.CHUNK_SIZE + y0
+                                f1: list[int] = []
+                                for yy in range(int(h)):
+                                    for xx in range(int(w)):
+                                        f1.append(int(tiles[idx(int(x0 + xx), int(y0 + yy))]))
+                                f2 = list(f1)
+                                for i2 in range(len(f2)):
+                                    tcur = int(f2[i2])
+                                    if tcur == int(self.state.T_DOOR):
+                                        f2[i2] = int(self.state.T_WALL)
+                                    elif tcur == int(self.state.T_STAIRS_UP):
+                                        f2[i2] = int(self.state.T_STAIRS_DOWN)
+
+                                if mh_out is not None:
+                                    mh_out.append(
+                                        HardcoreSurvivalState._MultiHouse(
+                                            tx0=int(tx0w),
+                                            ty0=int(ty0w),
+                                            w=int(w),
+                                            h=int(h),
+                                            floors=int(building_floors),
+                                            cur_floor=1,
+                                            floor_tiles={1: f1, 2: f2},
+                                        )
+                                    )
 
                 elif town_kind == "医院":
                     # Reception + ward split.
@@ -8286,6 +8359,12 @@ class HardcoreSurvivalState(State):
 
                 if reachable_floor:
                     rng.shuffle(reachable_floor)
+
+                # Multi-floor houses share the same world-tile footprint for 1F/2F.
+                # To avoid items appearing on the "wrong" floor, don't spawn loot
+                # inside 2F houses for now.
+                if town_kind == "住宅" and int(building_floors) > 1:
+                    reachable_floor = []
 
                 spot_i = 0
                 for _ in range(loot_n):
@@ -14863,10 +14942,13 @@ class HardcoreSurvivalState(State):
         # Request chunks in/around the camera view for smooth scrolling.
         cam_x = int(getattr(self, "cam_x", 0))
         cam_y = int(getattr(self, "cam_y", 0))
-        start_tx = int(math.floor(float(cam_x) / float(self.TILE_SIZE))) - 2
-        start_ty = int(math.floor(float(cam_y) / float(self.TILE_SIZE))) - 2
-        end_tx = int(math.floor(float(cam_x + INTERNAL_W) / float(self.TILE_SIZE))) + 2
-        end_ty = int(math.floor(float(cam_y + INTERNAL_H) / float(self.TILE_SIZE))) + 2
+        # Match (and slightly exceed) the draw margins so tall facades don't "vanish"
+        # when walking quickly into a not-yet-generated chunk.
+        margin_tiles = 4
+        start_tx = int(math.floor(float(cam_x) / float(self.TILE_SIZE))) - int(margin_tiles)
+        start_ty = int(math.floor(float(cam_y) / float(self.TILE_SIZE))) - int(margin_tiles)
+        end_tx = int(math.floor(float(cam_x + INTERNAL_W) / float(self.TILE_SIZE))) + int(margin_tiles)
+        end_ty = int(math.floor(float(cam_y + INTERNAL_H) / float(self.TILE_SIZE))) + int(margin_tiles)
 
         chunk_pad = 1
         start_cx = start_tx // int(self.CHUNK_SIZE) - int(chunk_pad)
@@ -15109,8 +15191,78 @@ class HardcoreSurvivalState(State):
         return False
 
     def _interact_primary(self) -> None:
-        # Primary interact key on the world map: pickup only (doors are walk-into).
+        # Primary interact key on the world map: stairs/pickup (doors are walk-into).
+        if self._try_use_multi_house_stairs():
+            return
         self._try_pickup()
+
+    def _multi_house_at(self, tx: int, ty: int) -> tuple["_Chunk", "_MultiHouse"] | None:
+        tx = int(tx)
+        ty = int(ty)
+        chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
+        for mh in getattr(chunk, "multi_houses", []):
+            if int(mh.tx0) <= tx < int(mh.tx0) + int(mh.w) and int(mh.ty0) <= ty < int(mh.ty0) + int(mh.h):
+                return chunk, mh
+        return None
+
+    def _multi_house_apply_floor(self, chunk: "_Chunk", mh: "_MultiHouse") -> None:
+        tiles = mh.floor_tiles.get(int(getattr(mh, "cur_floor", 1)))
+        if not tiles:
+            return
+        base_tx = int(chunk.cx) * int(self.CHUNK_SIZE)
+        base_ty = int(chunk.cy) * int(self.CHUNK_SIZE)
+        ox = int(getattr(mh, "tx0", 0)) - int(base_tx)
+        oy = int(getattr(mh, "ty0", 0)) - int(base_ty)
+        if not (0 <= ox < int(self.CHUNK_SIZE) and 0 <= oy < int(self.CHUNK_SIZE)):
+            return
+        w = int(getattr(mh, "w", 0))
+        h = int(getattr(mh, "h", 0))
+        cs = int(self.CHUNK_SIZE)
+        if w <= 0 or h <= 0:
+            return
+        if ox + w > cs or oy + h > cs:
+            return
+        for yy in range(int(h)):
+            row_off = int((oy + yy) * cs + ox)
+            src_off = int(yy * w)
+            for xx in range(int(w)):
+                chunk.tiles[int(row_off + xx)] = int(tiles[int(src_off + xx)])
+
+    def _try_use_multi_house_stairs(self) -> bool:
+        tx, ty = self._player_tile()
+        candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+        chosen: tuple[int, int, int] | None = None
+        for cx, cy in candidates:
+            t = int(self.world.get_tile(int(cx), int(cy)))
+            if t in (int(self.T_STAIRS_UP), int(self.T_STAIRS_DOWN)):
+                chosen = (int(cx), int(cy), int(t))
+                break
+        if chosen is None:
+            return False
+        cx, cy, t = chosen
+        found = self._multi_house_at(int(cx), int(cy))
+        if found is None:
+            return False
+        chunk, mh = found
+        floors = int(max(1, int(getattr(mh, "floors", 1))))
+        cur = int(max(1, int(getattr(mh, "cur_floor", 1))))
+
+        if t == int(self.T_STAIRS_UP):
+            if cur >= floors:
+                self._set_hint("已经是顶层", seconds=1.0)
+                return True
+            mh.cur_floor = int(cur + 1)
+        else:
+            if cur <= 1:
+                self._set_hint("已经是一层", seconds=1.0)
+                return True
+            mh.cur_floor = int(cur - 1)
+
+        self._multi_house_apply_floor(chunk, mh)
+        self.player.vel.update(0, 0)
+        self.player.pos.update((float(cx) + 0.5) * float(self.TILE_SIZE), (float(cy) + 0.5) * float(self.TILE_SIZE))
+        self._set_hint(f"{int(getattr(mh, 'cur_floor', 1))}F", seconds=0.8)
+        return True
 
     def _try_enter_highrise(self) -> bool:
         if getattr(self, "hr_interior", False):
@@ -16485,12 +16637,25 @@ class HardcoreSurvivalState(State):
             if int(self.world.peek_tile(tx + 1, ty)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
                 surface.fill(curb_hi, pygame.Rect(rect.right - 1, rect.y, 1, rect.h))
 
-        if tile_id == self.T_FLOOR:
+        if tile_id in (self.T_FLOOR, self.T_STAIRS_UP, self.T_STAIRS_DOWN):
             shadow = self._tint(col, add=(-18, -18, -18))
             if int(self.world.peek_tile(tx, ty - 1)) == int(self.T_WALL):
                 surface.fill(shadow, pygame.Rect(rect.x, rect.y, rect.w, 1))
             if int(self.world.peek_tile(tx - 1, ty)) == int(self.T_WALL):
                 surface.fill(shadow, pygame.Rect(rect.x, rect.y, 1, rect.h))
+
+        if tile_id in (self.T_STAIRS_UP, self.T_STAIRS_DOWN):
+            step = self._tint(col, add=(34, 30, 24))
+            edge = self._tint(col, add=(-28, -28, -28))
+            pygame.draw.rect(surface, edge, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
+            for i in range(3):
+                yy = int(rect.y + 2 + i * 2)
+                surface.fill(step, pygame.Rect(int(rect.x + 2), int(yy), int(rect.w - 4), 1))
+            ink = (230, 230, 240)
+            if tile_id == self.T_STAIRS_UP:
+                pygame.draw.polygon(surface, ink, [(rect.centerx, rect.y + 2), (rect.centerx - 2, rect.y + 6), (rect.centerx + 2, rect.y + 6)])
+            else:
+                pygame.draw.polygon(surface, ink, [(rect.centerx, rect.bottom - 3), (rect.centerx - 2, rect.bottom - 7), (rect.centerx + 2, rect.bottom - 7)])
 
     def _blit_sprite_outline(self, surface: pygame.Surface, spr: pygame.Surface, rect: pygame.Rect, *, color: tuple[int, int, int]) -> None:
         r, g, b = (int(color[0]), int(color[1]), int(color[2]))
@@ -18126,7 +18291,7 @@ class HardcoreSurvivalState(State):
         ptx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
         pty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
         p_tile = self.world.peek_tile(ptx, pty)
-        can_be_inside = p_tile in (self.T_FLOOR, self.T_DOOR)
+        can_be_inside = p_tile in (self.T_FLOOR, self.T_DOOR, self.T_STAIRS_UP, self.T_STAIRS_DOWN)
 
         start_cx = start_tx // self.CHUNK_SIZE
         end_cx = end_tx // self.CHUNK_SIZE
