@@ -18151,6 +18151,9 @@ class HardcoreSurvivalState(State):
                         if style == 6:
                             # High-rise lobby: keep it single-story (do not scale with the whole facade height).
                             door_h = int(clamp(16 + ((int(var) >> 2) % 3) - 1, 14, 18))
+                        elif style == 1:
+                            # Houses: keep door height consistent between 1F/2F.
+                            door_h = int(self.TILE_SIZE)
                         else:
                             door_h = int(clamp(10 + int(face_h) // 3, 12, 18))
                         door_h = int(min(int(door_h), max(10, int(south.h - 6))))
