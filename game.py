@@ -18540,6 +18540,61 @@ class HardcoreSurvivalState(State):
         if isinstance(cached_scaled, pygame.Surface):
             surface.blit(cached_scaled, (map_x0, map_y0))
 
+        # POI icons (public buildings) inside the minimap view.
+        # (Do not reveal interiors; we only show a symbol per building footprint.)
+        start_tx = int(tx) - int(radius)
+        start_ty = int(ty) - int(radius)
+        end_tx = int(tx) + int(radius)
+        end_ty = int(ty) + int(radius)
+        start_cx = int(start_tx) // int(self.CHUNK_SIZE)
+        end_cx = int(end_tx) // int(self.CHUNK_SIZE)
+        start_cy = int(start_ty) // int(self.CHUNK_SIZE)
+        end_cy = int(end_ty) // int(self.CHUNK_SIZE)
+        style_to_kind = {
+            2: "market",
+            3: "hospital",
+            4: "prison",
+            5: "school",
+            6: "highrise",
+            7: "bookstore",
+            8: "chinese",
+            9: "gunshop",
+        }
+        drawn_pois = 0
+        for ccy in range(int(start_cy), int(end_cy) + 1):
+            for ccx in range(int(start_cx), int(end_cx) + 1):
+                # Cached minimap frames may skip rebuilding tile colors, so ensure nearby chunks exist.
+                chunk = self.world.peek_chunk(int(ccx), int(ccy))
+                if chunk is None:
+                    chunk = self.world.get_chunk(int(ccx), int(ccy))
+                for b in getattr(chunk, "buildings", []):
+                    if len(b) < 5:
+                        continue
+                    btx0, bty0, bw, bh = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                    roof_kind = int(b[4])
+                    style = int((roof_kind >> 8) & 0xFF)
+                    kind = style_to_kind.get(int(style))
+                    if kind is None:
+                        continue
+                    x1 = int(btx0 + max(1, int(bw)) - 1)
+                    y1 = int(bty0 + max(1, int(bh)) - 1)
+                    if x1 < int(start_tx) or int(btx0) > int(end_tx) or y1 < int(start_ty) or int(bty0) > int(end_ty):
+                        continue
+                    # Place the icon at the nearest point of the building to the player
+                    # so it shows up even if the building is only partially in view.
+                    icon_tx = int(clamp(float(tx), float(btx0), float(x1)))
+                    icon_ty = int(clamp(float(ty), float(bty0), float(y1)))
+                    mx = int(map_x0 + (int(icon_tx) - int(start_tx)) * int(scale) + int(scale) // 2)
+                    my = int(map_y0 + (int(icon_ty) - int(start_ty)) * int(scale) + int(scale) // 2)
+                    self._draw_world_map_icon(surface, mx, my, str(kind), scale=1)
+                    drawn_pois += 1
+                    if drawn_pois >= 16:
+                        break
+                if drawn_pois >= 16:
+                    break
+            if drawn_pois >= 16:
+                break
+
         # Border for the map area.
         pygame.draw.rect(surface, (10, 10, 12), pygame.Rect(map_x0 - 1, map_y0 - 1, map_px + 2, map_px + 2), 1)
 
