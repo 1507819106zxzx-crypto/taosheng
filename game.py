@@ -6621,8 +6621,10 @@ class HardcoreSurvivalState(State):
                 elif big_roll < 0.18:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "大型监狱", reserved=reserved)
                     buildings_n = max(3, buildings_n - 1)
-                elif big_roll < 0.24 and commercial_district:
-                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "新华书店", reserved=reserved)
+                elif big_roll < 0.24:
+                    # Core districts should always have a few recognizable shops.
+                    kind = "新华书店" if rng.random() < 0.52 else "枪械店"
+                    self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, kind, reserved=reserved)
                     self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
                     buildings_n = max(3, buildings_n - 1)
 
@@ -6662,7 +6664,9 @@ class HardcoreSurvivalState(State):
                     if commercial_district:
                         pool = ["住宅", "住宅", "住宅", "超市", "超市", "超市", "医院", "新华书店", "枪械店", "高层住宅", "监狱"]
                     else:
-                        pool = ["住宅", "住宅", "住宅", "住宅", "住宅", "住宅", "超市", "超市", "医院", "高层住宅", "监狱"]
+                        # Non-commercial blocks still occasionally get a bookstore/gun shop,
+                        # so the whole city doesn't end up as pure residential.
+                        pool = ["住宅", "住宅", "住宅", "住宅", "住宅", "住宅", "超市", "超市", "医院", "新华书店", "枪械店", "高层住宅", "监狱"]
                     kind = str(rng.choice(pool))
                 if core:
                     if kind == "超市" and rng.random() < 0.45:
@@ -6671,8 +6675,11 @@ class HardcoreSurvivalState(State):
                         kind = "高层住宅大"
                     elif kind == "监狱" and rng.random() < 0.35:
                         kind = "大型监狱"
-                if (not commercial_district) and kind in ("超市", "医院", "大型超市", "新华书店", "枪械店") and rng.random() < 0.35:
-                    kind = "住宅"
+                if not commercial_district:
+                    if kind in ("超市", "医院", "大型超市") and rng.random() < 0.35:
+                        kind = "住宅"
+                    elif kind in ("新华书店", "枪械店") and rng.random() < 0.15:
+                        kind = "住宅"
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, kind, reserved=reserved)
 
             # Make parking lots common/visible in city blocks (esp. near core).
@@ -8283,6 +8290,22 @@ class HardcoreSurvivalState(State):
         self.seed = int(time.time()) & 0xFFFFFFFF
         self.world = HardcoreSurvivalState._World(self, seed=self.seed)
         spawn_tx, spawn_ty = self.world.spawn_tile()
+        # Preload the main city area so POI icons (e.g., gunshop/bookstore) show up
+        # quickly on the minimap/world-map without requiring long travel.
+        try:
+            ccx = int(getattr(self.world, "city_cx", 0))
+            ccy = int(getattr(self.world, "city_cy", 0))
+            cr = max(0, int(getattr(self.world, "city_radius", 0)))
+            for cy in range(int(ccy) - int(cr), int(ccy) + int(cr) + 1):
+                for cx in range(int(ccx) - int(cr), int(ccx) + int(cr) + 1):
+                    self.world.request_chunk(int(cx), int(cy))
+        except Exception:
+            pass
+
+        # POI cache for minimap edge-indicators.
+        self._poi_cache: dict[str, list[tuple[int, int]]] = {}
+        self._poi_scanned_chunks: set[tuple[int, int]] = set()
+        self._poi_cache_t = 0.0
         spawn_px = (spawn_tx + 0.5) * self.TILE_SIZE
         spawn_py = (spawn_ty + 0.5) * self.TILE_SIZE
         self.avatar = getattr(self, "avatar", None) or SurvivalAvatar()
@@ -18482,6 +18505,43 @@ class HardcoreSurvivalState(State):
 
         tx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
         ty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
+
+        # Refresh POI cache periodically (used for edge indicators when POIs are off-screen).
+        try:
+            now = float(time.monotonic())
+            last = float(getattr(self, "_poi_cache_t", 0.0))
+            if (now - last) >= 0.70:
+                cache = getattr(self, "_poi_cache", None)
+                if not isinstance(cache, dict):
+                    cache = {}
+                    self._poi_cache = cache
+                scanned = getattr(self, "_poi_scanned_chunks", None)
+                if not isinstance(scanned, set):
+                    scanned = set()
+                    self._poi_scanned_chunks = scanned
+
+                style_to_kind = {2: "market", 3: "hospital", 4: "prison", 5: "school", 7: "bookstore", 9: "gunshop"}
+                for (ccx, ccy), chunk in getattr(self.world, "chunks", {}).items():
+                    key = (int(ccx), int(ccy))
+                    if key in scanned:
+                        continue
+                    scanned.add(key)
+                    for b in getattr(chunk, "buildings", []):
+                        if len(b) < 5:
+                            continue
+                        roof_kind = int(b[4])
+                        style = int((roof_kind >> 8) & 0xFF)
+                        kind = style_to_kind.get(int(style))
+                        if kind is None:
+                            continue
+                        tx0, ty0, bw, bh = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                        c_tx = int(tx0 + max(1, int(bw)) // 2)
+                        c_ty = int(ty0 + max(1, int(bh)) // 2)
+                        cache.setdefault(str(kind), []).append((int(c_tx), int(c_ty)))
+
+                self._poi_cache_t = float(now)
+        except Exception:
+            pass
         season = int(self._season_index())
         key = (int(tx), int(ty), int(radius), int(scale), int(season))
 
@@ -18550,16 +18610,9 @@ class HardcoreSurvivalState(State):
         end_cx = int(end_tx) // int(self.CHUNK_SIZE)
         start_cy = int(start_ty) // int(self.CHUNK_SIZE)
         end_cy = int(end_ty) // int(self.CHUNK_SIZE)
-        style_to_kind = {
-            2: "market",
-            3: "hospital",
-            4: "prison",
-            5: "school",
-            6: "highrise",
-            7: "bookstore",
-            8: "chinese",
-            9: "gunshop",
-        }
+        style_to_kind = {2: "market", 3: "hospital", 4: "prison", 5: "school", 7: "bookstore", 9: "gunshop"}
+        seen_gunshop = False
+        seen_bookstore = False
         drawn_pois = 0
         for ccy in range(int(start_cy), int(end_cy) + 1):
             for ccx in range(int(start_cx), int(end_cx) + 1):
@@ -18576,6 +18629,10 @@ class HardcoreSurvivalState(State):
                     kind = style_to_kind.get(int(style))
                     if kind is None:
                         continue
+                    if kind == "gunshop":
+                        seen_gunshop = True
+                    elif kind == "bookstore":
+                        seen_bookstore = True
                     x1 = int(btx0 + max(1, int(bw)) - 1)
                     y1 = int(bty0 + max(1, int(bh)) - 1)
                     if x1 < int(start_tx) or int(btx0) > int(end_tx) or y1 < int(start_ty) or int(bty0) > int(end_ty):
@@ -18676,6 +18733,59 @@ class HardcoreSurvivalState(State):
                 lx = int(round(base_x + px * 5.0))
                 ly = int(round(base_y + py * 5.0))
                 draw_text(surface, self.app.font_s, label, (lx, ly), pygame.Color(240, 240, 240), anchor="center")
+
+        def draw_edge_poi(*, kind: str, dx_t: int, dy_t: int, color: tuple[int, int, int]) -> None:
+            # Arrow + the same POI icon used in the world-map legend.
+            m = max(abs(int(dx_t)), abs(int(dy_t)))
+            if m <= 0:
+                return
+            ux = float(dx_t) / float(m)
+            uy = float(dy_t) / float(m)
+            l = float(math.hypot(ux, uy))
+            if l > 1e-6:
+                ux /= l
+                uy /= l
+            inset = float(radius) - 0.8
+            tip_x = float(map_x0) + (float(radius) + ux * inset) * float(scale) + float(scale) * 0.5
+            tip_y = float(map_y0) + (float(radius) + uy * inset) * float(scale) + float(scale) * 0.5
+
+            base_x = tip_x - ux * 9.0
+            base_y = tip_y - uy * 9.0
+            px = -uy
+            py = ux
+            left = (base_x + px * 4.0, base_y + py * 4.0)
+            right = (base_x - px * 4.0, base_y - py * 4.0)
+            tip = (tip_x, tip_y)
+            pygame.draw.polygon(surface, tuple(color), [tip, left, right])
+            pygame.draw.polygon(surface, (0, 0, 0), [tip, left, right], 1)
+            self._draw_world_map_icon(surface, int(round(tip_x)), int(round(tip_y)), str(kind), scale=2)
+
+        # POI edge indicators: show direction to nearest gunshop/bookstore even when outside the minimap window.
+        cache = getattr(self, "_poi_cache", None)
+        if isinstance(cache, dict):
+            def nearest_dxdy(kind: str) -> tuple[int, int] | None:
+                pts = cache.get(str(kind))
+                if not isinstance(pts, list) or not pts:
+                    return None
+                best_d2 = 1e30
+                best: tuple[int, int] | None = None
+                for px, py in pts:
+                    dx = int(px) - int(tx)
+                    dy = int(py) - int(ty)
+                    d2 = float(dx * dx + dy * dy)
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        best = (dx, dy)
+                return best
+
+            if not bool(seen_gunshop):
+                dd = nearest_dxdy("gunshop")
+                if dd is not None and (abs(int(dd[0])) > int(radius) or abs(int(dd[1])) > int(radius)):
+                    draw_edge_poi(kind="gunshop", dx_t=int(dd[0]), dy_t=int(dd[1]), color=(220, 140, 90))
+            if not bool(seen_bookstore):
+                dd = nearest_dxdy("bookstore")
+                if dd is not None and (abs(int(dd[0])) > int(radius) or abs(int(dd[1])) > int(radius)):
+                    draw_edge_poi(kind="bookstore", dx_t=int(dd[0]), dy_t=int(dd[1]), color=(232, 200, 120))
 
         # Player-made markers from the big map (dot inside radius, arrow when off-screen).
         markers = getattr(self, "world_map_markers", None)
