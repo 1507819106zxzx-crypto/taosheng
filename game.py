@@ -57,6 +57,16 @@ def clamp(value: float, low: float, high: float) -> float:
     return low if value < low else high if value > high else value
 
 
+def iround(x: float) -> int:
+    # Python's round() uses bankers rounding (ties to even) which can cause
+    # visible 1px jitter when positions sit on .5 boundaries (e.g. odd-sized
+    # sprites/colliders). Use a "round half away from zero" instead.
+    x = float(x)
+    if x >= 0.0:
+        return int(math.floor(x + 0.5))
+    return int(math.ceil(x - 0.5))
+
+
 def format_time(seconds: float) -> str:
     seconds = max(0, int(seconds))
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
@@ -1802,7 +1812,10 @@ class App:
     def run(self) -> None:
         running = True
         while running:
-            dt = self.clock.tick(FPS) / 1000.0
+            # Fixed-step timing: keeps pixel motion consistent and avoids the
+            # subtle "lurch" you get from variable dt + pixel snapping.
+            self.clock.tick_busy_loop(FPS)
+            dt = 1.0 / float(FPS)
             self._update_view_transform()
             for event in pygame.event.get():
                 if event.type == pygame.VIDEORESIZE:
@@ -3222,6 +3235,120 @@ class HardcoreSurvivalState(State):
         return {"down": down, "up": up, "right": right, "left": left}
 
     @classmethod
+    def _make_avatar_pose_sit_sprite(cls, direction: str, *, avatar: SurvivalAvatar) -> pygame.Surface:
+        avatar = avatar or SurvivalAvatar()
+        avatar.clamp_all()
+        direction = str(direction)
+        if direction == "left":
+            return pygame.transform.flip(cls._make_avatar_pose_sit_sprite("right", avatar=avatar), True, False)
+
+        w, h = 12, 16
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        cols = cls._avatar_colors(avatar)
+        hair = cols["hair"]
+        skin = cols["skin"]
+        coat = cols["coat"]
+        coat_dark = cols["coat_dark"]
+        pants = cols["pants"]
+        pants_dark = cols["pants_dark"]
+        boots = cols["boots"]
+        eye = cols["eye"]
+        outline = (10, 10, 12)
+
+        def px(x: int, y: int, c: tuple[int, int, int]) -> None:
+            if 0 <= x < w and 0 <= y < h:
+                surf.set_at((int(x), int(y)), c)
+
+        def rect(x: int, y: int, rw: int, rh: int, c: tuple[int, int, int]) -> None:
+            if rw <= 0 or rh <= 0:
+                return
+            surf.fill(c, pygame.Rect(int(x), int(y), int(rw), int(rh)))
+
+        if direction in ("down", "up"):
+            # Head + hair.
+            rect(4, 0, 4, 2, hair)
+            rect(4, 2, 4, 3, skin)
+            if direction == "down":
+                px(5, 3, eye)
+                px(6, 3, eye)
+            else:
+                px(5, 2, hair)
+                px(6, 2, hair)
+
+            # Torso.
+            rect(4, 5, 4, 4, coat)
+            rect(4, 9, 4, 1, coat_dark)
+            rect(3, 6, 1, 3, coat_dark)
+            rect(8, 6, 1, 3, coat_dark)
+
+            # Sitting legs (bent).
+            rect(4, 10, 4, 1, pants)
+            rect(4, 11, 4, 1, pants_dark)
+            rect(5, 12, 2, 1, pants)
+            rect(4, 13, 2, 1, boots)
+            rect(6, 13, 2, 1, boots)
+
+            pygame.draw.rect(surf, outline, pygame.Rect(3, 0, 6, 14), 1)
+        else:
+            # Right-facing sit pose.
+            rect(4, 0, 4, 2, hair)
+            rect(6, 2, 3, 3, skin)
+            px(8, 3, eye)
+            rect(4, 5, 5, 4, coat)
+            rect(4, 9, 5, 1, coat_dark)
+            rect(4, 6, 1, 3, coat_dark)
+            rect(8, 6, 1, 3, coat_dark)
+
+            rect(5, 10, 4, 1, pants)
+            rect(6, 11, 3, 1, pants_dark)
+            rect(7, 12, 2, 1, pants)
+            rect(8, 13, 2, 1, boots)
+            pygame.draw.rect(surf, outline, pygame.Rect(3, 0, 7, 14), 1)
+
+        return surf
+
+    @classmethod
+    def _make_avatar_pose_sleep_sprite(cls, frame: int, *, avatar: SurvivalAvatar) -> pygame.Surface:
+        avatar = avatar or SurvivalAvatar()
+        avatar.clamp_all()
+        w, h = 16, 12
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        cols = cls._avatar_colors(avatar)
+        hair = cols["hair"]
+        skin = cols["skin"]
+        coat = cols["coat"]
+        coat_dark = cols["coat_dark"]
+        pants = cols["pants"]
+        boots = cols["boots"]
+        eye = cols["eye"]
+        outline = (10, 10, 12)
+
+        def rect(x: int, y: int, rw: int, rh: int, c: tuple[int, int, int]) -> None:
+            if rw <= 0 or rh <= 0:
+                return
+            surf.fill(c, pygame.Rect(int(x), int(y), int(rw), int(rh)))
+
+        # Head on the left.
+        rect(1, 1, 4, 2, hair)
+        rect(1, 3, 4, 2, skin)
+        surf.set_at((3, 4), eye)
+
+        # Body.
+        rect(5, 2, 6, 4, coat)
+        rect(5, 6, 6, 1, coat_dark)
+        rect(11, 3, 3, 3, pants)
+        rect(14, 4, 1, 2, boots)
+
+        # Tiny "breath" highlight.
+        if int(frame) % 2 == 0:
+            surf.set_at((7, 3), (min(255, coat[0] + 20), min(255, coat[1] + 20), min(255, coat[2] + 20)))
+        else:
+            surf.set_at((7, 4), (min(255, coat[0] + 20), min(255, coat[1] + 20), min(255, coat[2] + 20)))
+
+        pygame.draw.rect(surf, outline, pygame.Rect(0, 1, 15, 7), 1)
+        return surf
+
+    @classmethod
     def _make_avatar_cyclist_sprite(cls, direction: str, frame: int, *, avatar: SurvivalAvatar) -> pygame.Surface:
         avatar.clamp_all()
         w, h = 12, 16
@@ -3452,13 +3579,31 @@ class HardcoreSurvivalState(State):
         blood = pal["blood"]
         outline = (10, 10, 12)
 
+        def shade(col: tuple[int, int, int], k: float) -> tuple[int, int, int]:
+            return (
+                int(clamp(float(col[0]) * float(k), 0.0, 255.0)),
+                int(clamp(float(col[1]) * float(k), 0.0, 255.0)),
+                int(clamp(float(col[2]) * float(k), 0.0, 255.0)),
+            )
+
+        pants_far = shade(pants, 0.72)
+        boots_far = shade(boots, 0.72)
+
         step = int(step) % 2
         if idle:
             step = 0
 
         stride = 1 if step == 0 else -1
 
-        def draw_leg(hip_x: int, knee_x: int, boot_x: int, boot_y: int, *, col: tuple[int, int, int]) -> None:
+        def draw_leg(
+            hip_x: int,
+            knee_x: int,
+            boot_x: int,
+            boot_y: int,
+            *,
+            col: tuple[int, int, int],
+            boot_col: tuple[int, int, int] | None = None,
+        ) -> None:
             hip_x = int(clamp(int(hip_x), 0, w - 1))
             knee_x = int(clamp(int(knee_x), 0, w - 1))
             boot_x = int(clamp(int(boot_x), 0, w - 1))
@@ -3473,11 +3618,11 @@ class HardcoreSurvivalState(State):
                 surf.fill(col, pygame.Rect(x, knee_y, 1, 1))
             for y in range(knee_y, boot_y):
                 surf.fill(col, pygame.Rect(knee_x, y, 1, 1))
-            surf.fill(boots, pygame.Rect(boot_x, boot_y, 1, 1))
+            surf.fill((boots if boot_col is None else boot_col), pygame.Rect(boot_x, boot_y, 1, 1))
 
         if direction in ("down", "up"):
-            left_hip = 5
-            right_hip = 6
+            left_hip = 4
+            right_hip = 7
             left_boot_x = left_hip
             right_boot_x = right_hip
             if kind in ("walker", "screamer"):
@@ -3505,8 +3650,15 @@ class HardcoreSurvivalState(State):
                 right_boot_x = right_knee_x
 
             # Legs behind torso.
-            draw_leg(right_hip, right_knee_x, right_boot_x, right_boot_y, col=pants)
-            draw_leg(left_hip, left_knee_x, left_boot_x, left_boot_y, col=pants)
+            draw_leg(
+                right_hip,
+                right_knee_x,
+                right_boot_x,
+                right_boot_y,
+                col=pants_far,
+                boot_col=boots_far,
+            )
+            draw_leg(left_hip, left_knee_x, left_boot_x, left_boot_y, col=pants, boot_col=boots)
 
             # Torso + arms.
             torso_y = 6 if kind in ("walker", "screamer") else 5
@@ -3553,24 +3705,24 @@ class HardcoreSurvivalState(State):
 
         # right / left (build right, flip elsewhere)
         # Legs.
-        far_hip = 5
-        near_hip = 6
+        far_hip = 4
+        near_hip = 7
         if kind in ("walker", "screamer"):
             lift = (1 if kind == "walker" else 2) if not idle else 0
             bend = (1 if kind == "walker" else 2) if not idle else 0
             far_knee_x = far_hip + (bend if step == 1 else 0)
-            near_knee_x = near_hip + (bend if step == 0 else 0)
+            near_knee_x = near_hip - (bend if step == 0 else 0)
             near_boot_y = 15 - (lift if step == 0 else 0)
             far_boot_y = 15 - (lift if step == 1 else 0)
-            draw_leg(far_hip, far_knee_x, far_knee_x, far_boot_y, col=pants)
-            draw_leg(near_hip, near_knee_x, near_knee_x, near_boot_y, col=pants)
+            draw_leg(far_hip, far_knee_x, far_knee_x, far_boot_y, col=pants_far, boot_col=boots_far)
+            draw_leg(near_hip, near_knee_x, near_knee_x, near_boot_y, col=pants, boot_col=boots)
         else:
             near_dx = 1 if stride > 0 else -1
             far_dx = -near_dx
             near_boot_y = 15 - (1 if stride > 0 else 0)
             far_boot_y = 15 - (1 if stride < 0 else 0)
-            draw_leg(far_hip, far_hip + far_dx, far_hip + far_dx, far_boot_y, col=pants)
-            draw_leg(near_hip, near_hip + near_dx, near_hip + near_dx, near_boot_y, col=pants)
+            draw_leg(far_hip, far_hip + far_dx, far_hip + far_dx, far_boot_y, col=pants_far, boot_col=boots_far)
+            draw_leg(near_hip, near_hip + near_dx, near_hip + near_dx, near_boot_y, col=pants, boot_col=boots)
 
         # Body.
         body_y = 4 if kind == "runner" else 6 if kind in ("walker", "screamer") else 5
@@ -4069,7 +4221,7 @@ class HardcoreSurvivalState(State):
 
         return surf
 
-    def _make_shadow(sprite: pygame.Surface, *, alpha: int = 80) -> pygame.Surface:
+    def _make_shadow(sprite: pygame.Surface, *, alpha: int = 110) -> pygame.Surface:
         w, h = sprite.get_size()
         shadow = pygame.Surface((w, h), pygame.SRCALPHA)
         alpha = int(clamp(int(alpha), 0, 255))
@@ -4088,7 +4240,7 @@ class HardcoreSurvivalState(State):
             for _frm in (0, 1):
                 _base = _make_car_base(_mid, _frm, _steer)
                 _CAR_BASE[(_mid, _steer, _frm)] = _base
-                _CAR_SHADOW[(_mid, _steer, _frm)] = _make_shadow(_base, alpha=80)
+                _CAR_SHADOW[(_mid, _steer, _frm)] = _make_shadow(_base, alpha=110)
 
     def _make_bike_sprite(direction: str, frame: int) -> pygame.Surface:        
         w, h = 18, 18
@@ -4518,8 +4670,8 @@ class HardcoreSurvivalState(State):
         "W..BBBBBB....SS.......W",
         "W..BBBBBB....SS...CCC.W",
         "W...........TTTT..CCC.W",
-        "W..KKKKK....TTTT......D",
-        "W..KKKKK........SS....W",
+        "W..KKKKKF...TTTT......D",
+        "W..KKKKKF.......SS....W",
         "W......CCCC.....SS....W",
         "W....SS.........TTTT..W",
         "W.....................W",
@@ -5467,7 +5619,12 @@ class HardcoreSurvivalState(State):
         stagger_vel: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
 
         def rect(self) -> pygame.Rect:
-            return pygame.Rect(int(round(self.pos.x - self.w / 2)), int(round(self.pos.y - self.h / 2)), int(self.w), int(self.h))
+            return pygame.Rect(
+                iround(float(self.pos.x) - float(self.w) / 2.0),
+                iround(float(self.pos.y) - float(self.h) / 2.0),
+                int(self.w),
+                int(self.h),
+            )
 
     @dataclass
     class _RV:
@@ -5482,7 +5639,12 @@ class HardcoreSurvivalState(State):
         h: int = 16
 
         def rect(self) -> pygame.Rect:
-            return pygame.Rect(int(round(self.pos.x - self.w / 2)), int(round(self.pos.y - self.h / 2)), int(self.w), int(self.h))
+            return pygame.Rect(
+                iround(float(self.pos.x) - float(self.w) / 2.0),
+                iround(float(self.pos.y) - float(self.h) / 2.0),
+                int(self.w),
+                int(self.h),
+            )
 
     @dataclass
     class _Bike:
@@ -5494,7 +5656,12 @@ class HardcoreSurvivalState(State):
         h: int = 10
 
         def rect(self) -> pygame.Rect:
-            return pygame.Rect(int(round(self.pos.x - self.w / 2)), int(round(self.pos.y - self.h / 2)), int(self.w), int(self.h))
+            return pygame.Rect(
+                iround(float(self.pos.x) - float(self.w) / 2.0),
+                iround(float(self.pos.y) - float(self.h) / 2.0),
+                int(self.w),
+                int(self.h),
+            )
 
     def _hash_u32(self, n: int) -> int:
         n &= 0xFFFFFFFF
@@ -5574,6 +5741,11 @@ class HardcoreSurvivalState(State):
             self.state = state
             self.seed = int(seed) & 0xFFFFFFFF
             self.chunks: dict[tuple[int, int], HardcoreSurvivalState._Chunk] = {}
+            # Chunk streaming: we avoid generating new chunks during render (draw)
+            # to prevent big hitches when the camera crosses chunk corners.
+            self._gen_queue: list[tuple[int, int]] = []
+            self._gen_queue_i = 0
+            self._gen_queue_set: set[tuple[int, int]] = set()
             self.road_off_x = state._hash2_u32(7, 11, self.seed) % state.ROAD_PERIOD
             self.road_off_y = state._hash2_u32(13, 17, self.seed) % state.ROAD_PERIOD
 
@@ -5606,13 +5778,14 @@ class HardcoreSurvivalState(State):
             self.highway_y = (int(self.city_cy) + int(self.city_radius) + 2) * int(state.CHUNK_SIZE) + int(hw_off_y)
             self.highway_x = (int(self.city_cx) - int(self.city_radius) - 2) * int(state.CHUNK_SIZE) + int(hw_off_x)
 
-            # Chinese residential compound (小区) near spawn: walled and packed
-            # with tall (20+ floors) high-rises.
-            self.compound_w_chunks = 7
-            self.compound_h_chunks = 7
+            # Chinese residential compound (小区) near spawn: one enclosed community
+            # with ~7-8 tall towers and a low-rise podium ("裙楼") around them.
+            self.compound_w_chunks = 5
+            self.compound_h_chunks = 5
             self.compound_cx0 = int(self.city_cx) - int(self.compound_w_chunks // 2)
-            # Place spawn closer to the south side so the gate/wall are nearby.
-            self.compound_cy0 = int(self.city_cy) - int(self.compound_h_chunks - 2)
+            # Place the compound just north of spawn so you can approach the gate.
+            self.compound_cy1 = int(self.city_cy) - 1
+            self.compound_cy0 = int(self.compound_cy1) - int(self.compound_h_chunks - 1)
             self.compound_cx1 = int(self.compound_cx0) + int(self.compound_w_chunks) - 1
             self.compound_cy1 = int(self.compound_cy0) + int(self.compound_h_chunks) - 1
             self.compound_tx0 = int(self.compound_cx0) * int(state.CHUNK_SIZE)
@@ -5643,7 +5816,7 @@ class HardcoreSurvivalState(State):
             }
             self.compound_towers_by_chunk: dict[
                 tuple[int, int], list[tuple[int, int, int, int, int, int]]
-            ] = self._plan_compound_towers(target=67)
+            ] = self._plan_compound_towers(target=8)
 
         def spawn_tile(self) -> tuple[int, int]:
             tx = self.state.ROAD_HALF - int(self.road_off_x)
@@ -5714,70 +5887,43 @@ class HardcoreSurvivalState(State):
             if cx1 < cx0 or cy1 < cy0:
                 return {}
 
-            # Two tower sites per chunk; leave room for the road stripe and door approach.
+            # One tower per inner chunk (7-8 total); keep the perimeter for the podium/skirt building.
             tower_w = 12
             tower_h = 22
-            sites = ((2, 2), (18, 2))
-
-            stx, sty = self.spawn_tile()
-            spawn_tx = int(stx)
-            spawn_ty = int(sty)
-
-            no_tower_chunks = set(getattr(self, "compound_gate_chunks", set()))
-
-            candidates: list[tuple[int, int, int, int, int]] = []  # (cx, cy, x0, y0, d2)
-            for cy in range(int(cy0), int(cy1) + 1):
-                for cx in range(int(cx0), int(cx1) + 1):
-                    if (int(cx), int(cy)) in no_tower_chunks:
-                        continue
-                    base_tx = int(cx) * int(self.state.CHUNK_SIZE)
-                    base_ty = int(cy) * int(self.state.CHUNK_SIZE)
-                    for x0, y0 in sites:
-                        tx0 = int(base_tx + int(x0))
-                        ty0 = int(base_ty + int(y0))
-                        # Never block the spawn tile.
-                        if int(tx0) <= int(spawn_tx) < int(tx0 + tower_w) and int(ty0) <= int(
-                            spawn_ty
-                        ) < int(ty0 + tower_h):
-                            continue
-                        cxm = float(tx0) + float(tower_w) * 0.5
-                        cym = float(ty0) + float(tower_h) * 0.5
-                        d2 = (cxm - float(spawn_tx)) ** 2 + (cym - float(spawn_ty)) ** 2
-                        candidates.append((int(cx), int(cy), int(x0), int(y0), int(d2)))
-
-            if not candidates:
+            inner_cx0 = int(cx0) + 1
+            inner_cx1 = int(cx1) - 1
+            inner_cy0 = int(cy0) + 1
+            inner_cy1 = int(cy1) - 1
+            if inner_cx1 < inner_cx0 or inner_cy1 < inner_cy0:
                 return {}
 
-            candidates.sort(key=lambda t: int(t[4]))
-            keep_near = min(10, int(target))
-            selected: list[tuple[int, int, int, int]] = []
-            selected_set: set[tuple[int, int, int, int]] = set()
-            for cx, cy, x0, y0, _d2 in candidates:
-                key = (int(cx), int(cy), int(x0), int(y0))
-                selected.append(key)
-                selected_set.add(key)
-                if len(selected) >= int(keep_near):
-                    break
+            inner_chunks: list[tuple[int, int]] = []
+            for cy in range(int(inner_cy0), int(inner_cy1) + 1):
+                for cx in range(int(inner_cx0), int(inner_cx1) + 1):
+                    inner_chunks.append((int(cx), int(cy)))
+            if not inner_chunks:
+                return {}
 
-            rest = [c for c in candidates if (int(c[0]), int(c[1]), int(c[2]), int(c[3])) not in selected_set]
+            # Keep the very center chunk empty as a courtyard/green space when possible.
+            center = ((int(inner_cx0) + int(inner_cx1)) // 2, (int(inner_cy0) + int(inner_cy1)) // 2)
+            inner_chunks_usable = [c for c in inner_chunks if c != center]
+            if not inner_chunks_usable:
+                inner_chunks_usable = inner_chunks
+
             rng = random.Random(self.state._hash2_u32(211, 223, self.seed ^ 0x51C17011))
-            rng.shuffle(rest)
-            for cx, cy, x0, y0, _d2 in rest:
-                if len(selected) >= int(target):
-                    break
-                key = (int(cx), int(cy), int(x0), int(y0))
-                if key in selected_set:
-                    continue
-                selected.append(key)
-                selected_set.add(key)
+            rng.shuffle(inner_chunks_usable)
+            picked = inner_chunks_usable[: int(clamp(int(target), 1, len(inner_chunks_usable)))]
 
             plan: dict[tuple[int, int], list[tuple[int, int, int, int, int, int]]] = {}
-            for cx, cy, x0, y0 in selected:
+            for cx, cy in picked:
+                # Alternate left/right so we don't overwrite the internal road stripe at x=14..17.
+                x0 = 2 if ((int(cx) + int(cy)) % 2 == 0) else 18
+                y0 = 2
                 base_tx = int(cx) * int(self.state.CHUNK_SIZE)
                 base_ty = int(cy) * int(self.state.CHUNK_SIZE)
-                tx0 = int(base_tx + int(x0))
-                ty0 = int(base_ty + int(y0))
-                rr = random.Random(self.state._hash2_u32(int(tx0), int(ty0), self.seed ^ 0xA17F1A2B))
+                tx0w = int(base_tx + int(x0))
+                ty0w = int(base_ty + int(y0))
+                rr = random.Random(self.state._hash2_u32(int(tx0w), int(ty0w), self.seed ^ 0xA17F1A2B))
                 roof_var = int(rr.randrange(0, 256))
                 floors = int(rr.randint(20, 30))
                 plan.setdefault((int(cx), int(cy)), []).append(
@@ -5811,6 +5957,43 @@ class HardcoreSurvivalState(State):
             ly = ty - cy * self.state.CHUNK_SIZE
             chunk = self.get_chunk(cx, cy)
             return chunk.tiles[ly * self.state.CHUNK_SIZE + lx]
+
+        def peek_chunk(self, cx: int, cy: int) -> "HardcoreSurvivalState._Chunk | None":
+            return self.chunks.get((int(cx), int(cy)))
+
+        def peek_tile(self, tx: int, ty: int, *, default: int | None = None) -> int:
+            cx = tx // self.state.CHUNK_SIZE
+            cy = ty // self.state.CHUNK_SIZE
+            lx = tx - cx * self.state.CHUNK_SIZE
+            ly = ty - cy * self.state.CHUNK_SIZE
+            chunk = self.peek_chunk(cx, cy)
+            if chunk is None:
+                return int(self.state.T_GRASS if default is None else default)
+            return int(chunk.tiles[int(ly) * int(self.state.CHUNK_SIZE) + int(lx)])
+
+        def request_chunk(self, cx: int, cy: int) -> None:
+            key = (int(cx), int(cy))
+            if key in self.chunks or key in self._gen_queue_set:
+                return
+            self._gen_queue.append(key)
+            self._gen_queue_set.add(key)
+
+        def pump_generation(self, *, max_chunks: int = 1) -> int:
+            made = 0
+            max_chunks = max(0, int(max_chunks))
+            while made < max_chunks and self._gen_queue_i < len(self._gen_queue):
+                key = self._gen_queue[self._gen_queue_i]
+                self._gen_queue_i += 1
+                self._gen_queue_set.discard(key)
+                if key not in self.chunks:
+                    self.chunks[key] = self._gen_chunk(int(key[0]), int(key[1]))
+                made += 1
+
+            # Compact occasionally to avoid unbounded growth.
+            if self._gen_queue_i > 256 and self._gen_queue_i > (len(self._gen_queue) // 2):
+                self._gen_queue = self._gen_queue[self._gen_queue_i :]
+                self._gen_queue_i = 0
+            return int(made)
 
         def get_chunk(self, cx: int, cy: int) -> "HardcoreSurvivalState._Chunk":
             key = (int(cx), int(cy))
@@ -6037,7 +6220,7 @@ class HardcoreSurvivalState(State):
             roof_var = int(roof_var) & 0xFF
             floors = int(floors)
 
-            # Fill the whole footprint with walls (sealed on the world-map) then carve a small lobby.
+            # Fill the whole footprint with walls (sealed on the world-map).
             for y in range(int(y0), int(y0 + h)):
                 for x in range(int(x0), int(x0 + w)):
                     if 0 <= x < int(self.state.CHUNK_SIZE) and 0 <= y < int(self.state.CHUNK_SIZE):
@@ -6051,32 +6234,7 @@ class HardcoreSurvivalState(State):
                 if 0 <= dx < int(self.state.CHUNK_SIZE) and 0 <= dy < int(self.state.CHUNK_SIZE):
                     tiles[idx(int(dx), int(dy))] = int(self.state.T_DOOR)
 
-            # Lobby floor just inside the door so you can step in.
-            door_cx = int(round(sum(int(p[0]) for p in door_tiles_local) / max(1, len(door_tiles_local))))
-            lobby_w = int(clamp(8 if int(w) >= 14 else 6, 4, int(w) - 4))
-            lobby_h = int(clamp(6 if int(h) >= 14 else 5, 4, int(h) - 4))
-            lobby_x0 = int(
-                clamp(
-                    int(door_cx - lobby_w // 2),
-                    int(x0 + 2),
-                    int(x0 + w - 2 - lobby_w),
-                )
-            )
-            lobby_y1 = int(y0 + h - 2)  # just inside the south wall
-            lobby_y0 = int(clamp(int(lobby_y1 - lobby_h + 1), int(y0 + 2), int(y0 + h - 2)))
-            for yy in range(int(lobby_y0), int(lobby_y1) + 1):
-                for xx in range(int(lobby_x0), int(lobby_x0 + lobby_w)):
-                    if 0 <= xx < int(self.state.CHUNK_SIZE) and 0 <= yy < int(self.state.CHUNK_SIZE):
-                        tiles[idx(int(xx), int(yy))] = int(self.state.T_FLOOR)
-
-            # Ensure the tiles immediately behind the door are floor.
-            for ddx, ddy in door_tiles_local:
-                ix = int(ddx)
-                iy = int(ddy) - 1
-                if int(x0 + 1) <= ix <= int(x0 + w - 2) and int(y0 + 1) <= iy <= int(y0 + h - 2):
-                    if 0 <= ix < int(self.state.CHUNK_SIZE) and 0 <= iy < int(self.state.CHUNK_SIZE):
-                        tiles[idx(int(ix), int(iy))] = int(self.state.T_FLOOR)
-
+            # Keep towers sealed on the world map: enter via the door portal only.
             # Register as a high-rise portal.
             tx0w = int(cx) * int(self.state.CHUNK_SIZE) + int(x0)
             ty0w = int(cy) * int(self.state.CHUNK_SIZE) + int(y0)
@@ -6099,6 +6257,46 @@ class HardcoreSurvivalState(State):
             roof_kind = (6 << 8) | int(roof_var)
             buildings.append((int(tx0w), int(ty0w), int(w), int(h), int(roof_kind), int(floors)))
 
+        def _stamp_compound_podium_block(
+            self,
+            tiles: list[int],
+            buildings: list[tuple[int, int, int, int, int, int]],
+            cx: int,
+            cy: int,
+            *,
+            x0: int,
+            y0: int,
+            w: int,
+            h: int,
+            roof_style: int = 2,
+            roof_var: int | None = None,
+        ) -> None:
+            # Simple low-rise skirt building chunk: solid mass with a roof (visual ring).
+            def idx(x: int, y: int) -> int:
+                return y * self.state.CHUNK_SIZE + x
+
+            x0 = int(x0)
+            y0 = int(y0)
+            w = int(w)
+            h = int(h)
+            if w <= 0 or h <= 0:
+                return
+
+            for y in range(int(y0), int(y0 + h)):
+                if not (0 <= int(y) < int(self.state.CHUNK_SIZE)):
+                    continue
+                for x in range(int(x0), int(x0 + w)):
+                    if not (0 <= int(x) < int(self.state.CHUNK_SIZE)):
+                        continue
+                    tiles[idx(int(x), int(y))] = int(self.state.T_WALL)
+
+            tx0w = int(cx) * int(self.state.CHUNK_SIZE) + int(x0)
+            ty0w = int(cy) * int(self.state.CHUNK_SIZE) + int(y0)
+            if roof_var is None:
+                roof_var = int(self.state._hash2_u32(int(tx0w), int(ty0w), self.seed ^ 0x7A11C1D3) & 0xFF)
+            roof_kind = (int(roof_style) << 8) | (int(roof_var) & 0xFF)
+            buildings.append((int(tx0w), int(ty0w), int(w), int(h), int(roof_kind), 0))
+
         def _stamp_compound_chunk(
             self,
             tiles: list[int],
@@ -6111,7 +6309,7 @@ class HardcoreSurvivalState(State):
             cy: int,
             rng: random.Random,
         ) -> None:
-            # Walled "小区": 67 tall towers (20+ floors), Chinese gated-community vibe.
+            # Walled "小区": ~7-8 tall towers (20+ floors) with a low-rise podium ring.
             cx = int(cx)
             cy = int(cy)
 
@@ -6132,6 +6330,14 @@ class HardcoreSurvivalState(State):
             rhy0 = int(getattr(self, "compound_road_h_y0", 24))
             rhy1 = int(getattr(self, "compound_road_h_y1", 26))
 
+            ccx0 = int(getattr(self, "compound_cx0", cx))
+            ccy0 = int(getattr(self, "compound_cy0", cy))
+            ccx1 = int(getattr(self, "compound_cx1", cx))
+            ccy1 = int(getattr(self, "compound_cy1", cy))
+            gate_cx = int(ccx0) + int(int(getattr(self, "compound_w_chunks", 0)) // 2)
+            near_gate = bool(int(cy) == int(ccy1) and abs(int(cx) - int(gate_cx)) <= 1)
+            is_gate_chunk = bool(int(cy) == int(ccy1) and int(cx) == int(gate_cx))
+
             parking_chunks = set(getattr(self, "compound_parking_chunks", set()))
             is_parking_chunk = (int(cx), int(cy)) in parking_chunks
 
@@ -6151,18 +6357,49 @@ class HardcoreSurvivalState(State):
                         if int(rvx0) <= int(x) <= int(rvx1) or int(rhy0) <= int(y) <= int(rhy1):
                             tile = int(self.state.T_ROAD)
 
-                    # Outer compound wall.
+                    # Outer compound wall (leave a driveable opening at the gate).
                     if int(wx) == int(tx0) or int(wx) == int(tx1) or int(wy) == int(ty0) or int(wy) == int(ty1):
                         if int(wy) == int(ty1) and int(gate_x0) <= int(wx) <= int(gate_x1):
-                            tile = int(self.state.T_ROAD)  # gate opening
+                            tile = int(self.state.T_ROAD)  # gate opening (walk/drive through)
                         else:
                             tile = int(self.state.T_WALL)
 
                     tiles[idx(int(x), int(y))] = int(tile)
 
+            # Podium ("裙楼") ring along the compound perimeter (keep the gate approach open).
+            on_edge = bool(int(cx) == int(ccx0) or int(cx) == int(ccx1) or int(cy) == int(ccy0) or int(cy) == int(ccy1))
+            if on_edge and (not is_parking_chunk):
+                pod_t = 10
+                if int(cy) == int(ccy0):
+                    self._stamp_compound_podium_block(tiles, buildings, cx, cy, x0=2, y0=2, w=28, h=pod_t, roof_style=2)
+                if int(cy) == int(ccy1) and (not near_gate):
+                    # Keep a few tiles open near the south wall so the player can reach the gate.
+                    self._stamp_compound_podium_block(tiles, buildings, cx, cy, x0=2, y0=18, w=28, h=pod_t, roof_style=2)
+                if int(cx) == int(ccx0):
+                    self._stamp_compound_podium_block(tiles, buildings, cx, cy, x0=2, y0=2, w=pod_t, h=28, roof_style=2)
+                if int(cx) == int(ccx1):
+                    self._stamp_compound_podium_block(tiles, buildings, cx, cy, x0=20, y0=2, w=pod_t, h=28, roof_style=2)
+
+            # Gatehouse blocks (1F) framing the opening.
+            if is_gate_chunk:
+                # Two small wings near the south wall, leave the center corridor clear.
+                self._stamp_compound_podium_block(tiles, buildings, cx, cy, x0=2, y0=22, w=10, h=8, roof_style=2, roof_var=64)
+                self._stamp_compound_podium_block(tiles, buildings, cx, cy, x0=20, y0=22, w=10, h=8, roof_style=2, roof_var=96)
+                # A sign prop near the gate so it reads as an entrance.
+                gx = int(clamp(int((gate_x0 + gate_x1) // 2), int(base_tx), int(base_tx + self.state.CHUNK_SIZE - 1)))
+                gy = int(ty1 - 1)
+                props.append(
+                    HardcoreSurvivalState._WorldProp(
+                        pos=pygame.Vector2((float(gx) + 0.5) * float(self.state.TILE_SIZE), (float(gy) + 0.5) * float(self.state.TILE_SIZE)),
+                        prop_id="sign_chinese",
+                        variant=int(rng.randint(0, 3)),
+                        dir="down",
+                    )
+                )
+
             # Parking lots near the gate (visual interest).
             if is_parking_chunk:
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
                 self._spawn_two_wheelers(
                     tiles,
                     bikes,
@@ -6171,6 +6408,7 @@ class HardcoreSurvivalState(State):
                     rng=rng,
                     count=int(rng.randint(1, 3)),
                     models=["bike_lady", "bike_mountain", "bike_auto", "moto"],
+                    buildings=buildings,
                 )
 
             # Stamp planned towers for this chunk.
@@ -6237,7 +6475,9 @@ class HardcoreSurvivalState(State):
             # Starter "Chinese community": a small cluster of high-rises near spawn.
             in_community = (int(spawn_cx) <= int(cx) <= int(spawn_cx) + 1) and (int(spawn_cy) <= int(cy) <= int(spawn_cy) + 1)
             school_chunk = (int(cx) == int(spawn_cx) + 1) and (int(cy) == int(spawn_cy))
-            if is_spawn_chunk:
+            # Dedicated compound exists now; disable the old starter-community cluster here.
+            use_starter_community = False
+            if use_starter_community and is_spawn_chunk:
                 # Spawn block: guarantee a home high-rise; the school is in an adjacent
                 # community chunk to keep this block more residential.
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
@@ -6247,7 +6487,7 @@ class HardcoreSurvivalState(State):
                         self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
                 if rng.random() < 0.35:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅大", reserved=reserved)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True, buildings=buildings)
                 self._spawn_two_wheelers(
                     tiles,
                     bikes,
@@ -6256,13 +6496,14 @@ class HardcoreSurvivalState(State):
                     rng=rng,
                     count=rng.randint(6, 12),
                     models=["bike_lady", "bike_mountain", "bike_auto", "moto", "moto_lux", "moto_long"],
+                    buildings=buildings,
                 )
                 buildings_n = max(3, buildings_n - 2)
-            elif in_community:
+            elif use_starter_community and in_community:
                 # Community chunks: mostly residential towers; one chunk hosts the school.
                 if school_chunk:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "学校", reserved=reserved)
-                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True, buildings=buildings)
                 else:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
                     if rng.random() < 0.55:
@@ -6270,13 +6511,13 @@ class HardcoreSurvivalState(State):
                     if core and rng.random() < 0.22:
                         self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅大", reserved=reserved)
                     if rng.random() < 0.55:
-                        self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                        self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
                 buildings_n = max(3, buildings_n - 1)
             elif core:
                 big_roll = float(rng.random())
                 if big_roll < 0.07:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "大型超市", reserved=reserved)
-                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
                     buildings_n = max(3, buildings_n - 1)
                 elif big_roll < 0.12:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅大", reserved=reserved)
@@ -6288,7 +6529,7 @@ class HardcoreSurvivalState(State):
                     buildings_n = max(3, buildings_n - 1)
                 elif big_roll < 0.24 and commercial_district:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "新华书店", reserved=reserved)
-                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
                     buildings_n = max(3, buildings_n - 1)
 
             if chinese_district and (not is_spawn_chunk) and rng.random() < (0.55 + 0.25 * density):
@@ -6300,22 +6541,22 @@ class HardcoreSurvivalState(State):
 
             if roll < 0.16:
                 self._stamp_basketball_court(tiles, rng=rng)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
             elif roll < 0.32:
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "学校", reserved=reserved)
                 self._stamp_basketball_court(tiles, rng=rng)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True)
-                self._spawn_two_wheelers(tiles, bikes, cx, cy, rng=rng, count=rng.randint(5, 12), models=["bike_lady", "bike_mountain", "bike_auto", "moto", "moto_lux", "moto_long"])
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True, buildings=buildings)
+                self._spawn_two_wheelers(tiles, bikes, cx, cy, rng=rng, count=rng.randint(5, 12), models=["bike_lady", "bike_mountain", "bike_auto", "moto", "moto_lux", "moto_long"], buildings=buildings)
                 buildings_n = max(3, buildings_n - 1)
             elif roll < 0.46:
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "医院", reserved=reserved)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
             elif roll < 0.60:
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "超市", reserved=reserved)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
             elif roll < 0.68 and commercial_district:
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "新华书店", reserved=reserved)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
             elif roll < 0.74:
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
 
@@ -6344,9 +6585,9 @@ class HardcoreSurvivalState(State):
             if not is_spawn_chunk:
                 lot_chance = float(clamp(0.24 + 0.40 * density, 0.18, 0.72))
                 if rng.random() < lot_chance:
-                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
                 if core and rng.random() < 0.28:
-                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
 
             self._stamp_city_decor(tiles, props, cx, cy, rng=rng)
 
@@ -6378,6 +6619,7 @@ class HardcoreSurvivalState(State):
             *,
             rng: random.Random,
             school: bool = False,
+            buildings: list[tuple[int, int, int, int, int, int]] | None = None,
         ) -> None:
             # Parking lot: stamp tiles + spawn parked vehicles (visual props).
             allowed_base = {
@@ -6449,7 +6691,16 @@ class HardcoreSurvivalState(State):
 
             if school:
                 # A few bikes near the parking lot.
-                self._spawn_two_wheelers(tiles, bikes, cx, cy, rng=rng, count=rng.randint(2, 5), models=["bike_lady", "bike_mountain", "bike_auto"])
+                self._spawn_two_wheelers(
+                    tiles,
+                    bikes,
+                    cx,
+                    cy,
+                    rng=rng,
+                    count=rng.randint(2, 5),
+                    models=["bike_lady", "bike_mountain", "bike_auto"],
+                    buildings=buildings,
+                )
 
         def _spawn_two_wheelers(
             self,
@@ -6461,6 +6712,7 @@ class HardcoreSurvivalState(State):
             rng: random.Random,
             count: int,
             models: list[str],
+            buildings: list[tuple[int, int, int, int, int, int]] | None = None,
         ) -> None:
             if count <= 0 or not models:
                 return
@@ -6502,22 +6754,79 @@ class HardcoreSurvivalState(State):
             if not candidates:
                 return
             rng.shuffle(candidates)
-            n = int(clamp(int(count), 0, len(candidates)))
+            want = int(clamp(int(count), 0, len(candidates)))
             dirs = ["up", "down", "left", "right"]
-            for i in range(n):
-                sx, sy = candidates[i]
+            tile_size = int(self.state.TILE_SIZE)
+            chunk_size = int(self.state.CHUNK_SIZE)
+            t_floor = int(self.state.T_FLOOR)
+            t_door = int(self.state.T_DOOR)
+
+            def tile_blocks_vehicle(t: int) -> bool:
+                t = int(t)
+                if t in (t_floor, t_door):
+                    return True
+                tdef = self.state._TILES.get(int(t))
+                if tdef is None:
+                    return False
+                return bool(getattr(tdef, "solid", False))
+
+            def rect_clear(r: pygame.Rect) -> bool:
+                left = int(math.floor(r.left / tile_size))
+                right = int(math.floor((r.right - 1) / tile_size))
+                top = int(math.floor(r.top / tile_size))
+                bottom = int(math.floor((r.bottom - 1) / tile_size))
+                for ty in range(int(top), int(bottom) + 1):
+                    ly = int(ty - base_ty)
+                    if not (0 <= ly < chunk_size):
+                        return False
+                    for tx in range(int(left), int(right) + 1):
+                        lx = int(tx - base_tx)
+                        if not (0 <= lx < chunk_size):
+                            return False
+                        if tile_blocks_vehicle(int(tiles[idx(int(lx), int(ly))])):
+                            return False
+                return True
+
+            def inside_any_building(tx: int, ty: int) -> bool:
+                if not buildings:
+                    return False
+                for bx0, by0, bw, bh, _roof_kind, _floors in buildings:
+                    if int(bx0) <= int(tx) < int(bx0) + int(bw) and int(by0) <= int(ty) < int(by0) + int(bh):
+                        return True
+                return False
+
+            placed = 0
+            for sx, sy in candidates:
+                if placed >= want:
+                    break
                 tx = base_tx + int(sx)
                 ty = base_ty + int(sy)
-                px = (float(tx) + 0.5) * float(self.state.TILE_SIZE)
-                py = (float(ty) + 0.5) * float(self.state.TILE_SIZE)
+                if inside_any_building(int(tx), int(ty)):
+                    continue
+
                 mid = str(rng.choice(models))
+                w_px, h_px = self.state._two_wheel_collider_px(mid)
+                px = (float(tx) + 0.5) * float(tile_size)
+                py = (float(ty) + 0.5) * float(tile_size)
+                rect = pygame.Rect(
+                    int(iround(float(px) - float(w_px) / 2.0)),
+                    int(iround(float(py) - float(h_px) / 2.0)),
+                    int(w_px),
+                    int(h_px),
+                )
+                if not rect_clear(rect):
+                    continue
+
                 d = str(rng.choice(dirs))
                 fuel = 0.0
                 if str(mid).startswith("moto"):
                     fuel = float(rng.uniform(25.0, 95.0))
                 elif str(mid) == "bike_auto":
                     fuel = float(rng.uniform(40.0, 100.0))
-                bikes.append(HardcoreSurvivalState._ParkedBike(pos=pygame.Vector2(px, py), model_id=mid, dir=d, fuel=float(fuel)))
+                bikes.append(
+                    HardcoreSurvivalState._ParkedBike(pos=pygame.Vector2(px, py), model_id=mid, dir=d, fuel=float(fuel))
+                )
+                placed += 1
 
         def _stamp_outdoor_decor(
             self,
@@ -7394,7 +7703,7 @@ class HardcoreSurvivalState(State):
 
                     # Leave a small lobby behind the entrance so you can walk
                     # inside instead of hitting a wall at the door.
-                    if door_side == "S" and door_tiles:
+                    if False and door_side == "S" and door_tiles:
                         door_xs = [int(p[0]) for p in door_tiles]
                         door_cx = int(round(sum(door_xs) / max(1, len(door_xs))))
                         lobby_w = int(clamp(8 if int(w) >= 14 else 6, 4, int(w) - 4))
@@ -7787,7 +8096,12 @@ class HardcoreSurvivalState(State):
 
         def rect_at(self, pos: pygame.Vector2 | None = None) -> pygame.Rect:
             p = self.pos if pos is None else pos
-            return pygame.Rect(int(round(p.x - self.w / 2)), int(round(p.y - self.h / 2)), int(self.w), int(self.h))
+            return pygame.Rect(
+                iround(float(p.x) - float(self.w) / 2.0),
+                iround(float(p.y) - float(self.h) / 2.0),
+                int(self.w),
+                int(self.h),
+            )
 
     def on_enter(self) -> None:
         self.seed = int(time.time()) & 0xFFFFFFFF
@@ -7824,6 +8138,28 @@ class HardcoreSurvivalState(State):
         self.rv_ui_storage_index = 0
         self.rv_ui_status = ""
         self.rv_ui_status_left = 0.0
+        # Apartment home storage (openable cabinets).
+        self.home_storage = HardcoreSurvivalState._Inventory(slots=[None] * 30, cols=6)
+        self.fridge_storage = HardcoreSurvivalState._Inventory(slots=[None] * 12, cols=4)
+        self.home_ui_open = False
+        self.home_ui_focus: str = "storage"  # player | storage
+        self.home_ui_storage_kind: str = "cabinet"  # cabinet | fridge
+        self.home_ui_player_index = 0
+        self.home_ui_storage_index = 0
+        self.home_ui_status = ""
+        self.home_ui_status_left = 0.0
+        self.home_ui_open_block: tuple[int, int, int, int] | None = None
+        # Some starter supplies at home.
+        self.home_storage.add("food_can", 4, self._ITEMS)
+        self.home_storage.add("bandage", 6, self._ITEMS)
+        self.fridge_storage.add("water", 2, self._ITEMS)
+        self.fridge_storage.add("cola", 2, self._ITEMS)
+        # Simple pose / action state (sit / sleep) used in interiors.
+        self.player_pose: str | None = None  # sit | sleep
+        self.player_pose_space: str = ""  # hr | rv
+        self.player_pose_left = 0.0
+        self.player_pose_anchor: tuple[float, float] | None = None
+        self.player_pose_phase = 0.0
         self.hint_text = ""
         self.hint_left = 0.0
         self.gun: HardcoreSurvivalState._Gun | None = None
@@ -7873,6 +8209,8 @@ class HardcoreSurvivalState(State):
         self.hr_layout: list[str] = list(self._HR_INT_LOBBY_LAYOUT)
         self.hr_building: HardcoreSurvivalState._SpecialBuilding | None = None
         self.hr_world_return = pygame.Vector2(self.player.pos)
+        self.hr_auto_walk_to_elevator = False
+        self.hr_auto_walk_delay = 0.0
 
         self.home_highrise_door: tuple[int, int] | None = None
         self.home_highrise_floor = 0
@@ -7908,8 +8246,10 @@ class HardcoreSurvivalState(State):
         spawn_cx = int(spawn_tx) // self.CHUNK_SIZE
         spawn_cy = int(spawn_ty) // self.CHUNK_SIZE
         best_home: tuple[int, int, int, int] | None = None  # (d2, tx, ty, floors)
-        for cy2 in range(int(spawn_cy) - 1, int(spawn_cy) + 2):
-            for cx2 in range(int(spawn_cx) - 1, int(spawn_cx) + 2):
+        # Search a few chunks around spawn so it also finds the nearby compound towers.
+        search_r = 4
+        for cy2 in range(int(spawn_cy) - int(search_r), int(spawn_cy) + int(search_r) + 1):
+            for cx2 in range(int(spawn_cx) - int(search_r), int(spawn_cx) + int(search_r) + 1):
                 chunk2 = self.world.get_chunk(int(cx2), int(cy2))
                 for sb in getattr(chunk2, "special_buildings", []):
                     if getattr(sb, "kind", "") != "highrise":
@@ -8040,13 +8380,25 @@ class HardcoreSurvivalState(State):
                     self._toggle_world_map(open=True)
                     return
 
+        if getattr(self, "home_ui_open", False):
+            if event.type == pygame.KEYDOWN:
+                self._handle_home_ui_key(int(event.key))
+                return
+            if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION, pygame.MOUSEWHEEL):
+                self._handle_home_ui_mouse(event)
+                return
+
         if getattr(self, "sch_elevator_ui_open", False):
             if event.type == pygame.KEYDOWN:
-                self._handle_sch_elevator_ui_key(int(event.key))
+                self._handle_sch_elevator_ui_key(int(event.key))        
                 return
             if event.type == pygame.MOUSEWHEEL:
                 self._handle_sch_elevator_ui_wheel(event)
                 return
+            if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+                self._handle_sch_elevator_ui_mouse(event)
+                return
+            return
 
         if getattr(self, "hr_elevator_ui_open", False):
             if event.type == pygame.KEYDOWN:
@@ -8054,6 +8406,18 @@ class HardcoreSurvivalState(State):
                 return
             if event.type == pygame.MOUSEWHEEL:
                 self._handle_hr_elevator_ui_wheel(event)
+                return
+            if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+                self._handle_hr_elevator_ui_mouse(event)
+                return
+            return
+
+        if getattr(self, "rv_interior", False) and bool(getattr(self, "rv_edit_mode", False)):
+            if self._rv_edit_handle_mouse(event):
+                return
+
+        if getattr(self, "hr_interior", False) and bool(getattr(self, "hr_edit_mode", False)):
+            if self._hr_edit_handle_mouse(event):
                 return
 
         if event.type == pygame.KEYDOWN:
@@ -8085,12 +8449,33 @@ class HardcoreSurvivalState(State):
                     return
             if getattr(self, "hr_interior", False):
                 if event.key in (pygame.K_ESCAPE,):
-                    if str(getattr(self, "hr_mode", "lobby")) == "home":
+                    if str(getattr(self, "hr_mode", "lobby")) == "home":        
                         self._hr_leave_home()
                     else:
                         self._hr_interior_exit()
                     return
-                if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):
+                if event.key in (pygame.K_r,) and str(getattr(self, "hr_mode", "lobby")) == "home":
+                    self._hr_toggle_edit_mode()
+                    return
+                if getattr(self, "hr_edit_mode", False):
+                    if event.key in (pygame.K_TAB,):
+                        self._hr_edit_cycle(1)
+                        return
+                    if event.key in (pygame.K_LEFT, pygame.K_a):
+                        self._hr_edit_move(-1, 0)
+                        return
+                    if event.key in (pygame.K_RIGHT, pygame.K_d):
+                        self._hr_edit_move(1, 0)
+                        return
+                    if event.key in (pygame.K_UP, pygame.K_w):
+                        self._hr_edit_move(0, -1)
+                        return
+                    if event.key in (pygame.K_DOWN, pygame.K_s):
+                        self._hr_edit_move(0, 1)
+                        return
+                    if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):
+                        return
+                if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):  
                     self._hr_interior_interact()
                     return
                 if event.key in (pygame.K_f, pygame.K_v, pygame.K_h):
@@ -8170,7 +8555,7 @@ class HardcoreSurvivalState(State):
             if self.inv_open and event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 self._equip_selected()
                 return
-            if event.key in (pygame.K_g,):
+            if event.key in (pygame.K_F3,):
                 self._debug = not self._debug
                 return
 
@@ -8307,6 +8692,63 @@ class HardcoreSurvivalState(State):
         self.rv_ui_status = str(text)
         self.rv_ui_status_left = float(max(0.0, seconds))
 
+    def _set_home_ui_status(self, text: str, *, seconds: float = 1.6) -> None:
+        self.home_ui_status = str(text)
+        self.home_ui_status_left = float(max(0.0, seconds))
+
+    def _clear_player_pose(self) -> None:
+        self.player_pose = None
+        self.player_pose_space = ""
+        self.player_pose_left = 0.0
+        self.player_pose_anchor = None
+        self.player_pose_phase = 0.0
+
+    def _set_player_pose(
+        self,
+        pose: str,
+        *,
+        space: str,
+        anchor: tuple[float, float],
+        seconds: float = 0.0,
+    ) -> None:
+        self.player_pose = str(pose)
+        self.player_pose_space = str(space)
+        self.player_pose_anchor = (float(anchor[0]), float(anchor[1]))
+        self.player_pose_left = float(max(0.0, seconds))
+        self.player_pose_phase = 0.0
+
+    def _get_pose_sprite(self, pose: str, *, direction: str = "down", frame: int = 0) -> pygame.Surface:
+        av = getattr(self, "avatar", None) or SurvivalAvatar()
+        av.clamp_all()
+        direction = str(direction)
+        if direction not in ("down", "up", "right", "left"):
+            direction = "down"
+        key = (
+            str(pose),
+            str(direction),
+            int(frame) % 2,
+            int(av.gender),
+            int(av.height),
+            int(av.face),
+            int(av.eyes),
+            int(av.hair),
+            int(av.nose),
+            int(av.outfit),
+        )
+        cache = getattr(self, "_pose_sprite_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._pose_sprite_cache = cache
+        spr = cache.get(key)
+        if isinstance(spr, pygame.Surface):
+            return spr
+        if str(pose) == "sleep":
+            spr = HardcoreSurvivalState._make_avatar_pose_sleep_sprite(int(frame), avatar=av)
+        else:
+            spr = HardcoreSurvivalState._make_avatar_pose_sit_sprite(str(direction), avatar=av)
+        cache[key] = spr
+        return spr
+
     def _can_access_rv(self) -> bool:
         if self.mount == "rv":
             return True
@@ -8347,6 +8789,7 @@ class HardcoreSurvivalState(State):
         if not isinstance(getattr(self, "rv_int_layout", None), list):
             self.rv_int_layout = [list(row) for row in self._RV_INT_LAYOUT]
         self.rv_edit_mode = False
+        self.rv_edit_dragging = False
         self.rv_edit_blocks: list[tuple[str, list[tuple[int, int]]]] = []
         self.rv_edit_index = 0
 
@@ -8398,8 +8841,11 @@ class HardcoreSurvivalState(State):
     def _rv_interior_exit(self) -> None:
         if not getattr(self, "rv_interior", False):
             return
+        self._clear_player_pose()
         self.rv_interior = False
         self.rv_ui_open = False
+        self.rv_edit_mode = False
+        self.rv_edit_dragging = False
 
         base = pygame.Vector2(self.rv.pos)
         fwd = pygame.Vector2(math.cos(float(self.rv.heading)), math.sin(float(self.rv.heading)))
@@ -8420,8 +8866,8 @@ class HardcoreSurvivalState(State):
         for off in candidates:
             pos = base + off
             rect = pygame.Rect(
-                int(round(pos.x - self.player.w / 2)),
-                int(round(pos.y - self.player.h / 2)),
+                iround(float(pos.x) - float(self.player.w) / 2.0),
+                iround(float(pos.y) - float(self.player.h) / 2.0),
                 int(self.player.w),
                 int(self.player.h),
             )
@@ -8588,6 +9034,74 @@ class HardcoreSurvivalState(State):
         sel = (sel - step) % n if dy > 0 else (sel + step) % n
         self.sch_elevator_sel = int(sel)
         self.sch_elevator_input = ""
+
+    def _handle_sch_elevator_ui_mouse(self, event: pygame.event.Event) -> None:
+        if not getattr(self, "sch_elevator_ui_open", False):
+            return
+
+        et = int(getattr(event, "type", 0))
+        button = int(getattr(event, "button", 0))
+        if et == int(pygame.MOUSEBUTTONDOWN) and button == 3:
+            self.sch_elevator_ui_open = False
+            self.sch_elevator_input = ""
+            return
+
+        if et not in (int(pygame.MOUSEMOTION), int(pygame.MOUSEBUTTONDOWN)):
+            return
+        if et == int(pygame.MOUSEBUTTONDOWN) and button != 1:
+            return
+
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return
+        mx, my = int(internal[0]), int(internal[1])
+
+        options: list[int] = list(getattr(self, "sch_elevator_options", []))
+        if not options:
+            options = [1]
+            self.sch_elevator_options = options
+        cols = max(1, int(getattr(self, "sch_elevator_cols", 4)))
+        rows_per_page = 4
+        n = len(options)
+        page_size = max(1, cols * rows_per_page)
+        sel_i = int(getattr(self, "sch_elevator_sel", 0)) % max(1, n)
+        page = int(sel_i // page_size)
+        start = int(page * page_size)
+        end = int(min(int(n), int(start + page_size)))
+        page_opts = list(options[start:end])
+        rows = int(max(1, int(math.ceil(float(len(page_opts)) / float(cols)))))
+
+        btn_w = 56
+        btn_h = 28
+        gap = 8
+        grid_w = cols * btn_w + (cols - 1) * gap
+        grid_h = rows * btn_h + (rows - 1) * gap
+        panel = pygame.Rect(0, 0, grid_w + 40, grid_h + 98)
+        panel.center = (INTERNAL_W // 2, INTERNAL_H // 2)
+
+        x0 = panel.centerx - grid_w // 2
+        y0 = panel.top + 66
+        hit_i: int | None = None
+        hit_floor: int | None = None
+        for local_i, f in enumerate(page_opts):
+            r = int(local_i) // cols
+            c = int(local_i) % cols
+            x = x0 + c * (btn_w + gap)
+            y = y0 + r * (btn_h + gap)
+            br = pygame.Rect(x, y, btn_w, btn_h)
+            if br.collidepoint(mx, my):
+                hit_i = int(start) + int(local_i)
+                hit_floor = int(f)
+                break
+
+        if hit_i is None or hit_floor is None:
+            return
+
+        self.sch_elevator_sel = int(hit_i)
+        self.sch_elevator_input = ""
+        if et == int(pygame.MOUSEBUTTONDOWN) and button == 1:
+            self.sch_elevator_ui_open = False
+            self._sch_set_floor(int(hit_floor), spawn_at="elevator")
 
     def _handle_sch_elevator_ui_key(self, key: int) -> None:
         if not getattr(self, "sch_elevator_ui_open", False):
@@ -8812,6 +9326,224 @@ class HardcoreSurvivalState(State):
         ty = int(math.floor(float(self.hr_int_pos.y) / tile))
         return tx, ty
 
+    def _hr_edit_rebuild_blocks(self) -> None:
+        if not getattr(self, "hr_interior", False):
+            self.hr_edit_blocks = []
+            return
+        if str(getattr(self, "hr_mode", "lobby")) != "home":
+            self.hr_edit_blocks = []
+            return
+        layout = getattr(self, "hr_layout", None)
+        if not isinstance(layout, list):
+            self.hr_edit_blocks = []
+            return
+
+        movable = {"B", "S", "F", "K", "T", "C"}
+        w = int(self._HR_INT_W)
+        h = int(self._HR_INT_H)
+        seen: set[tuple[int, int]] = set()
+        blocks: list[tuple[str, list[tuple[int, int]]]] = []
+
+        for y in range(h):
+            for x in range(w):
+                ch = str(self._hr_int_char_at(x, y))[:1]
+                if ch not in movable:
+                    continue
+                if (x, y) in seen:
+                    continue
+                cells: list[tuple[int, int]] = []
+                stack = [(int(x), int(y))]
+                while stack:
+                    cx, cy = stack.pop()
+                    cx = int(cx)
+                    cy = int(cy)
+                    if (cx, cy) in seen:
+                        continue
+                    if not (0 <= cx < w and 0 <= cy < h):
+                        continue
+                    if str(self._hr_int_char_at(cx, cy))[:1] != ch:
+                        continue
+                    seen.add((cx, cy))
+                    cells.append((cx, cy))
+                    stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+                if cells:
+                    blocks.append((ch, cells))
+
+        def sort_key(b: tuple[str, list[tuple[int, int]]]) -> tuple:
+            ch, cells = b
+            miny = min(int(p[1]) for p in cells)
+            minx = min(int(p[0]) for p in cells)
+            return (ch, miny, minx, len(cells))
+
+        blocks.sort(key=sort_key)
+        self.hr_edit_blocks = blocks
+        self.hr_edit_index = int(clamp(int(getattr(self, "hr_edit_index", 0)), 0, max(0, len(blocks) - 1)))
+
+    def _hr_toggle_edit_mode(self) -> None:
+        if not getattr(self, "hr_interior", False):
+            return
+        if str(getattr(self, "hr_mode", "lobby")) != "home":
+            return
+        self.hr_edit_mode = not bool(getattr(self, "hr_edit_mode", False))
+        self.hr_edit_dragging = False
+        if self.hr_edit_mode:
+            self._hr_edit_rebuild_blocks()
+            if not getattr(self, "hr_edit_blocks", None):
+                self.hr_edit_mode = False
+                self._set_hint("没有可挪动的家具", seconds=1.0)
+                return
+            self.hr_edit_index = int(
+                clamp(int(getattr(self, "hr_edit_index", 0)), 0, len(self.hr_edit_blocks) - 1)
+            )
+            self._set_hint("摆放模式：Tab 选中 / 方向键移动 / 左键拖拽 / R 退出", seconds=1.8)
+        else:
+            self._set_hint("退出摆放模式", seconds=1.0)
+
+    def _hr_edit_cycle(self, delta: int = 1) -> None:
+        blocks = getattr(self, "hr_edit_blocks", None)
+        if not isinstance(blocks, list) or not blocks:
+            return
+        self.hr_edit_index = (int(getattr(self, "hr_edit_index", 0)) + int(delta)) % len(blocks)
+
+    def _hr_edit_move(self, dx: int, dy: int) -> None:
+        if not bool(getattr(self, "hr_edit_mode", False)):
+            return
+        if str(getattr(self, "hr_mode", "lobby")) != "home":
+            return
+        blocks = getattr(self, "hr_edit_blocks", None)
+        if not isinstance(blocks, list) or not blocks:
+            return
+        idx = int(getattr(self, "hr_edit_index", 0)) % len(blocks)
+        ch, cells = blocks[idx]
+        w = int(self._HR_INT_W)
+        h = int(self._HR_INT_H)
+        dx = int(dx)
+        dy = int(dy)
+        if dx == 0 and dy == 0:
+            return
+
+        cell_set = set((int(x), int(y)) for x, y in cells)
+        new_cells = [(int(x) + dx, int(y) + dy) for x, y in cell_set]
+
+        for nx, ny in new_cells:
+            if not (0 <= int(nx) < w and 0 <= int(ny) < h):
+                return
+            if (int(nx), int(ny)) in cell_set:
+                continue
+            dst = str(self._hr_int_char_at(nx, ny))[:1]
+            if dst != ".":
+                return
+
+        rows = [list(str(r)) for r in getattr(self, "hr_layout", [])]
+        if len(rows) < h:
+            rows.extend([list("." * w) for _ in range(h - len(rows))])
+        for oy in range(min(len(rows), h)):
+            if len(rows[oy]) < w:
+                rows[oy].extend(list("." * (w - len(rows[oy]))))
+
+        for ox, oy in cell_set:
+            if 0 <= int(oy) < h and 0 <= int(ox) < w:
+                rows[int(oy)][int(ox)] = "."
+        for nx, ny in new_cells:
+            rows[int(ny)][int(nx)] = str(ch)[:1]
+
+        self.hr_layout = ["".join(r[:w]) for r in rows[:h]]
+        self.hr_home_layout = list(self.hr_layout)
+        blocks[idx] = (str(ch)[:1], [(int(x), int(y)) for x, y in new_cells])
+
+    def _hr_edit_handle_mouse(self, event: pygame.event.Event) -> bool:
+        if not bool(getattr(self, "hr_edit_mode", False)):
+            return False
+        if not getattr(self, "hr_interior", False):
+            return False
+        if str(getattr(self, "hr_mode", "lobby")) != "home":
+            return False
+        if event.type not in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+            return False
+        if not hasattr(event, "pos"):
+            return False
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return False
+
+        tile = int(self._HR_INT_TILE_SIZE)
+        map_w = int(self._HR_INT_W) * tile
+        map_h = int(self._HR_INT_H) * tile
+        map_x = (INTERNAL_W - map_w) // 2
+        map_y = 38
+        map_rect = pygame.Rect(map_x, map_y, map_w, map_h)
+
+        movable = {"B", "S", "F", "K", "T", "C"}
+
+        if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, "button", 0) == 1:
+            if not map_rect.collidepoint(internal):
+                return False
+            ix = int((int(internal[0]) - int(map_x)) // max(1, int(tile)))
+            iy = int((int(internal[1]) - int(map_y)) // max(1, int(tile)))
+            ch = str(self._hr_int_char_at(ix, iy))[:1]
+            if ch not in movable:
+                return False
+            blocks = getattr(self, "hr_edit_blocks", None)
+            if not isinstance(blocks, list) or not blocks:
+                self._hr_edit_rebuild_blocks()
+                blocks = getattr(self, "hr_edit_blocks", None)
+            if not isinstance(blocks, list) or not blocks:
+                return False
+
+            hit_i: int | None = None
+            for i, (bch, cells) in enumerate(blocks):
+                if str(bch)[:1] != ch:
+                    continue
+                for cx, cy in cells:
+                    if int(cx) == int(ix) and int(cy) == int(iy):
+                        hit_i = int(i)
+                        break
+                if hit_i is not None:
+                    break
+            if hit_i is None:
+                return False
+
+            self.hr_edit_index = int(hit_i)
+            _bch, cells = blocks[hit_i]
+            min_x = min(int(p[0]) for p in cells)
+            min_y = min(int(p[1]) for p in cells)
+            self.hr_edit_dragging = True
+            self.hr_edit_drag_offset = (int(ix - min_x), int(iy - min_y))
+            return True
+
+        if event.type == pygame.MOUSEBUTTONUP and getattr(event, "button", 0) == 1:
+            if bool(getattr(self, "hr_edit_dragging", False)):
+                self.hr_edit_dragging = False
+                return True
+            return False
+
+        if event.type == pygame.MOUSEMOTION:
+            if not bool(getattr(self, "hr_edit_dragging", False)):
+                return False
+            if not map_rect.collidepoint(internal):
+                return True
+            ix = int((int(internal[0]) - int(map_x)) // max(1, int(tile)))
+            iy = int((int(internal[1]) - int(map_y)) // max(1, int(tile)))
+            off = getattr(self, "hr_edit_drag_offset", (0, 0))
+            offx, offy = int(off[0]), int(off[1])
+            target_min_x = int(ix - offx)
+            target_min_y = int(iy - offy)
+
+            blocks = getattr(self, "hr_edit_blocks", None)
+            if not isinstance(blocks, list) or not blocks:
+                return True
+            idx = int(getattr(self, "hr_edit_index", 0)) % len(blocks)
+            _ch, cells = blocks[idx]
+            cur_min_x = min(int(p[0]) for p in cells)
+            cur_min_y = min(int(p[1]) for p in cells)
+            dx = int(target_min_x - cur_min_x)
+            dy = int(target_min_y - cur_min_y)
+            if dx != 0 or dy != 0:
+                self._hr_edit_move(dx, dy)
+            return True
+
+        return False
+
     def _hr_make_hall_layout(self, floor: int) -> list[str]:
         base = [str(r) for r in self._HR_INT_HALL_BASE]
         home_floor = int(getattr(self, "hr_home_floor", -1))
@@ -8894,6 +9626,74 @@ class HardcoreSurvivalState(State):
         self.hr_elevator_sel = int(sel)
         self.hr_elevator_input = ""
 
+    def _handle_hr_elevator_ui_mouse(self, event: pygame.event.Event) -> None:
+        if not getattr(self, "hr_elevator_ui_open", False):
+            return
+
+        et = int(getattr(event, "type", 0))
+        button = int(getattr(event, "button", 0))
+        if et == int(pygame.MOUSEBUTTONDOWN) and button == 3:
+            self.hr_elevator_ui_open = False
+            self.hr_elevator_input = ""
+            return
+
+        if et not in (int(pygame.MOUSEMOTION), int(pygame.MOUSEBUTTONDOWN)):
+            return
+        if et == int(pygame.MOUSEBUTTONDOWN) and button != 1:
+            return
+
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return
+        mx, my = int(internal[0]), int(internal[1])
+
+        options: list[int] = list(getattr(self, "hr_elevator_options", []))
+        if not options:
+            options = [0]
+            self.hr_elevator_options = options
+        cols = max(1, int(getattr(self, "hr_elevator_cols", 4)))
+        rows_per_page = 4
+        n = len(options)
+        page_size = max(1, cols * rows_per_page)
+        sel_i = int(getattr(self, "hr_elevator_sel", 0)) % max(1, n)
+        page = int(sel_i // page_size)
+        start = int(page * page_size)
+        end = int(min(int(n), int(start + page_size)))
+        page_opts = list(options[start:end])
+        rows = int(max(1, int(math.ceil(float(len(page_opts)) / float(cols)))))
+
+        btn_w = 56
+        btn_h = 28
+        gap = 8
+        grid_w = cols * btn_w + (cols - 1) * gap
+        grid_h = rows * btn_h + (rows - 1) * gap
+        panel = pygame.Rect(0, 0, grid_w + 40, grid_h + 98)
+        panel.center = (INTERNAL_W // 2, INTERNAL_H // 2)
+
+        x0 = panel.centerx - grid_w // 2
+        y0 = panel.top + 66
+        hit_i: int | None = None
+        hit_floor: int | None = None
+        for local_i, f in enumerate(page_opts):
+            r = int(local_i) // cols
+            c = int(local_i) % cols
+            x = x0 + c * (btn_w + gap)
+            y = y0 + r * (btn_h + gap)
+            br = pygame.Rect(x, y, btn_w, btn_h)
+            if br.collidepoint(mx, my):
+                hit_i = int(start) + int(local_i)
+                hit_floor = int(f)
+                break
+
+        if hit_i is None or hit_floor is None:
+            return
+
+        self.hr_elevator_sel = int(hit_i)
+        self.hr_elevator_input = ""
+        if et == int(pygame.MOUSEBUTTONDOWN) and button == 1:
+            self.hr_elevator_ui_open = False
+            self._hr_set_floor(int(hit_floor))
+
     def _handle_hr_elevator_ui_key(self, key: int) -> None:
         if not getattr(self, "hr_elevator_ui_open", False):
             return
@@ -8966,7 +9766,13 @@ class HardcoreSurvivalState(State):
     def _hr_enter_home(self) -> None:
         self.hr_hall_pos_before_home = pygame.Vector2(self.hr_int_pos)
         self.hr_mode = "home"
-        self._hr_int_set_layout(self._HR_INT_HOME_LAYOUT)
+        self.hr_edit_mode = False
+        self.hr_edit_dragging = False
+        self.home_ui_open = False
+        self.home_ui_open_block = None
+        if not isinstance(getattr(self, "hr_home_layout", None), list):
+            self.hr_home_layout = [str(r) for r in self._HR_INT_HOME_LAYOUT]
+        self._hr_int_set_layout(getattr(self, "hr_home_layout", self._HR_INT_HOME_LAYOUT))
 
         door = self._hr_int_find("D")
         tile = int(self._HR_INT_TILE_SIZE)
@@ -8985,7 +9791,12 @@ class HardcoreSurvivalState(State):
 
     def _hr_leave_home(self) -> None:
         floor = int(getattr(self, "hr_floor", 1))
+        self._clear_player_pose()
         self.hr_mode = "hall"
+        self.hr_edit_mode = False
+        self.hr_edit_dragging = False
+        self.home_ui_open = False
+        self.home_ui_open_block = None
         self._hr_int_set_layout(self._hr_make_hall_layout(floor))
         saved = getattr(self, "hr_hall_pos_before_home", None)
         if isinstance(saved, pygame.Vector2):
@@ -9000,6 +9811,12 @@ class HardcoreSurvivalState(State):
         self._gallery_open = False
         self.hr_interior = True
         self.hr_elevator_ui_open = False
+        self.hr_edit_mode = False
+        self.hr_edit_dragging = False
+        self.home_ui_open = False
+        self.home_ui_open_block = None
+        self.hr_edit_blocks: list[tuple[str, list[tuple[int, int]]]] = []
+        self.hr_edit_index = 0
         self.mount = None
         self.player.vel.update(0, 0)
         self.player.walk_phase *= 0.85
@@ -9022,6 +9839,9 @@ class HardcoreSurvivalState(State):
 
         self.hr_world_return = pygame.Vector2(self.player.pos)
         self._hr_set_floor(0)
+        # Walk into the lobby, then auto-walk to the elevator and open the floor UI.
+        self.hr_auto_walk_to_elevator = True
+        self.hr_auto_walk_delay = 0.12
 
         door = self._hr_int_find("D")
         if door is not None:
@@ -9045,8 +9865,13 @@ class HardcoreSurvivalState(State):
     def _hr_interior_exit(self) -> None:
         if not getattr(self, "hr_interior", False):
             return
+        self._clear_player_pose()
         self.hr_interior = False
         self.hr_elevator_ui_open = False
+        self.hr_edit_mode = False
+        self.hr_edit_dragging = False
+        self.home_ui_open = False
+        self.home_ui_open_block = None
         self.hr_building = None
         self.hr_mode = "lobby"
         self._hr_int_set_layout(self._HR_INT_LOBBY_LAYOUT)
@@ -9056,12 +9881,16 @@ class HardcoreSurvivalState(State):
     def _hr_interior_interact(self) -> None:
         if not getattr(self, "hr_interior", False):
             return
+        mode = str(getattr(self, "hr_mode", "lobby"))
         tx, ty = self._hr_int_player_tile()
         candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
         chosen: tuple[int, int, str] | None = None
+        interact = {"D", "E", "H", "A", "B"}
+        if mode == "home":
+            interact.update({"S", "F", "C"})
         for cx, cy in candidates:
             ch = self._hr_int_char_at(cx, cy)
-            if ch in ("D", "E", "H", "A", "B"):
+            if ch in interact:
                 chosen = (cx, cy, ch)
                 break
         if chosen is None:
@@ -9072,18 +9901,141 @@ class HardcoreSurvivalState(State):
             self._hr_elevator_open()
             return
         if ch == "D":
-            if str(getattr(self, "hr_mode", "lobby")) == "home":
+            if mode == "home":
                 self._hr_leave_home()
                 return
             self._hr_interior_exit()
             return
+        if ch == "S" and mode == "home":
+            w = int(self._HR_INT_W)
+            h = int(self._HR_INT_H)
+            seen: set[tuple[int, int]] = set()
+            stack = [(int(_cx), int(_cy))]
+            cells: list[tuple[int, int]] = []
+            while stack:
+                cx, cy = stack.pop()
+                cx = int(cx)
+                cy = int(cy)
+                if (cx, cy) in seen:
+                    continue
+                if not (0 <= cx < w and 0 <= cy < h):
+                    continue
+                if str(self._hr_int_char_at(cx, cy))[:1] != "S":
+                    continue
+                seen.add((cx, cy))
+                cells.append((cx, cy))
+                stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+            if cells:
+                min_x = min(int(p[0]) for p in cells)
+                max_x = max(int(p[0]) for p in cells)
+                min_y = min(int(p[1]) for p in cells)
+                max_y = max(int(p[1]) for p in cells)
+                self._home_ui_open(open_block=(int(min_x), int(min_y), int(max_x), int(max_y)), storage_kind="cabinet")
+            else:
+                self._home_ui_open(open_block=(int(_cx), int(_cy), int(_cx), int(_cy)), storage_kind="cabinet")
+            return
+        if ch == "F" and mode == "home":
+            w = int(self._HR_INT_W)
+            h = int(self._HR_INT_H)
+            seen: set[tuple[int, int]] = set()
+            stack = [(int(_cx), int(_cy))]
+            cells: list[tuple[int, int]] = []
+            while stack:
+                cx, cy = stack.pop()
+                cx = int(cx)
+                cy = int(cy)
+                if (cx, cy) in seen:
+                    continue
+                if not (0 <= cx < w and 0 <= cy < h):
+                    continue
+                if str(self._hr_int_char_at(cx, cy))[:1] != "F":
+                    continue
+                seen.add((cx, cy))
+                cells.append((cx, cy))
+                stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+            if cells:
+                min_x = min(int(p[0]) for p in cells)
+                max_x = max(int(p[0]) for p in cells)
+                min_y = min(int(p[1]) for p in cells)
+                max_y = max(int(p[1]) for p in cells)
+                self._home_ui_open(open_block=(int(min_x), int(min_y), int(max_x), int(max_y)), storage_kind="fridge")
+            else:
+                self._home_ui_open(open_block=(int(_cx), int(_cy), int(_cx), int(_cy)), storage_kind="fridge")
+            return
+        if ch == "C" and mode == "home":
+            if str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "hr":
+                self._clear_player_pose()
+                self._set_hint("起身", seconds=0.8)
+                return
+            w = int(self._HR_INT_W)
+            h = int(self._HR_INT_H)
+            seen: set[tuple[int, int]] = set()
+            stack = [(int(_cx), int(_cy))]
+            cells: list[tuple[int, int]] = []
+            while stack:
+                cx, cy = stack.pop()
+                cx = int(cx)
+                cy = int(cy)
+                if (cx, cy) in seen:
+                    continue
+                if not (0 <= cx < w and 0 <= cy < h):
+                    continue
+                if str(self._hr_int_char_at(cx, cy))[:1] != "C":
+                    continue
+                seen.add((cx, cy))
+                cells.append((cx, cy))
+                stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+            tile = int(self._HR_INT_TILE_SIZE)
+            if cells:
+                min_x = min(int(p[0]) for p in cells)
+                max_x = max(int(p[0]) for p in cells)
+                min_y = min(int(p[1]) for p in cells)
+                max_y = max(int(p[1]) for p in cells)
+                ax = (float(min_x + max_x + 1) * float(tile)) * 0.5
+                ay = (float(min_y + max_y + 1) * float(tile)) * 0.5
+            else:
+                ax = (float(_cx) + 0.5) * float(tile)
+                ay = (float(_cy) + 0.5) * float(tile)
+            self._set_player_pose("sit", space="hr", anchor=(ax, ay), seconds=0.0)
+            self._set_hint("坐下休息：移动键起身", seconds=1.4)
+            return
         if ch == "B":
             self.player.stamina = 100.0
             self.player.morale = float(clamp(self.player.morale + 15.0, 0.0, 100.0))
-            self._set_hint("休息：体力恢复 / 心态提升", seconds=1.4)
+            w = int(self._HR_INT_W)
+            h = int(self._HR_INT_H)
+            seen: set[tuple[int, int]] = set()
+            stack = [(int(_cx), int(_cy))]
+            cells: list[tuple[int, int]] = []
+            while stack:
+                cx, cy = stack.pop()
+                cx = int(cx)
+                cy = int(cy)
+                if (cx, cy) in seen:
+                    continue
+                if not (0 <= cx < w and 0 <= cy < h):
+                    continue
+                if str(self._hr_int_char_at(cx, cy))[:1] != "B":
+                    continue
+                seen.add((cx, cy))
+                cells.append((cx, cy))
+                stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+            tile = int(self._HR_INT_TILE_SIZE)
+            if cells:
+                min_x = min(int(p[0]) for p in cells)
+                max_x = max(int(p[0]) for p in cells)
+                min_y = min(int(p[1]) for p in cells)
+                max_y = max(int(p[1]) for p in cells)
+                ax = (float(min_x + max_x + 1) * float(tile)) * 0.5
+                ay = (float(min_y + max_y + 1) * float(tile)) * 0.5
+            else:
+                ax = (float(_cx) + 0.5) * float(tile)
+                ay = (float(_cy) + 0.5) * float(tile)
+            self._set_player_pose("sleep", space="hr", anchor=(ax, ay), seconds=2.6)
+            self._set_hint("躺床休息：体力恢复 / 心态提升", seconds=1.4)
             return
         if ch == "H":
-            if str(getattr(self, "hr_mode", "lobby")) == "hall" and int(getattr(self, "hr_floor", 0)) == int(getattr(self, "hr_home_floor", -1)):
+            if mode == "hall" and int(getattr(self, "hr_floor", 0)) == int(getattr(self, "hr_home_floor", -1)):
                 self._hr_enter_home()
                 return
             self._set_hint("这不是你的家", seconds=1.2)
@@ -9158,6 +10110,7 @@ class HardcoreSurvivalState(State):
         if not getattr(self, "rv_interior", False):
             return
         self.rv_edit_mode = not bool(getattr(self, "rv_edit_mode", False))
+        self.rv_edit_dragging = False
         if self.rv_edit_mode:
             self._rv_edit_rebuild_blocks()
             if not getattr(self, "rv_edit_blocks", None):
@@ -9212,6 +10165,96 @@ class HardcoreSurvivalState(State):
 
         blocks[idx] = (ch, [(int(x), int(y)) for x, y in new_cells])
 
+    def _rv_edit_handle_mouse(self, event: pygame.event.Event) -> bool:
+        if not bool(getattr(self, "rv_edit_mode", False)):
+            return False
+        if not getattr(self, "rv_interior", False):
+            return False
+        if event.type not in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+            return False
+        if not hasattr(event, "pos"):
+            return False
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return False
+
+        tile = int(self._RV_INT_TILE_SIZE)
+        map_w = int(self._RV_INT_W) * tile
+        map_h = int(self._RV_INT_H) * tile
+        map_x = (INTERNAL_W - map_w) // 2
+        map_y = 92
+        map_rect = pygame.Rect(map_x, map_y, map_w, map_h)
+
+        movable = {"B", "S", "K", "H", "T", "C"}
+
+        if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, "button", 0) == 1:
+            if not map_rect.collidepoint(internal):
+                return False
+            ix = int((int(internal[0]) - int(map_x)) // max(1, int(tile)))
+            iy = int((int(internal[1]) - int(map_y)) // max(1, int(tile)))
+            ch = str(self._rv_int_char_at(ix, iy))[:1]
+            if ch not in movable:
+                return False
+            blocks = getattr(self, "rv_edit_blocks", None)
+            if not isinstance(blocks, list) or not blocks:
+                self._rv_edit_rebuild_blocks()
+                blocks = getattr(self, "rv_edit_blocks", None)
+            if not isinstance(blocks, list) or not blocks:
+                return False
+
+            hit_i: int | None = None
+            for i, (bch, cells) in enumerate(blocks):
+                if str(bch)[:1] != ch:
+                    continue
+                for cx, cy in cells:
+                    if int(cx) == int(ix) and int(cy) == int(iy):
+                        hit_i = int(i)
+                        break
+                if hit_i is not None:
+                    break
+            if hit_i is None:
+                return False
+
+            self.rv_edit_index = int(hit_i)
+            _bch, cells = blocks[hit_i]
+            min_x = min(int(p[0]) for p in cells)
+            min_y = min(int(p[1]) for p in cells)
+            self.rv_edit_dragging = True
+            self.rv_edit_drag_offset = (int(ix - min_x), int(iy - min_y))
+            return True
+
+        if event.type == pygame.MOUSEBUTTONUP and getattr(event, "button", 0) == 1:
+            if bool(getattr(self, "rv_edit_dragging", False)):
+                self.rv_edit_dragging = False
+                return True
+            return False
+
+        if event.type == pygame.MOUSEMOTION:
+            if not bool(getattr(self, "rv_edit_dragging", False)):
+                return False
+            if not map_rect.collidepoint(internal):
+                return True
+            ix = int((int(internal[0]) - int(map_x)) // max(1, int(tile)))
+            iy = int((int(internal[1]) - int(map_y)) // max(1, int(tile)))
+            off = getattr(self, "rv_edit_drag_offset", (0, 0))
+            offx, offy = int(off[0]), int(off[1])
+            target_min_x = int(ix - offx)
+            target_min_y = int(iy - offy)
+
+            blocks = getattr(self, "rv_edit_blocks", None)
+            if not isinstance(blocks, list) or not blocks:
+                return True
+            idx = int(getattr(self, "rv_edit_index", 0)) % len(blocks)
+            _ch, cells = blocks[idx]
+            cur_min_x = min(int(p[0]) for p in cells)
+            cur_min_y = min(int(p[1]) for p in cells)
+            dx = int(target_min_x - cur_min_x)
+            dy = int(target_min_y - cur_min_y)
+            if dx != 0 or dy != 0:
+                self._rv_edit_move(dx, dy)
+            return True
+
+        return False
 
     def _rv_int_move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
         tile = int(self._RV_INT_TILE_SIZE)
@@ -9290,6 +10333,36 @@ class HardcoreSurvivalState(State):
         if ch == "B":
             self.player.stamina = 100.0
             self.player.morale = 100.0
+            w = int(self._RV_INT_W)
+            h = int(self._RV_INT_H)
+            seen: set[tuple[int, int]] = set()
+            stack = [(int(_cx), int(_cy))]
+            cells: list[tuple[int, int]] = []
+            while stack:
+                cx, cy = stack.pop()
+                cx = int(cx)
+                cy = int(cy)
+                if (cx, cy) in seen:
+                    continue
+                if not (0 <= cx < w and 0 <= cy < h):
+                    continue
+                if str(self._rv_int_char_at(cx, cy))[:1] != "B":
+                    continue
+                seen.add((cx, cy))
+                cells.append((cx, cy))
+                stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+            tile = int(self._RV_INT_TILE_SIZE)
+            if cells:
+                min_x = min(int(p[0]) for p in cells)
+                max_x = max(int(p[0]) for p in cells)
+                min_y = min(int(p[1]) for p in cells)
+                max_y = max(int(p[1]) for p in cells)
+                ax = (float(min_x + max_x + 1) * float(tile)) * 0.5
+                ay = (float(min_y + max_y + 1) * float(tile)) * 0.5
+            else:
+                ax = (float(_cx) + 0.5) * float(tile)
+                ay = (float(_cy) + 0.5) * float(tile)
+            self._set_player_pose("sleep", space="rv", anchor=(ax, ay), seconds=2.4)
             self._set_hint("躺床休息：体力/心态恢复", seconds=1.4)
             return
         if ch == "S":
@@ -9303,7 +10376,44 @@ class HardcoreSurvivalState(State):
         if ch == "H":
             self._set_hint("工作台：后续加入制作/维修/枪械加工", seconds=1.6)
             return
-        if ch in ("T", "C"):
+        if ch == "C":
+            if str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "rv":
+                self._clear_player_pose()
+                self._set_hint("起身", seconds=0.8)
+                return
+            w = int(self._RV_INT_W)
+            h = int(self._RV_INT_H)
+            seen: set[tuple[int, int]] = set()
+            stack = [(int(_cx), int(_cy))]
+            cells: list[tuple[int, int]] = []
+            while stack:
+                cx, cy = stack.pop()
+                cx = int(cx)
+                cy = int(cy)
+                if (cx, cy) in seen:
+                    continue
+                if not (0 <= cx < w and 0 <= cy < h):
+                    continue
+                if str(self._rv_int_char_at(cx, cy))[:1] != "C":
+                    continue
+                seen.add((cx, cy))
+                cells.append((cx, cy))
+                stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+            tile = int(self._RV_INT_TILE_SIZE)
+            if cells:
+                min_x = min(int(p[0]) for p in cells)
+                max_x = max(int(p[0]) for p in cells)
+                min_y = min(int(p[1]) for p in cells)
+                max_y = max(int(p[1]) for p in cells)
+                ax = (float(min_x + max_x + 1) * float(tile)) * 0.5
+                ay = (float(min_y + max_y + 1) * float(tile)) * 0.5
+            else:
+                ax = (float(_cx) + 0.5) * float(tile)
+                ay = (float(_cy) + 0.5) * float(tile)
+            self._set_player_pose("sit", space="rv", anchor=(ax, ay), seconds=0.0)
+            self._set_hint("坐下休息：移动键起身", seconds=1.4)
+            return
+        if ch == "T":
             self._set_hint("工作台/驾驶舱：后续加入制作/维修/改装", seconds=1.5)
             return
         self._set_hint("这里没有可用互动", seconds=1.0)
@@ -9416,6 +10526,79 @@ class HardcoreSurvivalState(State):
             for y in range(2, h, 9):
                 for x in range((y * 7) % 11, w, 23):
                     surf.fill(speck1 if ((x + y) % 2 == 0) else speck2, pygame.Rect(x, y, 1, 1))
+
+        cache[key] = surf
+        return surf
+
+    def _marble_surface(
+        self,
+        w: int,
+        h: int,
+        *,
+        seed: int,
+        base: tuple[int, int, int] = (220, 222, 228),
+    ) -> pygame.Surface:
+        w = int(max(1, w))
+        h = int(max(1, h))
+        seed = int(seed) & 0xFFFFFFFF
+        base = (int(base[0]), int(base[1]), int(base[2]))
+        key = (w, h, seed, base)
+
+        cache = getattr(self, "_marble_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._marble_cache = cache
+        cached = cache.get(key)
+        if isinstance(cached, pygame.Surface):
+            return cached
+
+        surf = pygame.Surface((w, h))
+        surf.fill(base)
+
+        rnd = random.Random(int(seed) ^ (int(w) << 16) ^ int(h) ^ 0xBADC0FFE)
+
+        # Specks (reads like stone).
+        specks = int(clamp((w * h) // 45, 10, 160))
+        for _ in range(specks):
+            x = int(rnd.randrange(w))
+            y = int(rnd.randrange(h))
+            d = int(rnd.randrange(-16, 10))
+            col = (
+                int(clamp(int(base[0]) + d, 0, 255)),
+                int(clamp(int(base[1]) + d, 0, 255)),
+                int(clamp(int(base[2]) + d, 0, 255)),
+            )
+            surf.set_at((x, y), col)
+
+        vein_dark = (
+            int(clamp(int(base[0]) - 28, 0, 255)),
+            int(clamp(int(base[1]) - 28, 0, 255)),
+            int(clamp(int(base[2]) - 24, 0, 255)),
+        )
+        vein_light = (
+            int(clamp(int(base[0]) - 12, 0, 255)),
+            int(clamp(int(base[1]) - 12, 0, 255)),
+            int(clamp(int(base[2]) - 10, 0, 255)),
+        )
+
+        # A few drifting veins (deterministic, cached so no flicker).
+        vein_count = int(clamp((w + h) // 28, 2, 5))
+        for i in range(vein_count):
+            x0 = int(rnd.randrange(-w // 2, w))
+            y0 = int(rnd.randrange(0, h))
+            x1 = int(rnd.randrange(w, int(w * 2.0)))
+            y1 = int(clamp(int(y0 + rnd.randrange(-h // 2, h // 2)), 0, h - 1))
+
+            steps = int(max(3, w // 10))
+            px, py = x0, y0
+            for s in range(steps):
+                t = float(s + 1) / float(steps)
+                nx = int(round(float(x0) + (float(x1) - float(x0)) * t + rnd.randrange(-2, 3)))
+                ny = int(round(float(y0) + (float(y1) - float(y0)) * t + rnd.randrange(-2, 3)))
+                pygame.draw.line(surf, vein_light, (px, py), (nx, ny), 1)
+                if i % 2 == 0:
+                    pygame.draw.line(surf, vein_dark, (px + 1, py), (nx + 1, ny), 1)
+                px, py = nx, ny
 
         cache[key] = surf
         return surf
@@ -9713,20 +10896,60 @@ class HardcoreSurvivalState(State):
                     pygame.draw.rect(surface, outline, bl, 1, border_radius=5)
                     for sx in range(bl.x + 6, bl.right - 4, 10):
                         pygame.draw.line(surface, bed_blank2, (sx, bl.y + 2), (sx, bl.bottom - 3), 1)
+                    # Bed legs/frame (so it doesn't look like it floats).
+                    floor_y = int(br.bottom - 3)
+                    leg_y0 = int(bed_r.bottom - 2)
+                    leg_h = int(floor_y - leg_y0)
+                    if leg_h > 0:
+                        leg_col = self._tint(wood2, add=(-12, -12, -12))
+                        for lx in (int(bed_r.x + 6), int(bed_r.right - 8)):
+                            leg = pygame.Rect(int(lx), int(leg_y0), 2, int(leg_h))
+                            surface.fill(leg_col, leg)
+                            pygame.draw.rect(surface, outline, leg, 1)
+                            surface.fill(leg_col, pygame.Rect(int(lx - 1), int(floor_y), 4, 1))
                     continue
 
                 if ch == "S":
-                    cab = pygame.Rect(r.x + 3, r.y + 4, r.w - 6, r.h - 8)
+                    cab = pygame.Rect(r.x + 2, r.y + 6, r.w - 4, r.h - 10)
                     sh = pygame.Surface((cab.w, cab.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=4)
-                    surface.blit(sh, (cab.x + 1, cab.y + 2))
+                    pygame.draw.rect(sh, (0, 0, 0, 80), sh.get_rect(), border_radius=4)
+                    surface.blit(sh, (cab.x + 2, cab.y + 3))
+
                     pygame.draw.rect(surface, wood, cab, border_radius=3)
                     pygame.draw.rect(surface, outline, cab, 1, border_radius=3)
                     pygame.draw.rect(surface, wood2, pygame.Rect(cab.x + 1, cab.y + 1, cab.w - 2, 3))
-                    pygame.draw.line(surface, wood2, (cab.x + 2, cab.centery), (cab.right - 3, cab.centery), 2)
-                    pygame.draw.line(surface, outline, (cab.x + 2, cab.centery), (cab.right - 3, cab.centery), 1)
-                    surface.fill((70, 120, 180), pygame.Rect(cab.x + 3, cab.y + 6, 3, 4))
-                    surface.fill((190, 190, 200), pygame.Rect(cab.right - 7, cab.y + 6, 3, 4))
+                    pygame.draw.rect(surface, wood2, pygame.Rect(cab.x + 1, cab.bottom - 4, cab.w - 2, 3))
+
+                    is_open = bool(getattr(self, "rv_ui_open", False)) and str(getattr(self, "rv_ui_focus", "map")) == "storage"
+                    if is_open:
+                        inner = cab.inflate(-4, -6)
+                        pygame.draw.rect(surface, (20, 20, 24), inner, border_radius=2)
+                        pygame.draw.rect(surface, outline, inner, 1, border_radius=2)
+                        for sy in range(inner.y + 3, inner.bottom - 1, 5):
+                            pygame.draw.line(surface, (44, 44, 52), (inner.x + 2, sy), (inner.right - 3, sy), 1)
+
+                        door_w = max(4, int(cab.w // 4))
+                        ld = pygame.Rect(cab.x + 1, cab.y + 3, door_w, cab.h - 6)
+                        rd = pygame.Rect(cab.right - door_w - 1, cab.y + 3, door_w, cab.h - 6)
+                        pygame.draw.rect(surface, wood, ld, border_radius=2)
+                        pygame.draw.rect(surface, outline, ld, 1, border_radius=2)
+                        pygame.draw.rect(surface, wood, rd, border_radius=2)
+                        pygame.draw.rect(surface, outline, rd, 1, border_radius=2)
+                        # Tiny visible supplies.
+                        can = pygame.Rect(inner.x + 3, inner.y + 4, 3, 5)
+                        surface.fill((180, 60, 70), can)
+                        pygame.draw.rect(surface, outline, can, 1)
+                        jar = pygame.Rect(inner.right - 7, inner.y + 5, 4, 4)
+                        surface.fill((90, 140, 190), jar)
+                        pygame.draw.rect(surface, outline, jar, 1)
+                    else:
+                        midx = int(cab.centerx)
+                        pygame.draw.line(surface, wood2, (midx, cab.y + 4), (midx, cab.bottom - 5), 2)
+                        pygame.draw.line(surface, outline, (midx, cab.y + 4), (midx, cab.bottom - 5), 1)
+                        for hx in (midx - 4, midx + 3):
+                            hrect = pygame.Rect(int(hx), cab.y + 8, 2, 5)
+                            surface.fill((220, 220, 230), hrect)
+                            pygame.draw.rect(surface, outline, hrect, 1)
                     continue
 
                 if ch == "T":
@@ -9734,8 +10957,17 @@ class HardcoreSurvivalState(State):
                     pygame.draw.rect(surface, wood, top, border_radius=2)
                     pygame.draw.rect(surface, outline, top, 1, border_radius=2)
                     pygame.draw.rect(surface, wood2, pygame.Rect(top.x + 1, top.y + 1, top.w - 2, 3))
-                    pygame.draw.line(surface, wood2, (top.x + 2, top.bottom), (top.x + 2, r.bottom - 3), 2)
-                    pygame.draw.line(surface, wood2, (top.right - 3, top.bottom), (top.right - 3, r.bottom - 3), 2)
+                    # Table legs/frame (so it reads like real furniture).
+                    floor_y = int(r.bottom - 3)
+                    leg_y0 = int(top.bottom - 1)
+                    leg_h = int(floor_y - leg_y0)
+                    if leg_h > 0 and top.w >= 10:
+                        leg_col = self._tint(wood2, add=(-10, -10, -10))
+                        for lx in (int(top.x + 2), int(top.right - 4)):
+                            leg = pygame.Rect(int(lx), int(leg_y0), 2, int(leg_h))
+                            surface.fill(leg_col, leg)
+                            pygame.draw.rect(surface, outline, leg, 1)
+                            surface.fill(leg_col, pygame.Rect(int(lx - 1), int(floor_y), 4, 1))
                     if (x + y) % 3 == 0:
                         mug = pygame.Rect(top.centerx - 2, top.y + 4, 4, 4)
                         pygame.draw.rect(surface, (230, 230, 240), mug, border_radius=1)
@@ -9747,22 +10979,95 @@ class HardcoreSurvivalState(State):
                     continue
 
                 if ch == "K":
-                    counter = pygame.Rect(r.x + 2, r.y + 6, r.w - 4, r.h - 9)
-                    pygame.draw.rect(surface, frame2, pygame.Rect(counter.x, counter.y - 3, counter.w, 3))
-                    pygame.draw.rect(surface, wood2, counter, border_radius=2)
-                    pygame.draw.rect(surface, outline, counter, 1, border_radius=2)
-                    pygame.draw.rect(surface, wood, pygame.Rect(counter.x + 1, counter.y + 1, counter.w - 2, 4))
-                    if x % 2 == 0:
-                        sink = pygame.Rect(counter.x + 3, counter.y + 2, 8, 5)
-                        pygame.draw.rect(surface, steel, sink, border_radius=2)
-                        pygame.draw.rect(surface, outline, sink, 1, border_radius=2)
-                        pygame.draw.circle(surface, (60, 60, 70), (sink.right - 2, sink.y + 2), 1)
-                    else:
-                        burner = pygame.Rect(counter.x + 3, counter.y + 2, 8, 5)
-                        pygame.draw.rect(surface, (40, 40, 50), burner, border_radius=2)
-                        pygame.draw.rect(surface, outline, burner, 1, border_radius=2)
-                        pygame.draw.circle(surface, (80, 80, 90), (burner.x + 3, burner.y + 3), 1)
-                        pygame.draw.circle(surface, (80, 80, 90), (burner.x + 6, burner.y + 3), 1)
+                    if (x, y) in k_done:
+                        continue
+
+                    bw = 1
+                    while self._rv_int_char_at(int(x) + int(bw), int(y)) == "K":
+                        bw += 1
+                    bh = 1
+                    while True:
+                        ny = int(y) + int(bh)
+                        if self._rv_int_char_at(int(x), int(ny)) != "K":
+                            break
+                        ok = True
+                        for dx in range(int(bw)):
+                            if self._rv_int_char_at(int(x) + int(dx), int(ny)) != "K":
+                                ok = False
+                                break
+                        if not ok:
+                            break
+                        bh += 1
+                    for dy in range(int(bh)):
+                        for dx in range(int(bw)):
+                            k_done.add((int(x) + int(dx), int(y) + int(dy)))
+
+                    br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
+                    obj = br.inflate(-6, -10)
+                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=5)
+                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+
+                    # Long counter: top (lighter) + front face (darker) to read as a continuous kitchen.
+                    top_h = int(clamp(int(obj.h * 0.28), 7, 10))
+                    top_r = pygame.Rect(obj.x, obj.y, obj.w, top_h)
+                    front_r = pygame.Rect(obj.x, obj.y + top_h - 1, obj.w, obj.h - (top_h - 1))
+                    pygame.draw.rect(surface, wood2, front_r, border_radius=6)
+                    pygame.draw.rect(surface, outline, front_r, 1, border_radius=6)
+                    pygame.draw.rect(surface, wood, top_r, border_radius=6)
+                    pygame.draw.rect(surface, outline, top_r, 1, border_radius=6)
+                    pygame.draw.line(surface, frame2, (top_r.x + 2, top_r.top + 1), (top_r.right - 3, top_r.top + 1), 1)
+                    pygame.draw.line(surface, frame2, (top_r.x + 2, top_r.bottom - 2), (top_r.right - 3, top_r.bottom - 2), 1)
+
+                    # Cabinet doors + handles on the front face (depth cues).
+                    modules = int(max(2, int(bw)))
+                    for i in range(1, modules):
+                        xline = int(front_r.x + (front_r.w * i) / modules)
+                        pygame.draw.line(surface, frame2, (xline, front_r.y + 4), (xline, front_r.bottom - 5), 2)
+                        pygame.draw.line(surface, outline, (xline, front_r.y + 4), (xline, front_r.bottom - 5), 1)
+                    for i in range(modules):
+                        cx = int(front_r.x + (front_r.w * (i + 0.5)) / modules)
+                        hrect = pygame.Rect(cx - 1, front_r.y + 8, 2, 7)
+                        surface.fill((220, 220, 230), hrect)
+                        pygame.draw.rect(surface, outline, hrect, 1)
+
+                    # Sink + stove placed once across the whole block.
+                    sink_w = int(clamp(int(top_r.w * 0.18), 12, 18))
+                    sink_h = int(clamp(int(top_r.h - 3), 5, 7))
+                    sink = pygame.Rect(top_r.x + int(top_r.w * 0.16), top_r.y + 2, sink_w, sink_h)
+                    pygame.draw.rect(surface, steel, sink, border_radius=3)
+                    pygame.draw.rect(surface, outline, sink, 1, border_radius=3)
+                    pygame.draw.circle(surface, (60, 60, 70), (sink.right - 3, sink.y + 3), 1)
+                    pygame.draw.line(surface, steel2, (sink.x + 2, sink.y + 1), (sink.x + 2, sink.y - 3), 1)
+                    pygame.draw.line(surface, steel2, (sink.x + 2, sink.y - 3), (sink.x + 6, sink.y - 3), 1)
+
+                    stove_w = int(clamp(int(top_r.w * 0.20), 12, 18))
+                    stove_h = sink_h
+                    stove = pygame.Rect(top_r.right - int(top_r.w * 0.18) - stove_w, top_r.y + 2, stove_w, stove_h)
+                    pygame.draw.rect(surface, (40, 40, 50), stove, border_radius=3)
+                    pygame.draw.rect(surface, outline, stove, 1, border_radius=3)
+                    pygame.draw.circle(surface, (80, 80, 90), (stove.x + stove_w // 3, stove.centery), 2)
+                    pygame.draw.circle(surface, (80, 80, 90), (stove.right - stove_w // 3, stove.centery), 2)
+
+                    # Pots / bowls / plates on the countertop.
+                    plate = pygame.Rect(top_r.right - 14, top_r.y + 2, 12, 5)
+                    pygame.draw.ellipse(surface, (232, 232, 238), plate)
+                    pygame.draw.ellipse(surface, outline, plate, 1)
+                    bowl = pygame.Rect(top_r.x + 8, top_r.y + 2, 10, 5)
+                    pygame.draw.ellipse(surface, (200, 210, 220), bowl)
+                    pygame.draw.ellipse(surface, outline, bowl, 1)
+                    pot = pygame.Rect(top_r.centerx - 8, top_r.y + 1, 16, 6)
+                    pygame.draw.rect(surface, (40, 40, 50), pot, border_radius=3)
+                    pygame.draw.rect(surface, outline, pot, 1, border_radius=3)
+                    pygame.draw.line(surface, steel2, (pot.x + 2, pot.y + 2), (pot.right - 3, pot.y + 2), 1)
+                    pygame.draw.line(surface, outline, (pot.x + 3, pot.y + 1), (pot.right - 4, pot.y + 1), 1)
+
+                    # Small rack cue above the counter.
+                    rack_y = int(top_r.y - 6)
+                    if rack_y >= int(br.y) + 1:
+                        pygame.draw.line(surface, outline, (top_r.x + 2, rack_y), (top_r.right - 3, rack_y), 1)
+                        for ux in (top_r.x + 8, top_r.centerx, top_r.right - 10):
+                            pygame.draw.line(surface, steel2, (int(ux), rack_y + 1), (int(ux), rack_y + 4), 1)
                     continue
 
                 if ch == "H":
@@ -9775,13 +11080,34 @@ class HardcoreSurvivalState(State):
                     continue
 
                 if ch == "C":
-                    sr = pygame.Rect(r.x + 4, r.y + 4, r.w - 8, r.h - 8)
-                    pygame.draw.rect(surface, seat, sr, border_radius=4)
-                    pygame.draw.rect(surface, outline, sr, 1, border_radius=4)
-                    pygame.draw.rect(surface, seat2, pygame.Rect(sr.x + 2, sr.y + 2, sr.w - 4, 4), border_radius=2)
-                    hr = pygame.Rect(sr.centerx - 3, sr.y - 1, 6, 4)
-                    pygame.draw.rect(surface, seat2, hr, border_radius=2)
-                    pygame.draw.rect(surface, outline, hr, 1, border_radius=2)
+                    back = pygame.Rect(r.x + 4, r.y + 5, r.w - 8, 7)
+                    base = pygame.Rect(r.x + 4, r.y + 11, r.w - 8, 6)
+                    pygame.draw.rect(surface, seat2, back, border_radius=3)
+                    pygame.draw.rect(surface, outline, back, 1, border_radius=3)
+                    pygame.draw.rect(surface, seat, base, border_radius=3)
+                    pygame.draw.rect(surface, outline, base, 1, border_radius=3)
+                    pygame.draw.rect(surface, self._tint(seat, add=(16, 16, 16)), pygame.Rect(base.x + 1, base.y + 1, base.w - 2, 2), border_radius=2)
+
+                    arm_l = pygame.Rect(base.x - 1, base.y - 1, 3, 3)
+                    arm_r = pygame.Rect(base.right - 2, base.y - 1, 3, 3)
+                    pygame.draw.rect(surface, seat2, arm_l, border_radius=2)
+                    pygame.draw.rect(surface, seat2, arm_r, border_radius=2)
+                    pygame.draw.rect(surface, outline, arm_l, 1, border_radius=2)
+                    pygame.draw.rect(surface, outline, arm_r, 1, border_radius=2)
+
+                    head = pygame.Rect(back.centerx - 3, back.y - 3, 6, 3)
+                    pygame.draw.rect(surface, seat2, head, border_radius=2)
+                    pygame.draw.rect(surface, outline, head, 1, border_radius=2)
+
+                    floor_y = int(r.bottom - 3)
+                    leg_y0 = int(base.bottom - 1)
+                    leg_h = int(floor_y - leg_y0)
+                    if leg_h > 0:
+                        leg_col = self._tint(seat2, add=(-24, -24, -24))
+                        for lx in (int(base.x + 2), int(base.right - 4)):
+                            leg = pygame.Rect(int(lx), int(leg_y0), 2, int(leg_h))
+                            surface.fill(leg_col, leg)
+                            pygame.draw.rect(surface, outline, leg, 1)
                     continue
 
         if getattr(self, "rv_edit_mode", False):
@@ -9804,8 +11130,6 @@ class HardcoreSurvivalState(State):
                 pygame.draw.rect(ov, (255, 220, 140, 120), ov.get_rect(), 2, border_radius=8)
                 surface.blit(ov, sel.topleft)
 
-        p = pygame.Vector2(self.rv_int_pos)
-        speed2 = float(self.rv_int_vel.length_squared())
         face = pygame.Vector2(self.rv_int_facing)
         if face.length_squared() <= 0.001:
             face = pygame.Vector2(0, 1)
@@ -9813,31 +11137,127 @@ class HardcoreSurvivalState(State):
             d = "down" if face.y >= 0 else "up"
         else:
             d = "right" if face.x >= 0 else "left"
-        pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
-        pf_run = getattr(self, "player_frames_run", None)
-        is_run = bool(getattr(self, "player_sprinting", False))
-        pf = pf_run if (is_run and isinstance(pf_run, dict)) else pf_walk
-        frames = pf.get(d, pf["down"])
-        if speed2 <= 0.2 or len(frames) <= 1:
-            base = frames[0]
+        pose = str(getattr(self, "player_pose", "")).strip()
+        pose_space = str(getattr(self, "player_pose_space", "")).strip()
+        pose_anchor = getattr(self, "player_pose_anchor", None)
+        use_pose = bool(pose and pose_space == "rv" and pose_anchor is not None)
+        if use_pose:
+            p = pygame.Vector2(float(pose_anchor[0]), float(pose_anchor[1]))
+            if pose == "sleep":
+                frame = int(float(getattr(self, "player_pose_phase", 0.0)) * 2.0) % 2
+                base = self._get_pose_sprite("sleep", frame=frame)
+            else:
+                base = self._get_pose_sprite("sit", direction=d, frame=0)
         else:
-            walk = frames[1:]
-            phase = (float(self.rv_int_walk_phase) % math.tau) / math.tau
-            idx = int(phase * len(walk)) % len(walk)
-            base = walk[idx]
+            p = pygame.Vector2(self.rv_int_pos)
+            speed2 = float(self.rv_int_vel.length_squared())
+            pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
+            pf_run = getattr(self, "player_frames_run", None)
+            is_run = bool(getattr(self, "player_sprinting", False))
+            pf = pf_run if (is_run and isinstance(pf_run, dict)) else pf_walk
+            frames = pf.get(d, pf["down"])
+            if speed2 <= 0.2 or len(frames) <= 1:
+                base = frames[0]
+            else:
+                walk = frames[1:]
+                phase = (float(self.rv_int_walk_phase) % math.tau) / math.tau
+                idx = int(phase * len(walk)) % len(walk)
+                base = walk[idx]
 
         scale = int(max(1, int(self._RV_INT_SPRITE_SCALE)))
         spr = pygame.transform.scale(base, (int(base.get_width()) * scale, int(base.get_height()) * scale))
         sx = int(round(map_x + p.x))
         sy = int(round(map_y + p.y))
-        shadow = pygame.Rect(0, 0, 14, 6)
-        shadow.center = (sx, sy + 8)
-        sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
-        pygame.draw.ellipse(sh, (0, 0, 0, 120), sh.get_rect())
-        surface.blit(sh, shadow.topleft)
-        rect = spr.get_rect()
-        rect.midbottom = (sx, sy + 12)
-        surface.blit(spr, rect)
+        if use_pose and pose == "sleep":
+            shadow = pygame.Rect(0, 0, 20, 8)
+            shadow.center = (sx, sy + 4)
+            sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
+            pygame.draw.ellipse(sh, (0, 0, 0, 90), sh.get_rect())
+            surface.blit(sh, shadow.topleft)
+            rect = spr.get_rect(center=(sx, sy + 2))
+            surface.blit(spr, rect)
+        elif use_pose and pose == "sit":
+            shadow = pygame.Rect(0, 0, 16, 7)
+            shadow.center = (sx, sy + 6)
+            sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
+            pygame.draw.ellipse(sh, (0, 0, 0, 110), sh.get_rect())
+            surface.blit(sh, shadow.topleft)
+            rect = spr.get_rect(center=(sx, sy + 4))
+            surface.blit(spr, rect)
+        else:
+            shadow = pygame.Rect(0, 0, 14, 6)
+            shadow.center = (sx, sy + 8)
+            sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
+            pygame.draw.ellipse(sh, (0, 0, 0, 120), sh.get_rect())
+            surface.blit(sh, shadow.topleft)
+            rect = spr.get_rect()
+            rect.midbottom = (sx, sy + 12)
+            surface.blit(spr, rect)
+
+        # Hover: furniture details + outline.
+        mouse = None
+        if (
+            not self.inv_open
+            and not bool(getattr(self, "rv_ui_open", False))
+            and not bool(getattr(self, "world_map_open", False))
+        ):
+            mouse = self.app.screen_to_internal(pygame.mouse.get_pos())
+        if mouse is not None:
+            mx, my = int(mouse[0]), int(mouse[1])
+            if map_rect.collidepoint(mx, my):
+                ix = int((mx - int(map_x)) // int(tile))
+                iy = int((my - int(map_y)) // int(tile))
+                ch = str(self._rv_int_char_at(ix, iy))[:1]
+                movable = {"B", "S", "K", "H", "T", "C"}
+                if ch in movable:
+                    w = int(self._RV_INT_W)
+                    h = int(self._RV_INT_H)
+                    seen: set[tuple[int, int]] = set()
+                    stack = [(int(ix), int(iy))]
+                    cells: list[tuple[int, int]] = []
+                    while stack:
+                        cx, cy = stack.pop()
+                        cx = int(cx)
+                        cy = int(cy)
+                        if (cx, cy) in seen:
+                            continue
+                        if not (0 <= cx < w and 0 <= cy < h):
+                            continue
+                        if str(self._rv_int_char_at(cx, cy))[:1] != ch:
+                            continue
+                        seen.add((cx, cy))
+                        cells.append((cx, cy))
+                        stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+                    if cells:
+                        min_x = min(int(p[0]) for p in cells)
+                        max_x = max(int(p[0]) for p in cells)
+                        min_y = min(int(p[1]) for p in cells)
+                        max_y = max(int(p[1]) for p in cells)
+                        sel = pygame.Rect(
+                            int(map_x + min_x * tile),
+                            int(map_y + min_y * tile),
+                            int((max_x - min_x + 1) * tile),
+                            int((max_y - min_y + 1) * tile),
+                        )
+                        ov = pygame.Surface((sel.w, sel.h), pygame.SRCALPHA)
+                        ov.fill((255, 220, 140, 20))
+                        pygame.draw.rect(ov, (255, 220, 140, 150), ov.get_rect(), 2, border_radius=8)
+                        surface.blit(ov, sel.topleft)
+
+                        meta: dict[str, tuple[str, str]] = {
+                            "B": ("床", "躺下可恢复体力与心情"),
+                            "S": ("储物柜", "打开后可存取物资"),
+                            "T": ("桌子", "临时放置/整理物品（规划）"),
+                            "K": ("厨房", "台面上有锅碗瓢盆（烹饪/净水规划）"),
+                            "H": ("工作台", "枪械加工/修理（规划）"),
+                            "C": ("座椅", "乘坐休息（规划）"),
+                        }
+                        name, desc = meta.get(ch, ("家具", ""))
+                        if bool(getattr(self, "rv_edit_mode", False)):
+                            hint = "左键拖拽 | 方向键微调 | R 退出摆放"
+                        else:
+                            hint = "R 进入摆放模式 | 左键拖拽"
+                        self._hover_tooltip = ([str(name), str(desc), str(hint)], (mx, my))
         return
 
         floor_a = (64, 62, 58)
@@ -10235,14 +11655,16 @@ class HardcoreSurvivalState(State):
         floor = int(getattr(self, "hr_floor", 0))
 
         title = "高层住宅"
+        home_room = str(getattr(self, "home_highrise_room", "")).strip()
+        home_floor = int(getattr(self, "hr_home_floor", -1))
         if mode == "home":
-            subtitle = "你的家"
+            subtitle = f"你的家 {home_room}" if home_room else "你的家"
         elif floor <= 0:
             subtitle = "大厅"
         else:
             subtitle = f"{floor} 层"
-            if int(getattr(self, "hr_home_floor", -1)) == floor:
-                subtitle += "（家）"
+            if home_floor == floor:
+                subtitle += f"（家 {home_room}）" if home_room else "（家）"
         draw_text(
             surface,
             self.app.font_s,
@@ -10252,9 +11674,49 @@ class HardcoreSurvivalState(State):
             anchor="center",
         )
 
+        # Persistent home guidance (so the player always knows where the room is).
+        info = ""
+        if home_floor > 0:
+            if home_room:
+                info = f"家：{home_room}（{home_floor}F）"
+            else:
+                info = f"家：{home_floor}F"
+            if mode == "hall":
+                if floor == home_floor:
+                    info += "  本层：绿色门"
+                else:
+                    info += f"  现在：{floor}F"
+        if info:
+            draw_text(
+                surface,
+                self.app.font_s,
+                info,
+                (panel.right - 8, panel.top + 6),
+                pygame.Color(200, 200, 210),
+                anchor="topright",
+            )
+
         map_rect = pygame.Rect(map_x, map_y, map_w, map_h)
         floor_kind = "home" if mode == "home" else "stone"
         surface.blit(self._interior_floor_surface(map_w, map_h, kind=floor_kind), map_rect.topleft)
+
+        # "Back wall" band (front-view cue) for the player's home, per reference.
+        if mode == "home":
+            wall_h = int(tile * 2)
+            wall_h = int(clamp(wall_h, 18, max(18, map_h - 40)))
+            wall_rect = pygame.Rect(int(map_x), int(map_y), int(map_w), int(wall_h))
+            wall_surf = pygame.Surface((wall_rect.w, wall_rect.h))
+            wall_base = (188, 186, 182)
+            wall_surf.fill(wall_base)
+            # Subtle horizontal noise lines.
+            for yy in range(2, wall_rect.h - 6, 6):
+                col = (182, 180, 176) if ((yy // 6) % 2) == 0 else (190, 188, 184)
+                wall_surf.fill(col, pygame.Rect(0, int(yy), wall_rect.w, 1))
+            # Baseboard.
+            base_y = int(max(0, wall_rect.h - 5))
+            wall_surf.fill((74, 58, 42), pygame.Rect(0, base_y, wall_rect.w, 4))
+            wall_surf.fill((12, 12, 16), pygame.Rect(0, base_y, wall_rect.w, 1))
+            surface.blit(wall_surf, wall_rect.topleft)
 
         wall = (26, 26, 32)
         wall_hi = (56, 56, 70)
@@ -10311,7 +11773,10 @@ class HardcoreSurvivalState(State):
         bed_done: set[tuple[int, int]] = set()
         elev_done: set[tuple[int, int]] = set()
         s_done: set[tuple[int, int]] = set()
+        f_done: set[tuple[int, int]] = set()
+        k_done: set[tuple[int, int]] = set()
         t_done: set[tuple[int, int]] = set()
+        c_done: set[tuple[int, int]] = set()
 
         layout = getattr(self, "hr_layout", [])
         for y in range(int(self._HR_INT_H)):
@@ -10343,13 +11808,17 @@ class HardcoreSurvivalState(State):
                         pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
                         pygame.draw.circle(surface, outline, (dr.right - 5, dr.centery), 2)
                     elif ch in ("A", "H"):
-                        dr = pygame.Rect(r.x + 4, r.y + 5, r.w - 8, r.h - 10)
+                        # Apartment doors: keep a solid wall frame, bottom aligned to the baseboard.
+                        # Doors should be taller than one tile (player sprite is 2x inside).
+                        door_h = int(clamp(int(tile * 1.7), int(tile + 8), int(tile * 2 - 2)))
+                        dr = pygame.Rect(r.x + 2, int(r.bottom - 2 - door_h), r.w - 4, door_h)
                         pygame.draw.rect(surface, wood, dr, border_radius=2)
                         pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
                         pygame.draw.rect(surface, wood2, pygame.Rect(dr.x + 2, dr.y + 2, dr.w - 4, 4))
-                        pygame.draw.circle(surface, (240, 220, 140), (dr.right - 4, dr.centery), 2)
+                        knob_y = int(dr.y + dr.h * 0.62)
+                        pygame.draw.circle(surface, (240, 220, 140), (dr.right - 4, knob_y), 2)
                         if ch == "H":
-                            pygame.draw.rect(surface, (120, 200, 140), pygame.Rect(dr.x + 2, dr.y - 2, dr.w - 4, 3), border_radius=1)
+                            pygame.draw.rect(surface, (120, 200, 140), pygame.Rect(dr.x + 2, dr.y + 2, dr.w - 4, 3), border_radius=1)
                     continue
 
                 # Objects over the floor texture.
@@ -10430,25 +11899,122 @@ class HardcoreSurvivalState(State):
                     pygame.draw.rect(surface, outline, bl, 1, border_radius=5)
                     for sx in range(bl.x + 6, bl.right - 4, 10):
                         pygame.draw.line(surface, bed_blank2, (sx, bl.y + 2), (sx, bl.bottom - 3), 1)
+                    # Bed legs/frame (so it doesn't look like it floats).
+                    floor_y = int(br.bottom - 3)
+                    leg_y0 = int(bed_r.bottom - 2)
+                    leg_h = int(floor_y - leg_y0)
+                    if leg_h > 0:
+                        leg_col = self._tint(wood2, add=(-12, -12, -12))
+                        for lx in (int(bed_r.x + 6), int(bed_r.right - 8)):
+                            leg = pygame.Rect(int(lx), int(leg_y0), 2, int(leg_h))
+                            surface.fill(leg_col, leg)
+                            pygame.draw.rect(surface, outline, leg, 1)
+                            surface.fill(leg_col, pygame.Rect(int(lx - 1), int(floor_y), 4, 1))
                     continue
 
                 if ch == "K":
-                    counter = pygame.Rect(r.x + 2, r.y + 6, r.w - 4, r.h - 9)
-                    pygame.draw.rect(surface, frame2, pygame.Rect(counter.x, counter.y - 3, counter.w, 3))
-                    pygame.draw.rect(surface, wood2, counter, border_radius=2)
-                    pygame.draw.rect(surface, outline, counter, 1, border_radius=2)
-                    pygame.draw.rect(surface, wood, pygame.Rect(counter.x + 1, counter.y + 1, counter.w - 2, 4))
-                    if x % 2 == 0:
-                        sink = pygame.Rect(counter.x + 3, counter.y + 2, 8, 5)
-                        pygame.draw.rect(surface, steel, sink, border_radius=2)
-                        pygame.draw.rect(surface, outline, sink, 1, border_radius=2)
-                        pygame.draw.circle(surface, (60, 60, 70), (sink.right - 2, sink.y + 2), 1)
-                    else:
-                        burner = pygame.Rect(counter.x + 3, counter.y + 2, 8, 5)
-                        pygame.draw.rect(surface, (40, 40, 50), burner, border_radius=2)
-                        pygame.draw.rect(surface, outline, burner, 1, border_radius=2)
-                        pygame.draw.circle(surface, (80, 80, 90), (burner.x + 3, burner.y + 3), 1)
-                        pygame.draw.circle(surface, (80, 80, 90), (burner.x + 6, burner.y + 3), 1)
+                    if (x, y) in k_done:
+                        continue
+
+                    bw = 1
+                    while self._hr_int_char_at(int(x) + int(bw), int(y)) == "K":
+                        bw += 1
+                    bh = 1
+                    while True:
+                        ny = int(y) + int(bh)
+                        if self._hr_int_char_at(int(x), int(ny)) != "K":
+                            break
+                        ok = True
+                        for dx in range(int(bw)):
+                            if self._hr_int_char_at(int(x) + int(dx), int(ny)) != "K":
+                                ok = False
+                                break
+                        if not ok:
+                            break
+                        bh += 1
+                    for dy in range(int(bh)):
+                        for dx in range(int(bw)):
+                            k_done.add((int(x) + int(dx), int(y) + int(dy)))
+
+                    br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
+                    # Less inset so the countertop reads flush to the block edges.
+                    obj = br.inflate(-2, -6)
+                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=6)
+                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+
+                    # Marble countertop (big visible top, thin front face).
+                    top_h = int(clamp(int(obj.h * 0.58), 12, 18))
+                    top_r = pygame.Rect(obj.x, obj.y, obj.w, top_h)
+                    front_r = pygame.Rect(obj.x, obj.y + top_h - 1, obj.w, obj.h - (top_h - 1))
+
+                    stone_face = (170, 172, 178)
+                    stone_face2 = (150, 152, 160)
+                    marble_base = (228, 230, 236)
+
+                    pygame.draw.rect(surface, stone_face, front_r, border_radius=6)
+                    pygame.draw.rect(surface, outline, front_r, 1, border_radius=6)
+                    pygame.draw.rect(surface, stone_face2, pygame.Rect(front_r.x + 1, front_r.y + 2, front_r.w - 2, 3))
+
+                    marble = self._marble_surface(
+                        int(top_r.w),
+                        int(top_r.h),
+                        seed=int(getattr(self, "seed", 0)) ^ (int(x) * 65537) ^ (int(y) * 9719) ^ 0x51F15EED,
+                        base=marble_base,
+                    )
+                    surface.blit(marble, top_r.topleft)
+                    pygame.draw.rect(surface, outline, top_r, 1, border_radius=6)
+                    pygame.draw.line(surface, outline, (top_r.x + 2, top_r.bottom - 1), (top_r.right - 3, top_r.bottom - 1), 1)
+
+                    # Cabinet seams / handles on the front face (stone drawers).
+                    modules = int(max(2, int(bw)))
+                    for i in range(1, modules):
+                        xline = int(front_r.x + (front_r.w * i) / modules)
+                        pygame.draw.line(surface, stone_face2, (xline, front_r.y + 5), (xline, front_r.bottom - 5), 2)
+                        pygame.draw.line(surface, outline, (xline, front_r.y + 5), (xline, front_r.bottom - 5), 1)
+                    for i in range(modules):
+                        cx = int(front_r.x + (front_r.w * (i + 0.5)) / modules)
+                        hy = int(front_r.y + front_r.h * 0.55)
+                        hrect = pygame.Rect(cx - 2, hy - 1, 4, 2)
+                        surface.fill((80, 82, 90), hrect)
+                        pygame.draw.rect(surface, outline, hrect, 1)
+
+                    # Sink + stove on the top.
+                    sink_w = int(clamp(int(top_r.w * 0.20), 14, 22))
+                    sink_h = int(clamp(int(top_r.h - 5), 6, 10))
+                    sink = pygame.Rect(top_r.x + int(top_r.w * 0.18), top_r.y + 3, sink_w, sink_h)
+                    pygame.draw.rect(surface, steel, sink, border_radius=3)
+                    pygame.draw.rect(surface, outline, sink, 1, border_radius=3)
+                    pygame.draw.circle(surface, (60, 60, 70), (sink.right - 3, sink.y + 3), 1)
+                    pygame.draw.line(surface, steel2, (sink.x + 2, sink.y + 1), (sink.x + 2, sink.y - 3), 1)
+                    pygame.draw.line(surface, steel2, (sink.x + 2, sink.y - 3), (sink.x + 7, sink.y - 3), 1)
+
+                    stove_w = int(clamp(int(top_r.w * 0.20), 14, 22))
+                    stove_h = sink_h
+                    stove = pygame.Rect(top_r.right - int(top_r.w * 0.16) - stove_w, top_r.y + 3, stove_w, stove_h)
+                    pygame.draw.rect(surface, (40, 40, 50), stove, border_radius=3)
+                    pygame.draw.rect(surface, outline, stove, 1, border_radius=3)
+                    pygame.draw.circle(surface, (80, 80, 90), (stove.x + stove_w // 3, stove.centery), 2)
+                    pygame.draw.circle(surface, (80, 80, 90), (stove.right - stove_w // 3, stove.centery), 2)
+
+                    # Small items so it reads as a real kitchen.
+                    plate = pygame.Rect(top_r.right - 15, top_r.y + 3, 12, 5)
+                    pygame.draw.ellipse(surface, (238, 238, 244), plate)
+                    pygame.draw.ellipse(surface, outline, plate, 1)
+                    bowl = pygame.Rect(top_r.x + 8, top_r.y + 3, 10, 5)
+                    pygame.draw.ellipse(surface, (205, 214, 224), bowl)
+                    pygame.draw.ellipse(surface, outline, bowl, 1)
+                    pot = pygame.Rect(top_r.centerx - 8, top_r.y + 2, 16, 6)
+                    pygame.draw.rect(surface, (40, 40, 50), pot, border_radius=3)
+                    pygame.draw.rect(surface, outline, pot, 1, border_radius=3)
+                    pygame.draw.line(surface, steel2, (pot.x + 2, pot.y + 2), (pot.right - 3, pot.y + 2), 1)
+
+                    # Subtle shelf/rack cue above the counter.
+                    rack_y = int(top_r.y - 7)
+                    if rack_y >= int(br.y) + 1:
+                        pygame.draw.line(surface, outline, (top_r.x + 2, rack_y), (top_r.right - 3, rack_y), 1)
+                        for ux in (top_r.x + 10, top_r.centerx, top_r.right - 12):
+                            pygame.draw.line(surface, steel2, (int(ux), rack_y + 1), (int(ux), rack_y + 4), 1)
                     continue
 
                 if ch == "T":
@@ -10486,6 +12052,20 @@ class HardcoreSurvivalState(State):
                     pygame.draw.rect(surface, (36, 38, 44), screen, border_radius=3)
                     pygame.draw.rect(surface, steel2, screen, 1, border_radius=3)
                     pygame.draw.rect(surface, (120, 200, 240), pygame.Rect(screen.x + 3, screen.y + 3, 7, 4))
+                    # Table legs (front-view cue).
+                    floor_y = int(br.bottom - 3)
+                    leg_y0 = int(top.bottom - 1)
+                    leg_h = int(floor_y - leg_y0)
+                    if leg_h > 0 and top.w >= 12:
+                        leg_col = self._tint(wood2, add=(-10, -10, -10))
+                        for lx in (int(top.x + 4), int(top.right - 6)):
+                            leg = pygame.Rect(int(lx), int(leg_y0), 2, int(leg_h))
+                            surface.fill(leg_col, leg)
+                            pygame.draw.rect(surface, outline, leg, 1)
+                        # Simple crossbar.
+                        if leg_h >= 4:
+                            yb = int(floor_y - 2)
+                            surface.fill(leg_col, pygame.Rect(int(top.x + 4), yb, int(max(1, top.w - 8)), 1))
                     continue
 
                 if ch == "S":
@@ -10497,7 +12077,7 @@ class HardcoreSurvivalState(State):
                     bh = 1
                     while True:
                         ny = int(y) + int(bh)
-                        if self._hr_int_char_at(int(x), int(ny)) != "S":
+                        if self._hr_int_char_at(int(x), int(ny)) != "S":  
                             break
                         ok = True
                         for dx in range(int(bw)):
@@ -10511,45 +12091,356 @@ class HardcoreSurvivalState(State):
                         for dx in range(int(bw)):
                             s_done.add((int(x) + int(dx), int(y) + int(dy)))
                     br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
-                    obj = br.inflate(-6, -10)
+                    # Keep cabinets tall enough even when the block is only 1 tile high (e.g., the bottom-left cabinet).
+                    obj = br.inflate(-6, -4)
                     sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
                     pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=4)
                     surface.blit(sh, (obj.x + 2, obj.y + 3))
-                    if mode == "home" and bw >= 2 and bh >= 2:
-                        # Sofa.
-                        pygame.draw.rect(surface, seat, obj, border_radius=5)
-                        pygame.draw.rect(surface, outline, obj, 1, border_radius=5)
-                        back = pygame.Rect(obj.x + 2, obj.y + 2, obj.w - 4, 7)
-                        pygame.draw.rect(surface, seat2, back, border_radius=4)
-                        pygame.draw.rect(surface, outline, back, 1, border_radius=4)
-                        for cx in range(obj.x + 6, obj.right - 6, 12):
-                            c = pygame.Rect(cx, obj.y + 12, 10, 9)
-                            pygame.draw.rect(surface, (92, 104, 170), c, border_radius=3)
-                            pygame.draw.rect(surface, outline, c, 1, border_radius=3)
+                    # Wardrobe / cabinet: draw top + front face (two visible planes).
+                    cab_top = self._tint(wood, add=(14, 12, 10))
+                    cab_front = self._tint(wood2, add=(2, 2, 2))
+                    cab_front2 = self._tint(cab_front, add=(-16, -14, -12))
+                    hi = self._tint(cab_top, add=(22, 22, 22))
+                    lo = self._tint(cab_front, add=(-26, -24, -22))
+
+                    top_h = int(clamp(int(obj.h * 0.34), 8, 12))
+                    top_r = pygame.Rect(obj.x, obj.y, obj.w, top_h)
+                    front_r = pygame.Rect(obj.x, obj.y + top_h - 1, obj.w, obj.h - (top_h - 1))
+
+                    pygame.draw.rect(surface, cab_front, front_r, border_radius=6)
+                    pygame.draw.rect(surface, outline, front_r, 1, border_radius=6)
+                    pygame.draw.rect(surface, cab_front2, pygame.Rect(front_r.x + 1, front_r.y + 2, front_r.w - 2, 3))
+
+                    pygame.draw.rect(surface, cab_top, top_r, border_radius=6)
+                    pygame.draw.rect(surface, outline, top_r, 1, border_radius=6)
+                    pygame.draw.line(surface, hi, (top_r.x + 2, top_r.y + 1), (top_r.right - 3, top_r.y + 1), 1)
+                    pygame.draw.line(surface, outline, (top_r.x + 2, top_r.bottom - 1), (top_r.right - 3, top_r.bottom - 1), 1)
+
+                    # Inset doors live on the front face (keeps the top readable).
+                    door_area = front_r.inflate(-4, -6)
+                    if door_area.w > 6 and door_area.h > 8:
+                        pygame.draw.rect(surface, self._tint(cab_front, add=(-8, -6, -4)), door_area, border_radius=4)
+                        pygame.draw.rect(surface, outline, door_area, 1, border_radius=4)
                     else:
-                        # Wardrobe / shelf.
-                        pygame.draw.rect(surface, wood, obj, border_radius=4)
-                        pygame.draw.rect(surface, outline, obj, 1, border_radius=4)
-                        pygame.draw.rect(surface, wood2, pygame.Rect(obj.x + 1, obj.y + 1, obj.w - 2, 4))
-                        for sy in range(obj.y + 8, obj.bottom - 2, 8):
-                            pygame.draw.line(surface, wood2, (obj.x + 3, sy), (obj.right - 4, sy), 2)
-                        surface.fill((70, 120, 180), pygame.Rect(obj.x + 5, obj.y + 10, 4, 5))
-                        surface.fill((190, 190, 200), pygame.Rect(obj.right - 10, obj.y + 10, 4, 5))
+                        door_area = pygame.Rect(front_r)
+
+                    # Tiny feet so it doesn't look like it floats.
+                    floor_y = int(br.bottom - 3)
+                    leg_y0 = int(front_r.bottom - 2)
+                    leg_h = int(floor_y - leg_y0)
+                    if leg_h > 0:
+                        leg_col = self._tint(cab_front2, add=(-16, -16, -16))
+                        for lx in (int(front_r.x + 6), int(front_r.right - 8)):
+                            leg = pygame.Rect(int(lx), int(leg_y0), 2, int(leg_h))
+                            surface.fill(leg_col, leg)
+                            pygame.draw.rect(surface, outline, leg, 1)
+
+                    open_block = getattr(self, "home_ui_open_block", None)
+                    is_open = bool(getattr(self, "home_ui_open", False)) and open_block == (
+                        int(x),
+                        int(y),
+                        int(x) + int(bw) - 1,
+                        int(y) + int(bh) - 1,
+                    )
+                    if is_open:
+                        inner = door_area.inflate(-10, -10)
+                        if inner.w > 4 and inner.h > 4:
+                            pygame.draw.rect(surface, (20, 20, 24), inner, border_radius=3)
+                            pygame.draw.rect(surface, outline, inner, 1, border_radius=3)
+                            # Inside top surface + shelves.
+                            pygame.draw.line(surface, self._tint(cab_front2, add=(18, 18, 18)), (inner.x + 2, inner.y + 2), (inner.right - 3, inner.y + 2), 1)
+                            step = max(6, int(inner.h // 3))
+                            for sy in range(inner.y + step, inner.bottom - 2, step):
+                                pygame.draw.line(surface, cab_front2, (inner.x + 2, sy), (inner.right - 3, sy), 2)
+                                pygame.draw.line(surface, outline, (inner.x + 2, sy), (inner.right - 3, sy), 1)
+                            # Small visible supplies.
+                            can = pygame.Rect(inner.x + 4, inner.y + 5, 5, 7)
+                            surface.fill((180, 60, 70), can)
+                            pygame.draw.rect(surface, outline, can, 1)
+                            jar = pygame.Rect(inner.right - 10, inner.y + 6, 7, 6)
+                            surface.fill((90, 140, 190), jar)
+                            pygame.draw.rect(surface, outline, jar, 1)
+
+                        # Doors "slid open" to sides.
+                        door_w = max(6, int(door_area.w // 5))
+                        ld = pygame.Rect(door_area.x + 1, door_area.y + 3, door_w, door_area.h - 6)
+                        rd = pygame.Rect(door_area.right - door_w - 1, door_area.y + 3, door_w, door_area.h - 6)
+                        for d in (ld, rd):
+                            pygame.draw.rect(surface, cab_front, d, border_radius=3)
+                            pygame.draw.rect(surface, outline, d, 1, border_radius=3)
+                            inset = d.inflate(-2, -4)
+                            if inset.w > 2 and inset.h > 2:
+                                pygame.draw.rect(surface, self._tint(cab_front, add=(-8, -8, -8)), inset, border_radius=2)
+                                pygame.draw.rect(surface, outline, inset, 1, border_radius=2)
+                                pygame.draw.line(surface, hi, (inset.x + 1, inset.y + 1), (inset.right - 2, inset.y + 1), 1)
+                        for d in (ld, rd):
+                            hy = int(d.y + d.h * 0.55)
+                            hrect = pygame.Rect(d.centerx - 1, hy - 3, 2, 6)
+                            surface.fill((220, 220, 230), hrect)
+                            pygame.draw.rect(surface, outline, hrect, 1)
+                    else:
+                        # Closed doors + handles.
+                        doors = max(2, int(door_area.w // 24))
+                        doors = int(clamp(doors, 2, 4))
+                        y_top = int(door_area.y + 2)
+                        y_bot = int(door_area.bottom - 3)
+                        for i in range(1, doors):
+                            xline = int(door_area.x + (door_area.w * i) / doors)
+                            pygame.draw.line(surface, cab_front2, (xline, y_top), (xline, y_bot), 2)
+                            pygame.draw.line(surface, outline, (xline, y_top), (xline, y_bot), 1)
+                        for i in range(doors):
+                            x0 = int(door_area.x + (door_area.w * i) / doors)
+                            x1 = int(door_area.x + (door_area.w * (i + 1)) / doors)
+                            panel = pygame.Rect(x0 + 2, y_top + 1, (x1 - x0) - 4, max(2, int(y_bot - y_top - 2)))
+                            if panel.w > 3 and panel.h > 3:
+                                pygame.draw.rect(surface, self._tint(cab_front, add=(-6, -6, -6)), panel, border_radius=2)
+                                pygame.draw.rect(surface, outline, panel, 1, border_radius=2)
+                                pygame.draw.line(surface, hi, (panel.x + 1, panel.y + 1), (panel.right - 2, panel.y + 1), 1)
+
+                            hx = int(door_area.x + (door_area.w * (i + 0.5)) / doors)
+                            hy = int(door_area.y + door_area.h * 0.55)
+                            hrect = pygame.Rect(hx - 1, hy - 3, 2, 6)
+                            surface.fill((220, 220, 230), hrect)
+                            pygame.draw.rect(surface, outline, hrect, 1)
+                    continue
+
+                if ch == "F":
+                    if (x, y) in f_done:
+                        continue
+                    bw = 1
+                    while self._hr_int_char_at(int(x) + int(bw), int(y)) == "F":
+                        bw += 1
+                    bh = 1
+                    while True:
+                        ny = int(y) + int(bh)
+                        if self._hr_int_char_at(int(x), int(ny)) != "F":
+                            break
+                        ok = True
+                        for dx in range(int(bw)):
+                            if self._hr_int_char_at(int(x) + int(dx), int(ny)) != "F":
+                                ok = False
+                                break
+                        if not ok:
+                            break
+                        bh += 1
+                    for dy in range(int(bh)):
+                        for dx in range(int(bw)):
+                            f_done.add((int(x) + int(dx), int(y) + int(dy)))
+
+                    br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
+                    obj = br.inflate(-4, -4)
+                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=4)
+                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+
+                    fridge_top = (238, 240, 246)
+                    fridge_front = (210, 214, 224)
+                    fridge_front2 = (178, 182, 194)
+                    hi = (248, 248, 252)
+
+                    top_h = int(clamp(int(obj.h * 0.34), 8, 12))
+                    top_r = pygame.Rect(obj.x, obj.y, obj.w, top_h)
+                    front_r = pygame.Rect(obj.x, obj.y + top_h - 1, obj.w, obj.h - (top_h - 1))
+
+                    pygame.draw.rect(surface, fridge_front, front_r, border_radius=6)
+                    pygame.draw.rect(surface, outline, front_r, 1, border_radius=6)
+                    pygame.draw.rect(surface, fridge_front2, pygame.Rect(front_r.x + 1, front_r.y + 2, front_r.w - 2, 3))
+
+                    pygame.draw.rect(surface, fridge_top, top_r, border_radius=6)
+                    pygame.draw.rect(surface, outline, top_r, 1, border_radius=6)
+                    pygame.draw.line(surface, hi, (top_r.x + 2, top_r.y + 1), (top_r.right - 3, top_r.y + 1), 1)
+                    pygame.draw.line(surface, outline, (top_r.x + 2, top_r.bottom - 1), (top_r.right - 3, top_r.bottom - 1), 1)
+
+                    door_area = front_r.inflate(-4, -6)
+                    if door_area.w <= 6 or door_area.h <= 8:
+                        door_area = pygame.Rect(front_r)
+
+                    open_block = getattr(self, "home_ui_open_block", None)
+                    is_open = bool(getattr(self, "home_ui_open", False)) and open_block == (
+                        int(x),
+                        int(y),
+                        int(x) + int(bw) - 1,
+                        int(y) + int(bh) - 1,
+                    )
+                    if is_open:
+                        inner = door_area.inflate(-8, -8)
+                        if inner.w > 4 and inner.h > 4:
+                            pygame.draw.rect(surface, (20, 20, 24), inner, border_radius=3)
+                            pygame.draw.rect(surface, outline, inner, 1, border_radius=3)
+                            for sy in range(inner.y + 4, inner.bottom - 2, 6):
+                                pygame.draw.line(surface, (44, 44, 52), (inner.x + 2, sy), (inner.right - 3, sy), 1)
+                            bottle = pygame.Rect(inner.x + 3, inner.bottom - 9, 4, 7)
+                            surface.fill((120, 170, 230), bottle)
+                            pygame.draw.rect(surface, outline, bottle, 1)
+                            can = pygame.Rect(inner.right - 8, inner.bottom - 8, 5, 6)
+                            surface.fill((220, 70, 80), can)
+                            pygame.draw.rect(surface, outline, can, 1)
+
+                        # Doors slid to sides.
+                        door_w = max(6, int(door_area.w // 5))
+                        ld = pygame.Rect(door_area.x + 1, door_area.y + 3, door_w, door_area.h - 6)
+                        rd = pygame.Rect(door_area.right - door_w - 1, door_area.y + 3, door_w, door_area.h - 6)
+                        for d in (ld, rd):
+                            pygame.draw.rect(surface, fridge_front, d, border_radius=3)
+                            pygame.draw.rect(surface, outline, d, 1, border_radius=3)
+                            inset = d.inflate(-2, -4)
+                            if inset.w > 2 and inset.h > 2:
+                                pygame.draw.rect(surface, self._tint(fridge_front, add=(-8, -8, -8)), inset, border_radius=2)
+                                pygame.draw.rect(surface, outline, inset, 1, border_radius=2)
+                                pygame.draw.line(surface, hi, (inset.x + 1, inset.y + 1), (inset.right - 2, inset.y + 1), 1)
+                    else:
+                        # Freezer split line + handle + magnets.
+                        split_y = int(door_area.y + door_area.h * 0.38)
+                        pygame.draw.line(surface, fridge_front2, (door_area.x + 2, split_y), (door_area.right - 3, split_y), 2)
+                        pygame.draw.line(surface, outline, (door_area.x + 2, split_y), (door_area.right - 3, split_y), 1)
+                        handle = pygame.Rect(door_area.right - 5, door_area.y + 4, 2, max(6, door_area.h - 8))
+                        surface.fill(steel2, handle)
+                        pygame.draw.rect(surface, outline, handle, 1)
+                        for mx, my, col in (
+                            (door_area.x + 3, door_area.y + 4, (240, 120, 120)),
+                            (door_area.x + 6, door_area.y + 7, (120, 200, 140)),
+                            (door_area.x + 4, door_area.y + 10, (240, 220, 140)),
+                        ):
+                            mr = pygame.Rect(int(mx), int(my), 3, 3)
+                            surface.fill(col, mr)
+                            pygame.draw.rect(surface, outline, mr, 1)
+
+                    # Tiny feet so it doesn't look like it floats.
+                    floor_y = int(br.bottom - 3)
+                    leg_y0 = int(front_r.bottom - 2)
+                    leg_h = int(floor_y - leg_y0)
+                    if leg_h > 0:
+                        leg_col = self._tint(fridge_front2, add=(-16, -16, -16))
+                        for lx in (int(front_r.x + 6), int(front_r.right - 8)):
+                            leg = pygame.Rect(int(lx), int(leg_y0), 2, int(leg_h))
+                            surface.fill(leg_col, leg)
+                            pygame.draw.rect(surface, outline, leg, 1)
                     continue
 
                 if ch == "C":
+                    if (x, y) in c_done:
+                        continue
+                    bw = 1
+                    while self._hr_int_char_at(int(x) + int(bw), int(y)) == "C":
+                        bw += 1
+                    bh = 1
+                    while True:
+                        ny = int(y) + int(bh)
+                        if self._hr_int_char_at(int(x), int(ny)) != "C":
+                            break
+                        ok = True
+                        for dx in range(int(bw)):
+                            if self._hr_int_char_at(int(x) + int(dx), int(ny)) != "C":
+                                ok = False
+                                break
+                        if not ok:
+                            break
+                        bh += 1
+                    for dy in range(int(bh)):
+                        for dx in range(int(bw)):
+                            c_done.add((int(x) + int(dx), int(y) + int(dy)))
+
+                    br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
+                    obj = br.inflate(-6, -10)
+                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect(), border_radius=5)
+                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+
+                    is_sofa = bool(mode == "home" and (int(bw) >= 3 or int(bh) >= 2))
+                    if is_sofa:
+                        back_h = int(clamp(int(obj.h // 3), 7, 12))
+                        back = pygame.Rect(obj.x + 1, obj.y + 1, obj.w - 2, back_h)
+                        seat_r = pygame.Rect(obj.x, obj.y + back_h - 1, obj.w, obj.h - back_h + 1)
+                        pygame.draw.rect(surface, seat, seat_r, border_radius=6)
+                        pygame.draw.rect(surface, outline, seat_r, 1, border_radius=6)
+                        pygame.draw.rect(surface, seat2, back, border_radius=5)
+                        pygame.draw.rect(surface, outline, back, 1, border_radius=5)
+                        arm_w = int(clamp(int(obj.w // 10), 4, 8))
+                        arm_l = pygame.Rect(seat_r.x, back.bottom - 2, arm_w, seat_r.h - 2)
+                        arm_r = pygame.Rect(seat_r.right - arm_w, back.bottom - 2, arm_w, seat_r.h - 2)
+                        pygame.draw.rect(surface, seat2, arm_l, border_radius=5)
+                        pygame.draw.rect(surface, seat2, arm_r, border_radius=5)
+                        pygame.draw.rect(surface, outline, arm_l, 1, border_radius=5)
+                        pygame.draw.rect(surface, outline, arm_r, 1, border_radius=5)
+                        for i in (1, 2):
+                            xline = int(seat_r.x + (seat_r.w * i) / 3)
+                            pygame.draw.line(surface, outline, (xline, seat_r.y + 3), (xline, seat_r.bottom - 4), 1)
+                        if back.w >= 24:
+                            p_w = int(clamp(int(back.w // 3), 10, 18))
+                            for px in (back.x + 6, back.right - p_w - 6):
+                                p = pygame.Rect(int(px), back.y + 3, int(p_w), max(4, int(back.h - 5)))
+                                pygame.draw.rect(surface, self._tint(seat, add=(18, 18, 18)), p, border_radius=3)
+                                pygame.draw.rect(surface, outline, p, 1, border_radius=3)
+                        floor_y = int(br.bottom - 3)
+                        leg_y0 = int(seat_r.bottom - 1)
+                        leg_h = int(floor_y - leg_y0)
+                        if leg_h > 0:
+                            leg_col = self._tint(seat2, add=(-22, -22, -22))
+                            for lx in (int(seat_r.x + 6), int(seat_r.right - 8)):
+                                leg = pygame.Rect(int(lx), int(leg_y0), 2, int(leg_h))
+                                surface.fill(leg_col, leg)
+                                pygame.draw.rect(surface, outline, leg, 1)
+                    else:
+                        pygame.draw.rect(surface, seat, obj, border_radius=5)
+                        pygame.draw.rect(surface, outline, obj, 1, border_radius=5)
+                        back = pygame.Rect(obj.x + 2, obj.y + 2, obj.w - 4, int(clamp(int(obj.h * 0.45), 5, 10)))
+                        pygame.draw.rect(surface, seat2, back, border_radius=4)
+                        pygame.draw.rect(surface, outline, back, 1, border_radius=4)
+                        seat_r = pygame.Rect(obj.x + 2, back.bottom - 1, obj.w - 4, obj.bottom - (back.bottom - 1))
+                        pygame.draw.rect(surface, self._tint(seat, add=(12, 12, 12)), seat_r, border_radius=4)
+                        pygame.draw.rect(surface, outline, seat_r, 1, border_radius=4)
+                        floor_y = int(br.bottom - 3)
+                        leg_y0 = int(seat_r.bottom - 1)
+                        leg_h = int(floor_y - leg_y0)
+                        if leg_h > 0:
+                            leg_col = self._tint(seat2, add=(-18, -18, -18))
+                            for lx in (int(seat_r.x + 2), int(seat_r.right - 4)):
+                                leg = pygame.Rect(int(lx), int(leg_y0), 2, int(leg_h))
+                                surface.fill(leg_col, leg)
+                                pygame.draw.rect(surface, outline, leg, 1)
+                    continue
+
+                if False and ch == "C":
                     sr = pygame.Rect(r.x + 4, r.y + 4, r.w - 8, r.h - 8)
-                    sh = pygame.Surface((sr.w, sr.h), pygame.SRCALPHA)
+                    sh = pygame.Surface((sr.w, sr.h), pygame.SRCALPHA)  
                     pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect(), border_radius=4)
                     surface.blit(sh, (sr.x + 1, sr.y + 2))
                     pygame.draw.rect(surface, seat, sr, border_radius=4)
                     pygame.draw.rect(surface, outline, sr, 1, border_radius=4)
                     pygame.draw.rect(surface, seat2, pygame.Rect(sr.x + 2, sr.y + 2, sr.w - 4, 4), border_radius=2)
+                    # Legs (gives the chair more readable structure).
+                    leg_y0 = int(sr.bottom - 1)
+                    leg_y1 = int(r.bottom - 3)
+                    leg_h = int(leg_y1 - leg_y0)
+                    if leg_h > 0:
+                        leg_col = self._tint(seat2, add=(-18, -18, -18))        
+                        for lx in (int(sr.x + 3), int(sr.right - 5)):
+                            leg = pygame.Rect(int(lx), int(leg_y0), 2, int(leg_h))
+                            surface.fill(leg_col, leg)
+                            pygame.draw.rect(surface, outline, leg, 1)
                     continue
 
+        if str(getattr(self, "hr_mode", "lobby")) == "home" and bool(getattr(self, "hr_edit_mode", False)):
+            blocks = getattr(self, "hr_edit_blocks", None)
+            if isinstance(blocks, list) and blocks:
+                sel_i = int(getattr(self, "hr_edit_index", 0)) % len(blocks)
+                _ch, cells = blocks[sel_i]
+                min_x = min(int(p[0]) for p in cells)
+                max_x = max(int(p[0]) for p in cells)
+                min_y = min(int(p[1]) for p in cells)
+                max_y = max(int(p[1]) for p in cells)
+                sel = pygame.Rect(
+                    int(map_x + min_x * tile),
+                    int(map_y + min_y * tile),
+                    int((max_x - min_x + 1) * tile),
+                    int((max_y - min_y + 1) * tile),
+                )
+                ov = pygame.Surface((sel.w, sel.h), pygame.SRCALPHA)
+                ov.fill((255, 220, 140, 50))
+                pygame.draw.rect(ov, (255, 220, 140, 120), ov.get_rect(), 2, border_radius=8)
+                surface.blit(ov, sel.topleft)
+
         # Draw player on top of the interior.
-        p = pygame.Vector2(self.hr_int_pos)
-        speed2 = float(self.hr_int_vel.length_squared())
         face = pygame.Vector2(self.hr_int_facing)
         if face.length_squared() <= 0.001:
             face = pygame.Vector2(0, 1)
@@ -10557,31 +12448,139 @@ class HardcoreSurvivalState(State):
             d = "down" if face.y >= 0 else "up"
         else:
             d = "right" if face.x >= 0 else "left"
-        pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
-        pf_run = getattr(self, "player_frames_run", None)
-        is_run = bool(getattr(self, "player_sprinting", False))
-        pf = pf_run if (is_run and isinstance(pf_run, dict)) else pf_walk
-        frames = pf.get(d, pf["down"])
-        if speed2 <= 0.2 or len(frames) <= 1:
-            base = frames[0]
+        pose = str(getattr(self, "player_pose", "")).strip()
+        pose_space = str(getattr(self, "player_pose_space", "")).strip()
+        pose_anchor = getattr(self, "player_pose_anchor", None)
+        use_pose = bool(pose and pose_space == "hr" and pose_anchor is not None)
+        if use_pose:
+            p = pygame.Vector2(float(pose_anchor[0]), float(pose_anchor[1]))
+            if pose == "sleep":
+                frame = int(float(getattr(self, "player_pose_phase", 0.0)) * 2.0) % 2
+                base = self._get_pose_sprite("sleep", frame=frame)
+            else:
+                base = self._get_pose_sprite("sit", direction=d, frame=0)
         else:
-            walk = frames[1:]
-            phase = (float(self.hr_int_walk_phase) % math.tau) / math.tau
-            idx = int(phase * len(walk)) % len(walk)
-            base = walk[idx]
+            p = pygame.Vector2(self.hr_int_pos)
+            speed2 = float(self.hr_int_vel.length_squared())
+            pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
+            pf_run = getattr(self, "player_frames_run", None)
+            is_run = bool(getattr(self, "player_sprinting", False))
+            pf = pf_run if (is_run and isinstance(pf_run, dict)) else pf_walk
+            frames = pf.get(d, pf["down"])
+            if speed2 <= 0.2 or len(frames) <= 1:
+                base = frames[0]
+            else:
+                walk = frames[1:]
+                phase = (float(self.hr_int_walk_phase) % math.tau) / math.tau
+                idx = int(phase * len(walk)) % len(walk)
+                base = walk[idx]
 
         scale = int(max(1, int(self._HR_INT_SPRITE_SCALE)))
         spr = pygame.transform.scale(base, (int(base.get_width()) * scale, int(base.get_height()) * scale))
         sx = int(round(map_x + p.x))
         sy = int(round(map_y + p.y))
-        shadow = pygame.Rect(0, 0, 14, 6)
-        shadow.center = (sx, sy + 8)
-        sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
-        pygame.draw.ellipse(sh, (0, 0, 0, 120), sh.get_rect())
-        surface.blit(sh, shadow.topleft)
-        rect = spr.get_rect()
-        rect.midbottom = (sx, sy + 12)
-        surface.blit(spr, rect)
+        if use_pose and pose == "sleep":
+            shadow = pygame.Rect(0, 0, 20, 8)
+            shadow.center = (sx, sy + 4)
+            sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
+            pygame.draw.ellipse(sh, (0, 0, 0, 90), sh.get_rect())
+            surface.blit(sh, shadow.topleft)
+            rect = spr.get_rect(center=(sx, sy + 2))
+            surface.blit(spr, rect)
+        elif use_pose and pose == "sit":
+            shadow = pygame.Rect(0, 0, 16, 7)
+            shadow.center = (sx, sy + 6)
+            sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
+            pygame.draw.ellipse(sh, (0, 0, 0, 110), sh.get_rect())
+            surface.blit(sh, shadow.topleft)
+            rect = spr.get_rect(center=(sx, sy + 4))
+            surface.blit(spr, rect)
+        else:
+            shadow = pygame.Rect(0, 0, 14, 6)
+            shadow.center = (sx, sy + 8)
+            sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
+            pygame.draw.ellipse(sh, (0, 0, 0, 120), sh.get_rect())
+            surface.blit(sh, shadow.topleft)
+            rect = spr.get_rect()
+            rect.midbottom = (sx, sy + 12)
+            surface.blit(spr, rect)
+
+        # Hover: furniture details + outline (home only).
+        if str(getattr(self, "hr_mode", "lobby")) == "home":
+            mouse = None
+            if (
+                not self.inv_open
+                and not bool(getattr(self, "hr_elevator_ui_open", False))
+                and not bool(getattr(self, "home_ui_open", False))
+                and not bool(getattr(self, "world_map_open", False))
+            ):
+                mouse = self.app.screen_to_internal(pygame.mouse.get_pos())
+            if mouse is not None:
+                mx, my = int(mouse[0]), int(mouse[1])
+                if map_rect.collidepoint(mx, my):
+                    ix = int((mx - int(map_x)) // int(tile))
+                    iy = int((my - int(map_y)) // int(tile))
+                    ch = str(self._hr_int_char_at(ix, iy))[:1]
+                    movable = {"B", "S", "F", "K", "T", "C"}
+                    if ch in movable:
+                        w = int(self._HR_INT_W)
+                        h = int(self._HR_INT_H)
+                        seen: set[tuple[int, int]] = set()
+                        stack = [(int(ix), int(iy))]
+                        cells: list[tuple[int, int]] = []
+                        while stack:
+                            cx, cy = stack.pop()
+                            cx = int(cx)
+                            cy = int(cy)
+                            if (cx, cy) in seen:
+                                continue
+                            if not (0 <= cx < w and 0 <= cy < h):
+                                continue
+                            if str(self._hr_int_char_at(cx, cy))[:1] != ch:
+                                continue
+                            seen.add((cx, cy))
+                            cells.append((cx, cy))
+                            stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+                        if cells:
+                            min_x = min(int(p[0]) for p in cells)
+                            max_x = max(int(p[0]) for p in cells)
+                            min_y = min(int(p[1]) for p in cells)
+                            max_y = max(int(p[1]) for p in cells)
+                            sel = pygame.Rect(
+                                int(map_x + min_x * tile),
+                                int(map_y + min_y * tile),
+                                int((max_x - min_x + 1) * tile),
+                                int((max_y - min_y + 1) * tile),
+                            )
+                            ov = pygame.Surface((sel.w, sel.h), pygame.SRCALPHA)
+                            ov.fill((255, 220, 140, 20))
+                            pygame.draw.rect(ov, (255, 220, 140, 150), ov.get_rect(), 2, border_radius=8)
+                            surface.blit(ov, sel.topleft)
+
+                            bw = int(max_x - min_x + 1)
+                            bh = int(max_y - min_y + 1)
+                            name = "家具"
+                            desc = ""
+                            if ch == "B":
+                                name, desc = ("床", "躺下可恢复体力与心情")
+                            elif ch == "S":
+                                name, desc = ("储物柜", "打开后可存取物资")
+                            elif ch == "F":
+                                name, desc = ("冰箱", "存放食物/饮料（可存取）")
+                            elif ch == "T":
+                                name, desc = ("桌子", "临时放置/整理物品（规划）")
+                            elif ch == "K":
+                                name, desc = ("厨房", "台面上有锅碗瓢盆（烹饪/净水规划）")
+                            elif ch == "C":
+                                if bw >= 3 or bh >= 2:
+                                    name, desc = ("沙发", "坐下休息（规划）")
+                                else:
+                                    name, desc = ("椅子", "坐下休息（规划）")
+                            if bool(getattr(self, "hr_edit_mode", False)):
+                                hint = "左键拖拽 | 方向键微调 | R 退出摆放"
+                            else:
+                                hint = "R 进入摆放模式 | 左键拖拽"
+                            self._hover_tooltip = ([str(name), str(desc), str(hint)], (mx, my))
         return
 
         floor_a = (64, 62, 58)
@@ -10902,6 +12901,7 @@ class HardcoreSurvivalState(State):
         x0 = panel.centerx - grid_w // 2
         y0 = panel.top + 66
         cur_floor = int(getattr(self, "hr_floor", 0))
+        home_floor = int(getattr(self, "hr_home_floor", -1))
 
         for local_i, f in enumerate(page_opts):
             i = int(start) + int(local_i)
@@ -10913,13 +12913,17 @@ class HardcoreSurvivalState(State):
             selected = int(i) == int(sel_i)
             is_cur = int(f) == cur_floor
             bg = (44, 44, 52) if selected else (26, 26, 32)
-            border = (240, 240, 255) if selected else (90, 90, 110)      
+            border = (240, 240, 255) if selected else (90, 90, 110)     
             if is_cur and not selected:
                 border = (255, 220, 140)
+            if int(f) == int(home_floor) and int(home_floor) > 0 and not selected and not is_cur:
+                border = (120, 200, 140)
             pygame.draw.rect(surface, bg, br, border_radius=8)
-            pygame.draw.rect(surface, border, br, 2, border_radius=8)
+            pygame.draw.rect(surface, border, br, 2, border_radius=8)   
             label = "大堂" if int(f) == 0 else str(int(f))
             draw_text(surface, self.app.font_s, label, (br.centerx, br.centery), pygame.Color(230, 230, 240), anchor="center")
+            if int(f) == int(home_floor) and int(home_floor) > 0:
+                pygame.draw.circle(surface, (120, 200, 140), (br.right - 10, br.y + 8), 3)
 
         draw_text(
             surface,
@@ -11089,6 +13093,249 @@ class HardcoreSurvivalState(State):
         else:
             self.rv_ui_storage_index = (int(self.rv_ui_storage_index) + dy * cols) % len(self.rv_storage.slots)
 
+    def _home_ui_storage_kind_norm(self) -> str:
+        kind = str(getattr(self, "home_ui_storage_kind", "cabinet")).strip().lower()
+        return "fridge" if kind == "fridge" else "cabinet"
+
+    def _home_ui_storage_inv(self) -> HardcoreSurvivalState._Inventory:
+        if self._home_ui_storage_kind_norm() == "fridge":
+            inv = getattr(self, "fridge_storage", None)
+            if inv is not None:
+                return inv
+        return self.home_storage
+
+    def _home_ui_storage_label(self) -> str:
+        return "冰箱" if self._home_ui_storage_kind_norm() == "fridge" else "柜子"
+
+    def _home_ui_storage_title(self) -> str:
+        return "冰箱" if self._home_ui_storage_kind_norm() == "fridge" else "家中储物柜"
+
+    def _home_ui_open(
+        self,
+        *,
+        open_block: tuple[int, int, int, int] | None = None,
+        storage_kind: str = "cabinet",
+    ) -> None:
+        if not getattr(self, "hr_interior", False):
+            return
+        if str(getattr(self, "hr_mode", "lobby")) != "home":
+            return
+        self.inv_open = False
+        self.rv_ui_open = False
+        self._gallery_open = False
+        self.home_ui_open = True
+        self.home_ui_focus = "storage"
+        self.home_ui_storage_kind = "fridge" if str(storage_kind).strip().lower() == "fridge" else "cabinet"
+        self.home_ui_open_block = open_block
+        self.home_ui_player_index = int(
+            clamp(int(getattr(self, "home_ui_player_index", 0)), 0, len(self.inventory.slots) - 1)
+        )
+        storage = self._home_ui_storage_inv()
+        self.home_ui_storage_index = int(
+            clamp(int(getattr(self, "home_ui_storage_index", 0)), 0, len(storage.slots) - 1)
+        )
+        title = "冰箱" if self._home_ui_storage_kind_norm() == "fridge" else "储物柜"
+        target = self._home_ui_storage_label()
+        self._set_home_ui_status(
+            f"{title}：Tab 切换 背包/{target} | Enter 转移 | Esc 关闭",
+            seconds=2.0,
+        )
+
+    def _home_ui_close(self) -> None:
+        self.home_ui_open = False
+        self.home_ui_focus = "storage"
+        self.home_ui_open_block = None
+
+    def _home_ui_cycle_focus(self) -> None:
+        cur = str(getattr(self, "home_ui_focus", "storage"))
+        self.home_ui_focus = "player" if cur != "player" else "storage"
+
+    def _home_ui_transfer(self, *, from_player: bool) -> None:
+        storage = self._home_ui_storage_inv()
+        if from_player:
+            src = self.inventory
+            dst = storage
+            idx = int(getattr(self, "home_ui_player_index", 0))
+        else:
+            src = storage
+            dst = self.inventory
+            idx = int(getattr(self, "home_ui_storage_index", 0))
+
+        if not (0 <= idx < len(src.slots)):
+            self._set_home_ui_status("槽位无效", seconds=1.2)
+            return
+        st = src.slots[idx]
+        if st is None:
+            self._set_home_ui_status("空", seconds=1.0)
+            return
+        before = int(st.qty)
+        left = int(dst.add(st.item_id, int(st.qty), self._ITEMS))
+        moved = int(before - left)
+        if moved <= 0:
+            self._set_home_ui_status("空间不足", seconds=1.2)
+            return
+        if left <= 0:
+            src.slots[idx] = None
+        else:
+            st.qty = int(left)
+        idef = self._ITEMS.get(st.item_id)
+        name = idef.name if idef is not None else st.item_id
+        self._set_home_ui_status(f"转移: {name} x{moved}", seconds=1.6)
+
+    def _handle_home_ui_key(self, key: int) -> None:
+        if key in (pygame.K_ESCAPE,):
+            self._home_ui_close()
+            return
+        if key in (pygame.K_TAB,):
+            self._home_ui_cycle_focus()
+            return
+        if key in (pygame.K_RETURN, pygame.K_SPACE):
+            focus = str(getattr(self, "home_ui_focus", "storage"))
+            if focus == "player":
+                self._home_ui_transfer(from_player=True)
+            else:
+                self._home_ui_transfer(from_player=False)
+            return
+
+        move: tuple[int, int] | None = None
+        if key in (pygame.K_LEFT, pygame.K_a):
+            move = (-1, 0)
+        elif key in (pygame.K_RIGHT, pygame.K_d):
+            move = (1, 0)
+        elif key in (pygame.K_UP, pygame.K_w):
+            move = (0, -1)
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            move = (0, 1)
+        if move is None:
+            return
+
+        focus = str(getattr(self, "home_ui_focus", "storage"))
+        dx, dy = int(move[0]), int(move[1])
+        if focus == "player":
+            cols = max(1, int(self.inventory.cols))
+            if dx != 0:
+                self.home_ui_player_index = (int(self.home_ui_player_index) + dx) % len(self.inventory.slots)
+            else:
+                self.home_ui_player_index = (int(self.home_ui_player_index) + dy * cols) % len(self.inventory.slots)
+            return
+
+        storage = self._home_ui_storage_inv()
+        cols = max(1, int(storage.cols))
+        if dx != 0:
+            self.home_ui_storage_index = (int(self.home_ui_storage_index) + dx) % len(storage.slots)
+        else:
+            self.home_ui_storage_index = (int(self.home_ui_storage_index) + dy * cols) % len(storage.slots)
+
+    def _handle_home_ui_mouse(self, event: pygame.event.Event) -> None:
+        if not getattr(self, "home_ui_open", False):
+            return
+        if event.type not in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+            return
+        if not hasattr(event, "pos"):
+            return
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return
+        mx, my = int(internal[0]), int(internal[1])
+
+        # Mirror the layout math in _draw_home_storage_ui() so hit-testing matches.
+        panel = pygame.Rect(16, 14, INTERNAL_W - 32, INTERNAL_H - 28)
+        slot = 22
+        gap = 4
+
+        storage = self._home_ui_storage_inv()
+        storage_label = self._home_ui_storage_label()
+
+        pcols = max(1, int(self.inventory.cols))
+        prows = int(math.ceil(len(self.inventory.slots) / pcols))
+        pgrid_w = pcols * slot + (pcols - 1) * gap
+        pgrid_h = prows * slot + (prows - 1) * gap
+
+        scols = max(1, int(storage.cols))
+        srows = int(math.ceil(len(storage.slots) / scols))
+        sgrid_w = scols * slot + (scols - 1) * gap
+        sgrid_h = srows * slot + (srows - 1) * gap
+
+        inv_y = panel.top + 46
+        left_x = panel.left + 14
+        right_x = panel.right - 14 - sgrid_w
+
+        content_h = max(pgrid_h, sgrid_h) + 20
+        inv_y = int(clamp(inv_y, panel.top + 42, panel.bottom - 52 - content_h))
+
+        pgrid = pygame.Rect(int(left_x), int(inv_y), int(pgrid_w), int(pgrid_h))
+        sgrid = pygame.Rect(int(right_x), int(inv_y), int(sgrid_w), int(sgrid_h))
+
+        # Clickable "tabs" (the labels above each grid).
+        lab_y = int(inv_y - 14)
+        bw, bh = self.app.font_s.size("背包")
+        sw, sh = self.app.font_s.size(storage_label)
+        tab_player = pygame.Rect(int(left_x), int(lab_y), int(bw), int(bh))
+        tab_storage = pygame.Rect(int(right_x), int(lab_y), int(sw), int(sh))
+
+        def hit_grid(
+            *,
+            grid: pygame.Rect,
+            cols: int,
+            count: int,
+            x0: int,
+            y0: int,
+        ) -> int | None:
+            if not grid.collidepoint(mx, my):
+                return None
+            lx = int(mx - int(x0))
+            ly = int(my - int(y0))
+            cell = int(slot + gap)
+            if cell <= 0:
+                return None
+            cx = int(lx // cell)
+            cy = int(ly // cell)
+            if cx < 0 or cy < 0:
+                return None
+            if cx >= int(cols):
+                return None
+            # Ignore clicks on the gap area.
+            if int(lx % cell) >= int(slot) or int(ly % cell) >= int(slot):
+                return None
+            idx = int(cy * int(cols) + cx)
+            if not (0 <= idx < int(count)):
+                return None
+            return int(idx)
+
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            btn = int(getattr(event, "button", 0))
+            if btn == 1:
+                if tab_player.collidepoint(mx, my):
+                    self.home_ui_focus = "player"
+                    return
+                if tab_storage.collidepoint(mx, my):
+                    self.home_ui_focus = "storage"
+                    return
+                idx = hit_grid(grid=pgrid, cols=pcols, count=len(self.inventory.slots), x0=left_x, y0=inv_y)
+                if idx is not None:
+                    self.home_ui_focus = "player"
+                    self.home_ui_player_index = int(idx)
+                    return
+                idx = hit_grid(grid=sgrid, cols=scols, count=len(storage.slots), x0=right_x, y0=inv_y)
+                if idx is not None:
+                    self.home_ui_focus = "storage"
+                    self.home_ui_storage_index = int(idx)
+                    return
+            # Right-click transfers for mouse-only usability.
+            if btn == 3:
+                idx = hit_grid(grid=pgrid, cols=pcols, count=len(self.inventory.slots), x0=left_x, y0=inv_y)
+                if idx is not None:
+                    self.home_ui_focus = "player"
+                    self.home_ui_player_index = int(idx)
+                    self._home_ui_transfer(from_player=True)
+                    return
+                idx = hit_grid(grid=sgrid, cols=scols, count=len(storage.slots), x0=right_x, y0=inv_y)
+                if idx is not None:
+                    self.home_ui_focus = "storage"
+                    self.home_ui_storage_index = int(idx)
+                    self._home_ui_transfer(from_player=False)
+                    return
+
     def _tile_solid(self, tile_id: int) -> bool:
         t = self._TILES.get(int(tile_id))
         return bool(t.solid) if t is not None else False
@@ -11106,8 +13353,19 @@ class HardcoreSurvivalState(State):
         hits: list[pygame.Rect] = []
         for ty in range(top, bottom + 1):
             for tx in range(left, right + 1):
-                tile = self.world.get_tile(tx, ty)
-                if not self._tile_solid(tile):
+                tile = int(self.world.get_tile(tx, ty))
+                solid = bool(self._tile_solid(tile))
+                if tile == int(self.T_DOOR):
+                    # Prevent stepping "onto" portal/sealed doors (e.g. high-rises),
+                    # which makes it look like the player can walk on the facade.
+                    leads_to_floor = False
+                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        if int(self.world.get_tile(int(tx + dx), int(ty + dy))) == int(self.T_FLOOR):
+                            leads_to_floor = True
+                            break
+                    if not leads_to_floor:
+                        solid = True
+                if not solid:
                     continue
                 tile_rect = pygame.Rect(tx * self.TILE_SIZE, ty * self.TILE_SIZE, self.TILE_SIZE, self.TILE_SIZE)
                 if rect.colliderect(tile_rect):
@@ -11213,30 +13471,54 @@ class HardcoreSurvivalState(State):
         return pygame.Vector2(rect.centerx, rect.centery)
 
     def _move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
-        rect = pygame.Rect(int(round(pos.x - w / 2)), int(round(pos.y - h / 2)), int(w), int(h))
-        dx = float(vel.x * dt)
-        dy = float(vel.y * dt)
+        # Use float movement (sub-pixel accumulation) then resolve collisions
+        # with an int rect. This keeps pixel-art rendering crisp while allowing
+        # slow entities (e.g., zombies) to actually move.
+        w = int(w)
+        h = int(h)
+        p = pygame.Vector2(pos)
+        dx = float(vel.x) * float(dt)
+        dy = float(vel.y) * float(dt)
 
         if dx != 0.0:
-            rect.x += int(round(dx))
+            p.x += float(dx)
+            rect = pygame.Rect(
+                iround(float(p.x) - float(w) / 2.0),
+                iround(float(p.y) - float(h) / 2.0),
+                int(w),
+                int(h),
+            )
             for hit in self._collide_rect_world(rect):
-                if dx > 0:
+                if dx > 0.0:
                     rect.right = hit.left
                 else:
                     rect.left = hit.right
+                p.x = float(rect.centerx)
 
         if dy != 0.0:
-            rect.y += int(round(dy))
+            p.y += float(dy)
+            rect = pygame.Rect(
+                iround(float(p.x) - float(w) / 2.0),
+                iround(float(p.y) - float(h) / 2.0),
+                int(w),
+                int(h),
+            )
             for hit in self._collide_rect_world(rect):
-                if dy > 0:
+                if dy > 0.0:
                     rect.bottom = hit.top
                 else:
                     rect.top = hit.bottom
+                p.y = float(rect.centery)
 
-        return pygame.Vector2(rect.centerx, rect.centery)
+        return p
 
     def _move_box_vehicle(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
-        rect = pygame.Rect(int(round(pos.x - w / 2)), int(round(pos.y - h / 2)), int(w), int(h))
+        rect = pygame.Rect(
+            iround(float(pos.x) - float(w) / 2.0),
+            iround(float(pos.y) - float(h) / 2.0),
+            int(w),
+            int(h),
+        )
         dx = float(vel.x * dt)
         dy = float(vel.y * dt)
 
@@ -11269,6 +13551,11 @@ class HardcoreSurvivalState(State):
             if self.rv_ui_status_left <= 0.0:
                 self.rv_ui_status = ""
 
+        if getattr(self, "home_ui_status_left", 0.0) > 0.0:
+            self.home_ui_status_left = max(0.0, float(self.home_ui_status_left) - dt)
+            if self.home_ui_status_left <= 0.0:
+                self.home_ui_status = ""
+
         if getattr(self, "muzzle_flash_left", 0.0) > 0.0:
             self.muzzle_flash_left = max(0.0, float(self.muzzle_flash_left) - dt)
 
@@ -11282,7 +13569,7 @@ class HardcoreSurvivalState(State):
                     self.app.set_state(MainMenuState(self.app))
             return
 
-        if self.inv_open or getattr(self, "rv_ui_open", False) or getattr(self, "hr_elevator_ui_open", False) or getattr(self, "sch_elevator_ui_open", False) or getattr(self, "_gallery_open", False) or getattr(self, "world_map_open", False):
+        if self.inv_open or getattr(self, "rv_ui_open", False) or getattr(self, "home_ui_open", False) or getattr(self, "hr_elevator_ui_open", False) or getattr(self, "sch_elevator_ui_open", False) or getattr(self, "_gallery_open", False) or getattr(self, "world_map_open", False):
             self.player.vel.update(0, 0)
             self.player.walk_phase *= 0.85
             self.rv.vel.update(0, 0)
@@ -11356,13 +13643,39 @@ class HardcoreSurvivalState(State):
         if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
             move.x += 1
 
+        # Sit/Sleep pose locks movement inside interiors.
+        pose = getattr(self, "player_pose", None)
+        if pose:
+            cur_space = "world"
+            if getattr(self, "sch_interior", False):
+                cur_space = "sch"
+            elif getattr(self, "hr_interior", False):
+                cur_space = "hr"
+            elif getattr(self, "rv_interior", False):
+                cur_space = "rv"
+            if str(getattr(self, "player_pose_space", "")) != cur_space:
+                self._clear_player_pose()
+            else:
+                self.player_pose_phase = float(getattr(self, "player_pose_phase", 0.0)) + dt
+                left = float(getattr(self, "player_pose_left", 0.0))
+                if left > 0.0:
+                    self.player_pose_left = max(0.0, left - dt)
+                    if self.player_pose_left <= 0.0:
+                        self._clear_player_pose()
+                if getattr(self, "player_pose", None) is not None:
+                    if move.length_squared() > 0.001:
+                        self._clear_player_pose()
+                    else:
+                        move = pygame.Vector2(0, 0)
+
+        move_raw = pygame.Vector2(move)
         if move.length_squared() > 0.001:
             move = move.normalize()
             if self.mount != "rv":
-                self.player.facing = pygame.Vector2(move.x, move.y)      
+                self.player.facing = pygame.Vector2(move.x, move.y)
 
         if getattr(self, "sch_interior", False):
-            base_speed = 64.0
+            base_speed = 60.0
             self.sch_int_vel = move * base_speed
             self.player_sprinting = False
             if self.sch_int_vel.length_squared() > 0.1:
@@ -11384,7 +13697,38 @@ class HardcoreSurvivalState(State):
             return
 
         if getattr(self, "hr_interior", False):
-            base_speed = 64.0
+            base_speed = 60.0
+
+            # "Walk into the lobby then to the elevator" feel on entry.
+            if bool(getattr(self, "hr_auto_walk_to_elevator", False)):
+                # Allow player input to cancel the auto-walk.
+                if move.length_squared() > 0.001:
+                    self.hr_auto_walk_to_elevator = False
+                else:
+                    delay = float(getattr(self, "hr_auto_walk_delay", 0.0))
+                    if delay > 0.0:
+                        self.hr_auto_walk_delay = max(0.0, delay - dt)
+                        move = pygame.Vector2(0, 0)
+                    elif str(getattr(self, "hr_mode", "lobby")) == "lobby":
+                        elev = self._hr_int_find("E")
+                        if elev is None:
+                            self.hr_auto_walk_to_elevator = False
+                        else:
+                            ex, ey = elev
+                            tile = int(self._HR_INT_TILE_SIZE)
+                            target = pygame.Vector2((ex + 0.5) * tile, (ey + 0.5) * tile)
+                            diff = target - pygame.Vector2(self.hr_int_pos)
+                            d2 = float(diff.length_squared())
+                            if d2 <= 3.0 * 3.0:
+                                self.hr_auto_walk_to_elevator = False
+                                move = pygame.Vector2(0, 0)
+                                if not bool(getattr(self, "hr_elevator_ui_open", False)):
+                                    self._hr_elevator_open()
+                            else:
+                                if diff.length_squared() > 0.001:
+                                    move = diff.normalize()
+                                    base_speed = 56.0
+
             self.hr_int_vel = move * base_speed
             self.player_sprinting = False
             if self.hr_int_vel.length_squared() > 0.1:
@@ -11406,7 +13750,7 @@ class HardcoreSurvivalState(State):
             return
 
         if getattr(self, "rv_interior", False):
-            base_speed = 64.0
+            base_speed = 60.0
             self.rv_int_vel = move * base_speed
             self.player_sprinting = False
             if self.rv_int_vel.length_squared() > 0.1:
@@ -11569,16 +13913,16 @@ class HardcoreSurvivalState(State):
             self.player.walk_phase *= 0.85
             self.player_sprinting = False
         else:
-            base_speed = 70.0
-            tx = int(math.floor(self.player.pos.x / self.TILE_SIZE))     
-            ty = int(math.floor(self.player.pos.y / self.TILE_SIZE))      
+            base_speed = 60.0
+            tx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
+            ty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
             tile_under = self.world.get_tile(tx, ty)
             speed = base_speed * self._tile_slow(tile_under)
-            speed *= 0.80 + 0.20 * (float(self.player.condition) / 100.0) 
+            speed *= 0.80 + 0.20 * (float(self.player.condition) / 100.0)
             speed *= self._weather_move_mult()
 
             want_sprint = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
-            moving_now = move.length_squared() > 0.001
+            moving_now = move_raw.length_squared() > 0.001
             sprint_intent = bool(want_sprint and moving_now)
             stamina = float(self.player.stamina)
 
@@ -11601,19 +13945,34 @@ class HardcoreSurvivalState(State):
                 regen_mod *= 0.55 + 0.45 * (self.player.morale / 100.0)
                 self.player.stamina = float(clamp(stamina + dt * 16.0 * regen_mod, 0.0, 100.0))
             self.player_sprinting = bool(can_sprint)
-            self.player.vel = move * speed
+            # Keep raw 8-way input (no normalization) so diagonal walking
+            # doesn't "stutter" in pixel space.
+            self.player.vel = move_raw * speed
 
             if self.player.vel.length_squared() > 0.1:
                 self.player.walk_phase += dt * 10.0 * (self.player.vel.length() / base_speed)
             else:
                 self.player.walk_phase *= 0.92
 
+            # Walk-into-door: special buildings (highrise/school) are portals.
+            if self._try_walk_into_special_door(move, dt):
+                return
+
             self.player.pos = self._move_box(self.player.pos, self.player.vel, dt, w=self.player.w, h=self.player.h)
 
         focus = pygame.Vector2(self.player.pos)
-        # Pixel-perfect camera: avoid round() jitter while walking.
-        self.cam_x = int(math.floor(focus.x - INTERNAL_W / 2))
-        self.cam_y = int(math.floor(focus.y - INTERNAL_H / 2))
+        target_cam_x = float(focus.x - INTERNAL_W / 2)
+        target_cam_y = float(focus.y - INTERNAL_H / 2)
+
+        # Camera: direct follow (no smoothing). Keep float + int versions.
+        self.cam_fx = float(target_cam_x)
+        self.cam_fy = float(target_cam_y)
+        # Pixel-perfect camera: snap to int pixels. Use iround() (instead of
+        # floor) to avoid diagonal "flicker" from asymmetric rounding.
+        self.cam_x = int(iround(float(self.cam_fx)))
+        self.cam_y = int(iround(float(self.cam_fy)))
+
+        self._stream_world_chunks()
 
         if self.gun is not None and float(self.gun.reload_left) > 0.0 and getattr(self, "_reload_lock_dir", None) is not None:
             lock = pygame.Vector2(self._reload_lock_dir)
@@ -11641,6 +14000,82 @@ class HardcoreSurvivalState(State):
     def _player_chunk(self) -> tuple[int, int]:
         tx, ty = self._player_tile()
         return tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE
+
+    def _stream_world_chunks(self) -> None:
+        # Stream/generate chunks ahead of the camera to avoid hitches when
+        # walking diagonally across chunk corners. Render code only "peeks"
+        # tiles/chunks and never generates them.
+        if bool(getattr(self, "rv_interior", False)) or bool(getattr(self, "hr_interior", False)) or bool(
+            getattr(self, "sch_interior", False)
+        ):
+            return
+
+        tx, ty = self._player_tile()
+        pcx = int(tx) // int(self.CHUNK_SIZE)
+        pcy = int(ty) // int(self.CHUNK_SIZE)
+
+        # Always ensure the current chunk exists (physics/collisions rely on it).
+        self.world.get_chunk(int(pcx), int(pcy))
+
+        # Collision safety near chunk edges: ensure neighbor chunks that the
+        # player's collider might touch soon.
+        lx = int(tx - pcx * int(self.CHUNK_SIZE))
+        ly = int(ty - pcy * int(self.CHUNK_SIZE))
+        margin = 3  # tiles
+        need_x = [0]
+        if lx <= int(margin):
+            need_x.append(-1)
+        elif lx >= int(self.CHUNK_SIZE) - 1 - int(margin):
+            need_x.append(1)
+        need_y = [0]
+        if ly <= int(margin):
+            need_y.append(-1)
+        elif ly >= int(self.CHUNK_SIZE) - 1 - int(margin):
+            need_y.append(1)
+        for oy in need_y:
+            for ox in need_x:
+                if int(ox) == 0 and int(oy) == 0:
+                    continue
+                self.world.get_chunk(int(pcx + ox), int(pcy + oy))
+
+        # Request chunks in/around the camera view for smooth scrolling.
+        cam_x = int(getattr(self, "cam_x", 0))
+        cam_y = int(getattr(self, "cam_y", 0))
+        start_tx = int(math.floor(float(cam_x) / float(self.TILE_SIZE))) - 2
+        start_ty = int(math.floor(float(cam_y) / float(self.TILE_SIZE))) - 2
+        end_tx = int(math.floor(float(cam_x + INTERNAL_W) / float(self.TILE_SIZE))) + 2
+        end_ty = int(math.floor(float(cam_y + INTERNAL_H) / float(self.TILE_SIZE))) + 2
+
+        chunk_pad = 1
+        start_cx = start_tx // int(self.CHUNK_SIZE) - int(chunk_pad)
+        end_cx = end_tx // int(self.CHUNK_SIZE) + int(chunk_pad)
+        start_cy = start_ty // int(self.CHUNK_SIZE) - int(chunk_pad)
+        end_cy = end_ty // int(self.CHUNK_SIZE) + int(chunk_pad)
+        for cy in range(int(start_cy), int(end_cy) + 1):
+            for cx in range(int(start_cx), int(end_cx) + 1):
+                self.world.request_chunk(int(cx), int(cy))
+
+        tick = int(getattr(self, "_stream_tick", 0)) + 1
+        self._stream_tick = int(tick)
+
+        mount = getattr(self, "mount", None)
+        moving = False
+        if mount == "rv" and getattr(self, "rv", None) is not None:
+            moving = self.rv.vel.length_squared() > 0.1
+        elif mount == "bike" and getattr(self, "bike", None) is not None:
+            moving = self.bike.vel.length_squared() > 0.1
+        else:
+            moving = self.player.vel.length_squared() > 0.1
+
+        # Budgeted generation: generate more when standing still; while moving,
+        # generate occasionally to keep ahead without constant stalls.
+        budget = 2 if not moving else 0
+        if moving:
+            interval = 6 if mount is not None else 12
+            if (tick % int(interval)) == 0:
+                budget = 1
+        if budget > 0:
+            self.world.pump_generation(max_chunks=int(budget))
 
     def _find_nearest_item(self, *, radius_px: float) -> tuple["_Chunk | None", "_WorldItem | None"]:
         cx, cy = self._player_chunk()
@@ -11689,6 +14124,55 @@ class HardcoreSurvivalState(State):
         mid = str(getattr(self.bike, "model_id", "bike"))
         d = str(getattr(self, "bike_dir", "right"))
         pos = pygame.Vector2(self.bike.pos)
+        w, h = self._two_wheel_collider_px(mid)
+
+        def rect_at(p: pygame.Vector2) -> pygame.Rect:
+            return pygame.Rect(
+                int(iround(float(p.x) - float(w) / 2.0)),
+                int(iround(float(p.y) - float(h) / 2.0)),
+                int(w),
+                int(h),
+            )
+
+        def inside_any_building(tx: int, ty: int) -> bool:
+            ch = self.world.get_chunk(int(tx) // self.CHUNK_SIZE, int(ty) // self.CHUNK_SIZE)
+            for bx0, by0, bw, bh, _roof_kind, _floors in getattr(ch, "buildings", []):
+                if int(bx0) <= int(tx) < int(bx0) + int(bw) and int(by0) <= int(ty) < int(by0) + int(bh):
+                    return True
+            return False
+
+        # Don't leave a parked bike "on top of" building roofs/facades.
+        tx0 = int(math.floor(pos.x / self.TILE_SIZE))
+        ty0 = int(math.floor(pos.y / self.TILE_SIZE))
+        if inside_any_building(tx0, ty0) or self._collide_rect_world_vehicle(rect_at(pos)):
+            found: pygame.Vector2 | None = None
+            # Spiral search around the current tile.
+            search_r = 6
+            for r in range(int(search_r) + 1):
+                for dy in range(-int(r), int(r) + 1):
+                    for dx in range(-int(r), int(r) + 1):
+                        if max(abs(int(dx)), abs(int(dy))) != int(r):
+                            continue
+                        tx = int(tx0 + int(dx))
+                        ty = int(ty0 + int(dy))
+                        if inside_any_building(tx, ty):
+                            continue
+                        p = pygame.Vector2(
+                            (float(tx) + 0.5) * float(self.TILE_SIZE),
+                            (float(ty) + 0.5) * float(self.TILE_SIZE),
+                        )
+                        if self._collide_rect_world_vehicle(rect_at(p)):
+                            continue
+                        found = p
+                        break
+                    if found is not None:
+                        break
+                if found is not None:
+                    break
+            if found is None:
+                return
+            pos = found
+
         tx = int(math.floor(pos.x / self.TILE_SIZE))
         ty = int(math.floor(pos.y / self.TILE_SIZE))
         chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
@@ -11705,19 +14189,107 @@ class HardcoreSurvivalState(State):
             )
         )
 
+    def _special_building_for_door_tile(
+        self, tx: int, ty: int
+    ) -> HardcoreSurvivalState._SpecialBuilding | None:
+        door = (int(tx), int(ty))
+        cx = int(door[0]) // self.CHUNK_SIZE
+        cy = int(door[1]) // self.CHUNK_SIZE
+        for oy in (-1, 0, 1):
+            for ox in (-1, 0, 1):
+                chunk = self.world.get_chunk(int(cx + ox), int(cy + oy))
+                for sb in getattr(chunk, "special_buildings", []):
+                    if door in getattr(sb, "door_tiles", ()):
+                        return sb
+        return None
+
+    def _try_walk_into_special_door(self, move: pygame.Vector2, dt: float) -> bool:
+        if self.mount is not None:
+            return False
+        if move.length_squared() <= 0.001:
+            return False
+
+        rect = self.player.rect_at(self.player.pos)
+        dx_f = float(self.player.vel.x) * float(dt)
+        dy_f = float(self.player.vel.y) * float(dt)
+        dx = int(round(dx_f))
+        dy = int(round(dy_f))
+        if dx == 0 and abs(dx_f) > 0.001:
+            dx = 1 if dx_f > 0 else -1
+        if dy == 0 and abs(dy_f) > 0.001:
+            dy = 1 if dy_f > 0 else -1
+        if dx == 0 and dy == 0:
+            return False
+
+        next_rect = rect.move(int(dx), int(dy))
+        tx, ty = self._player_tile()
+        candidates = [
+            (tx, ty),
+            (tx + 1, ty),
+            (tx - 1, ty),
+            (tx, ty + 1),
+            (tx, ty - 1),
+            (tx + 1, ty + 1),
+            (tx + 1, ty - 1),
+            (tx - 1, ty + 1),
+            (tx - 1, ty - 1),
+        ]
+        for cx, cy in candidates:
+            cx = int(cx)
+            cy = int(cy)
+            if int(self.world.get_tile(cx, cy)) != int(self.T_DOOR):
+                continue
+            door_rect = pygame.Rect(
+                int(cx * self.TILE_SIZE),
+                int(cy * self.TILE_SIZE),
+                int(self.TILE_SIZE),
+                int(self.TILE_SIZE),
+            )
+            if not next_rect.colliderect(door_rect):
+                continue
+
+            # Only enter if you're actually walking *towards* the door.
+            door_center = pygame.Vector2(
+                (float(cx) + 0.5) * float(self.TILE_SIZE),
+                (float(cy) + 0.5) * float(self.TILE_SIZE),
+            )
+            to_door = door_center - pygame.Vector2(self.player.pos)
+            if to_door.length_squared() > 0.001:
+                to_door = to_door.normalize()
+                if float(move.dot(to_door)) < 0.25:
+                    continue
+
+            sb = self._special_building_for_door_tile(cx, cy)
+            if sb is None:
+                continue
+            kind = str(getattr(sb, "kind", ""))
+            if kind == "highrise":
+                self._hr_interior_enter(sb)
+                return True
+            if kind == "school":
+                self._sch_interior_enter(sb)
+                return True
+        return False
+
     def _interact_primary(self) -> None:
-        # Primary interact key: prefer contextual interactions, otherwise pickup.
-        if self._try_enter_highrise():
-            return
-        if self._try_enter_school():
-            return
+        # Primary interact key on the world map: pickup only (doors are walk-into).
         self._try_pickup()
 
     def _try_enter_highrise(self) -> bool:
         if getattr(self, "hr_interior", False):
             return False
         tx, ty = self._player_tile()
-        candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+        candidates = [
+            (tx, ty),
+            (tx + 1, ty),
+            (tx - 1, ty),
+            (tx, ty + 1),
+            (tx, ty - 1),
+            (tx + 1, ty + 1),
+            (tx + 1, ty - 1),
+            (tx - 1, ty + 1),
+            (tx - 1, ty - 1),
+        ]
         for cx, cy in candidates:
             if self.world.get_tile(int(cx), int(cy)) != int(self.T_DOOR):
                 continue
@@ -11738,7 +14310,17 @@ class HardcoreSurvivalState(State):
         if getattr(self, "sch_interior", False):
             return False
         tx, ty = self._player_tile()
-        candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+        candidates = [
+            (tx, ty),
+            (tx + 1, ty),
+            (tx - 1, ty),
+            (tx, ty + 1),
+            (tx, ty - 1),
+            (tx + 1, ty + 1),
+            (tx + 1, ty - 1),
+            (tx - 1, ty + 1),
+            (tx - 1, ty - 1),
+        ]
         for cx, cy in candidates:
             if self.world.get_tile(int(cx), int(cy)) != int(self.T_DOOR):
                 continue
@@ -12031,14 +14613,17 @@ class HardcoreSurvivalState(State):
             walk = frames[1:]
             phase = (float(self.player.walk_phase) % math.tau) / math.tau
             step_idx = int(phase * len(walk)) % len(walk)
-            if step_idx in (1, 4):
+            if is_run and step_idx in (1, 4):
                 bob = 1
             spr = walk[step_idx]
         else:
             spr = frames[0]
 
         rect = spr.get_rect()
-        rect.midbottom = (int(round(self.player.pos.x)), int(round(self.player.pos.y + self.player.h / 2)))
+        rect.midbottom = (
+            iround(float(self.player.pos.x)),
+            iround(float(self.player.pos.y) + float(self.player.h) / 2.0),
+        )
         rect.y += int(bob)
         sk = self._survivor_skeleton_nodes(
             spr_dir,
@@ -12794,22 +15379,22 @@ class HardcoreSurvivalState(State):
                 surface.fill(line2, pygame.Rect(rect.centerx - 2, rect.centery + 2, 4, 1))
 
             curb = self._tint(col, add=(-34, -34, -34))
-            if int(self.world.get_tile(tx, ty - 1)) != int(self.T_PARKING):
+            if int(self.world.peek_tile(tx, ty - 1)) != int(self.T_PARKING):
                 surface.fill(curb, pygame.Rect(rect.x, rect.y, rect.w, 1))
-            if int(self.world.get_tile(tx, ty + 1)) != int(self.T_PARKING):
+            if int(self.world.peek_tile(tx, ty + 1)) != int(self.T_PARKING):
                 surface.fill(curb, pygame.Rect(rect.x, rect.bottom - 1, rect.w, 1))
-            if int(self.world.get_tile(tx - 1, ty)) != int(self.T_PARKING):
+            if int(self.world.peek_tile(tx - 1, ty)) != int(self.T_PARKING):
                 surface.fill(curb, pygame.Rect(rect.x, rect.y, 1, rect.h))
-            if int(self.world.get_tile(tx + 1, ty)) != int(self.T_PARKING):
+            if int(self.world.peek_tile(tx + 1, ty)) != int(self.T_PARKING):
                 surface.fill(curb, pygame.Rect(rect.right - 1, rect.y, 1, rect.h))
 
         if tile_id == self.T_HIGHWAY:
             # Abandoned highway: lane marks + cracks.
             mark = self._tint(col, add=(44, 44, 50))
-            left = int(self.world.get_tile(tx - 1, ty)) == int(self.T_HIGHWAY)
-            right = int(self.world.get_tile(tx + 1, ty)) == int(self.T_HIGHWAY)
-            up = int(self.world.get_tile(tx, ty - 1)) == int(self.T_HIGHWAY)
-            down = int(self.world.get_tile(tx, ty + 1)) == int(self.T_HIGHWAY)
+            left = int(self.world.peek_tile(tx - 1, ty)) == int(self.T_HIGHWAY)
+            right = int(self.world.peek_tile(tx + 1, ty)) == int(self.T_HIGHWAY)
+            up = int(self.world.peek_tile(tx, ty - 1)) == int(self.T_HIGHWAY)
+            down = int(self.world.peek_tile(tx, ty + 1)) == int(self.T_HIGHWAY)
             horiz = (left or right) and not (up or down)
             vert = (up or down) and not (left or right)
             if horiz and (tx % 6) == 0:
@@ -12831,10 +15416,10 @@ class HardcoreSurvivalState(State):
 
         if tile_id == self.T_ROAD:
             mark = self._tint(col, add=(32, 32, 36))
-            left = int(self.world.get_tile(tx - 1, ty)) == int(self.T_ROAD)
-            right = int(self.world.get_tile(tx + 1, ty)) == int(self.T_ROAD)
-            up = int(self.world.get_tile(tx, ty - 1)) == int(self.T_ROAD)
-            down = int(self.world.get_tile(tx, ty + 1)) == int(self.T_ROAD)
+            left = int(self.world.peek_tile(tx - 1, ty)) == int(self.T_ROAD)
+            right = int(self.world.peek_tile(tx + 1, ty)) == int(self.T_ROAD)
+            up = int(self.world.peek_tile(tx, ty - 1)) == int(self.T_ROAD)
+            down = int(self.world.peek_tile(tx, ty + 1)) == int(self.T_ROAD)
             horiz = (left or right) and not (up or down)
             vert = (up or down) and not (left or right)
             if horiz and (tx % 4) == 0:
@@ -12844,21 +15429,21 @@ class HardcoreSurvivalState(State):
 
         if tile_id in (self.T_PAVEMENT, self.T_SIDEWALK, self.T_BRICK, self.T_CONCRETE, self.T_BOARDWALK):
             curb = self._tint(col, add=(-26, -26, -26))
-            if int(self.world.get_tile(tx, ty - 1)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
+            if int(self.world.peek_tile(tx, ty - 1)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
                 surface.fill(curb, pygame.Rect(rect.x, rect.y, rect.w, 1))
-            if int(self.world.get_tile(tx - 1, ty)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
+            if int(self.world.peek_tile(tx - 1, ty)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
                 surface.fill(curb, pygame.Rect(rect.x, rect.y, 1, rect.h))
             curb_hi = self._tint(col, add=(16, 16, 16))
-            if int(self.world.get_tile(tx, ty + 1)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
+            if int(self.world.peek_tile(tx, ty + 1)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
                 surface.fill(curb_hi, pygame.Rect(rect.x, rect.bottom - 1, rect.w, 1))
-            if int(self.world.get_tile(tx + 1, ty)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
+            if int(self.world.peek_tile(tx + 1, ty)) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
                 surface.fill(curb_hi, pygame.Rect(rect.right - 1, rect.y, 1, rect.h))
 
         if tile_id == self.T_FLOOR:
             shadow = self._tint(col, add=(-18, -18, -18))
-            if int(self.world.get_tile(tx, ty - 1)) == int(self.T_WALL):
+            if int(self.world.peek_tile(tx, ty - 1)) == int(self.T_WALL):
                 surface.fill(shadow, pygame.Rect(rect.x, rect.y, rect.w, 1))
-            if int(self.world.get_tile(tx - 1, ty)) == int(self.T_WALL):
+            if int(self.world.peek_tile(tx - 1, ty)) == int(self.T_WALL):
                 surface.fill(shadow, pygame.Rect(rect.x, rect.y, 1, rect.h))
 
     def _blit_sprite_outline(self, surface: pygame.Surface, spr: pygame.Surface, rect: pygame.Rect, *, color: tuple[int, int, int]) -> None:
@@ -12941,12 +15526,14 @@ class HardcoreSurvivalState(State):
 
         for cy in range(start_cy, end_cy + 1):
             for cx in range(start_cx, end_cx + 1):
-                chunk = self.world.get_chunk(cx, cy)
+                chunk = self.world.peek_chunk(cx, cy)
+                if chunk is None:
+                    continue
 
                 for car in getattr(chunk, "cars", []):
                     p = pygame.Vector2(getattr(car, "pos", pygame.Vector2(0, 0))) - pygame.Vector2(cam_x, cam_y)
-                    sx = int(round(p.x))
-                    sy = int(round(p.y))
+                    sx = iround(float(p.x))
+                    sy = iround(float(p.y))
                     if sx < -80 or sx > INTERNAL_W + 80 or sy < -80 or sy > INTERNAL_H + 80:
                         continue
                     mid = str(getattr(car, "model_id", "schoolbus"))
@@ -12979,8 +15566,8 @@ class HardcoreSurvivalState(State):
 
                 for b in getattr(chunk, "bikes", []):
                     p = pygame.Vector2(getattr(b, "pos", pygame.Vector2(0, 0))) - pygame.Vector2(cam_x, cam_y)
-                    sx = int(round(p.x))
-                    sy = int(round(p.y))
+                    sx = iround(float(p.x))
+                    sy = iround(float(p.y))
                     if sx < -40 or sx > INTERNAL_W + 40 or sy < -40 or sy > INTERNAL_H + 40:
                         continue
                     mid = str(getattr(b, "model_id", "bike"))
@@ -12992,14 +15579,14 @@ class HardcoreSurvivalState(State):
                         continue
                     spr = frames[min(int(frm), len(frames) - 1)]
                     _cw, ch = self._two_wheel_collider_px(mid)
-                    ground_y = int(round(float(sy) + float(ch) / 2.0))
+                    ground_y = iround(float(sy) + float(ch) / 2.0)
                     rect = spr.get_rect()
                     baseline_y = int(self._sprite_baseline_y(spr))
                     rect.centerx = int(sx)
-                    rect.bottom = int(round(float(ground_y) + float(rect.h - baseline_y)))
+                    rect.bottom = iround(float(ground_y) + float(rect.h - baseline_y))
                     shadow = self._two_wheel_shadow_rect(rect, d, ground_y=int(ground_y))
                     sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
-                    pygame.draw.ellipse(sh, (0, 0, 0, 80), sh.get_rect())
+                    pygame.draw.ellipse(sh, (0, 0, 0, 120), sh.get_rect())
                     surface.blit(sh, shadow.topleft)
                     surface.blit(spr, rect)
                     if mouse is not None:
@@ -13051,7 +15638,9 @@ class HardcoreSurvivalState(State):
 
         for cy in range(start_cy, end_cy + 1):
             for cx in range(start_cx, end_cx + 1):
-                chunk = self.world.get_chunk(cx, cy)
+                chunk = self.world.peek_chunk(cx, cy)
+                if chunk is None:
+                    continue
                 for pr in getattr(chunk, "props", []):
                     sx = int(round(pr.pos.x - cam_x))
                     sy = int(round(pr.pos.y - cam_y))
@@ -13072,7 +15661,7 @@ class HardcoreSurvivalState(State):
                         shadow = pygame.Rect(0, 0, sw, 4)
                         shadow.center = (rect.centerx, rect.bottom - 1)
                         sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
-                        pygame.draw.ellipse(sh, (0, 0, 0, 70), sh.get_rect())
+                        pygame.draw.ellipse(sh, (0, 0, 0, 100), sh.get_rect())
                         surface.blit(sh, shadow.topleft)
                         surface.blit(spr, rect)
                     else:
@@ -13125,10 +15714,12 @@ class HardcoreSurvivalState(State):
 
         for cy in range(start_cy, end_cy + 1):
             for cx in range(start_cx, end_cx + 1):
-                chunk = self.world.get_chunk(cx, cy)
+                chunk = self.world.peek_chunk(cx, cy)
+                if chunk is None:
+                    continue
                 for it in chunk.items:
-                    sx = int(round(it.pos.x - cam_x))
-                    sy = int(round(it.pos.y - cam_y))
+                    sx = iround(float(it.pos.x) - float(cam_x))
+                    sy = iround(float(it.pos.y) - float(cam_y))
                     if sx < -8 or sx > INTERNAL_W + 8 or sy < -8 or sy > INTERNAL_H + 8:
                         continue
                     spr = self._ITEM_SPRITES_WORLD.get(it.item_id) or self._ITEM_SPRITES.get(it.item_id)
@@ -13255,7 +15846,7 @@ class HardcoreSurvivalState(State):
         # Soft ground shadow so the two-wheeler doesn't look like it's floating.
         shadow = self._two_wheel_shadow_rect(rect, str(d), ground_y=int(ground_y))
         sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)       
-        pygame.draw.ellipse(sh, (0, 0, 0, 90), sh.get_rect())
+        pygame.draw.ellipse(sh, (0, 0, 0, 130), sh.get_rect())
         surface.blit(sh, shadow.topleft)
         surface.blit(spr, rect)
 
@@ -13735,14 +16326,14 @@ class HardcoreSurvivalState(State):
         doors: list[tuple[int, int]] = []
         # Perimeter only (skip interior doors).
         for x in range(tx0, tx0 + w):
-            if int(self.world.get_tile(x, ty0)) == int(self.T_DOOR):
+            if int(self.world.peek_tile(x, ty0)) == int(self.T_DOOR):
                 doors.append((x, ty0))
-            if int(self.world.get_tile(x, ty0 + h - 1)) == int(self.T_DOOR):
+            if int(self.world.peek_tile(x, ty0 + h - 1)) == int(self.T_DOOR):
                 doors.append((x, ty0 + h - 1))
         for y in range(ty0 + 1, ty0 + h - 1):
-            if int(self.world.get_tile(tx0, y)) == int(self.T_DOOR):
+            if int(self.world.peek_tile(tx0, y)) == int(self.T_DOOR):
                 doors.append((tx0, y))
-            if int(self.world.get_tile(tx0 + w - 1, y)) == int(self.T_DOOR):
+            if int(self.world.peek_tile(tx0 + w - 1, y)) == int(self.T_DOOR):
                 doors.append((tx0 + w - 1, y))
         if not doors:
             return None
@@ -13758,6 +16349,161 @@ class HardcoreSurvivalState(State):
                 side_votes["E"] += 1
         side = max(side_votes.items(), key=lambda kv: kv[1])[0]
         return side, doors
+
+    def _draw_facade_furniture_silhouette(
+        self,
+        surface: pygame.Surface,
+        *,
+        kind: str,
+        x: int,
+        floor_y: int,
+        w: int,
+        max_h: int,
+        seed: int,
+        depth: int = 0,
+    ) -> None:
+        kind = str(kind)
+        x = int(x)
+        floor_y = int(floor_y)
+        w = int(w)
+        max_h = int(max_h)
+        seed = int(seed) & 0xFFFFFFFF
+        depth = int(depth)
+
+        if w <= 2 or max_h <= 2:
+            return
+
+        outline = (10, 10, 12)
+        shade = int(-58 - depth * 10)
+        add = (shade, shade, shade)
+        hi_add = (shade + 18, shade + 18, shade + 18)
+        lo_add = (shade - 14, shade - 14, shade - 14)
+
+        if kind == "table":
+            wood = self._tint((118, 92, 66), add=add)
+            wood_hi = self._tint((118, 92, 66), add=hi_add)
+            wood_lo = self._tint((118, 92, 66), add=lo_add)
+
+            top_h = 2 if max_h >= 6 else 1
+            legs_len = int(clamp(max_h - top_h - 1, 2, 4))
+            top_y = int(floor_y - (legs_len + top_h))
+            top = pygame.Rect(int(x), int(top_y), int(w), int(top_h))
+
+            surface.fill(wood, top)
+            surface.fill(wood_hi, pygame.Rect(top.x, top.y, top.w, 1))
+            pygame.draw.rect(surface, outline, top, 1)
+
+            leg_h = int(floor_y - top.bottom)
+            if leg_h > 0:
+                lx0 = int(x + 2)
+                lx1 = int(x + w - 3)
+                for lx in (lx0, lx1):
+                    if int(x) <= lx < int(x + w):
+                        surface.fill(wood_lo, pygame.Rect(lx, top.bottom, 1, leg_h))
+                        surface.fill(outline, pygame.Rect(lx, top.bottom, 1, leg_h))
+                if leg_h >= 3 and lx1 - lx0 >= 3:
+                    yb = int(floor_y - 2)
+                    surface.fill(wood_lo, pygame.Rect(int(lx0), yb, int(lx1 - lx0 + 1), 1))
+
+            # Chair silhouette (legs visible).
+            if w >= 7 and max_h >= 6 and (seed & 3) == 0:
+                seat_c = self._tint((92, 120, 154), add=add)
+                seat_hi = self._tint((92, 120, 154), add=hi_add)
+                seat_lo = self._tint((92, 120, 154), add=lo_add)
+                cw = int(clamp(w - 2, 5, 7))
+                cx = int(x + (1 if (seed & 4) == 0 else (w - cw - 1)))
+                seat_y = int(floor_y - 3)
+                seat_r = pygame.Rect(cx, seat_y, cw, 2)
+                surface.fill(seat_c, seat_r)
+                surface.fill(seat_hi, pygame.Rect(seat_r.x, seat_r.y, seat_r.w, 1))
+                pygame.draw.rect(surface, outline, seat_r, 1)
+
+                back_h = 3
+                if (seed & 4) == 0:
+                    back = pygame.Rect(seat_r.x, seat_r.y - back_h, 2, back_h)
+                else:
+                    back = pygame.Rect(seat_r.right - 2, seat_r.y - back_h, 2, back_h)
+                surface.fill(seat_lo, back)
+                pygame.draw.rect(surface, outline, back, 1)
+
+                leg_h = int(floor_y - seat_r.bottom)
+                if leg_h > 0:
+                    for lx in (seat_r.x + 1, seat_r.right - 2):
+                        surface.fill(seat_lo, pygame.Rect(int(lx), int(seat_r.bottom), 1, leg_h))
+                        surface.fill(outline, pygame.Rect(int(lx), int(seat_r.bottom), 1, leg_h))
+
+            return
+
+        if kind == "shelf":
+            cab = self._tint((98, 96, 112), add=add)
+            cab_hi = self._tint((98, 96, 112), add=hi_add)
+            cab_lo = self._tint((98, 96, 112), add=lo_add)
+
+            h = int(clamp(max_h, 4, 8))
+            y0 = int(floor_y - h)
+            body = pygame.Rect(int(x), int(y0), int(w), int(h))
+            surface.fill(cab, body)
+            surface.fill(cab_hi, pygame.Rect(body.x, body.y, body.w, 1))
+            pygame.draw.rect(surface, outline, body, 1)
+
+            for sy in range(body.y + 2, body.bottom - 2, 2):
+                surface.fill(cab_lo, pygame.Rect(body.x + 1, sy, max(1, body.w - 2), 1))
+
+            # Feet.
+            surface.fill(cab_lo, pygame.Rect(body.x + 1, floor_y - 1, 1, 1))
+            surface.fill(cab_lo, pygame.Rect(body.right - 2, floor_y - 1, 1, 1))
+
+            # Items: small colored pixels on shelves (deterministic).
+            if body.w >= 6 and body.h >= 5:
+                for i in range(3):
+                    # IMPORTANT: don't use screen coordinates here, otherwise it flickers while walking.
+                    hh = int(
+                        self._hash2_u32(
+                            int((seed ^ 0xA1F3C9D7) + i * 131),
+                            int((seed >> 8) + i * 313),
+                            int(seed ^ 0x9E3779B9),
+                        )
+                    )
+                    ix = int(body.x + 2 + (hh % max(1, body.w - 4)))
+                    iy = int(body.y + 2 + ((hh >> 5) % max(1, body.h - 4)))
+                    col = (200, 86, 86) if (hh & 1) else (86, 210, 130)
+                    col = self._tint(col, add=(shade + 10, shade + 10, shade + 10))
+                    surface.fill(col, pygame.Rect(ix, iy, 1, 1))
+            return
+
+        if kind == "bed":
+            matt = self._tint((156, 150, 170), add=add)
+            matt_hi = self._tint((156, 150, 170), add=hi_add)
+            matt_lo = self._tint((156, 150, 170), add=lo_add)
+            wood = self._tint((118, 92, 66), add=lo_add)
+
+            h = int(clamp(max_h, 4, 7))
+            y0 = int(floor_y - h)
+            bed = pygame.Rect(int(x), int(y0), int(w), int(h))
+            surface.fill(matt, bed)
+            surface.fill(matt_hi, pygame.Rect(bed.x, bed.y, bed.w, 1))
+            pygame.draw.rect(surface, outline, bed, 1)
+
+            if (seed & 1) == 0:
+                hb = pygame.Rect(bed.x, bed.y, 2, bed.h)
+            else:
+                hb = pygame.Rect(bed.right - 2, bed.y, 2, bed.h)
+            surface.fill(wood, hb)
+            pygame.draw.rect(surface, outline, hb, 1)
+
+            px = bed.x + 3 if hb.x == bed.x else bed.right - 6
+            py = bed.y + 2
+            pillow = pygame.Rect(int(px), int(py), 3, 2)
+            surface.fill(matt_hi, pillow)
+            pygame.draw.rect(surface, outline, pillow, 1)
+
+            if bed.w >= 6 and bed.h >= 5:
+                fold_y = bed.y + bed.h // 2
+                surface.fill(matt_lo, pygame.Rect(bed.x + 2, fold_y, max(1, bed.w - 4), 1))
+
+            surface.fill(matt_lo, pygame.Rect(bed.x + 1, floor_y - 1, 1, 1))
+            surface.fill(matt_lo, pygame.Rect(bed.right - 2, floor_y - 1, 1, 1))
+            return
 
     def _draw_building_facades(
         self,
@@ -13781,7 +16527,9 @@ class HardcoreSurvivalState(State):
 
         for cy in range(start_cy, end_cy + 1):
             for cx in range(start_cx, end_cx + 1):
-                chunk = self.world.get_chunk(cx, cy)
+                chunk = self.world.peek_chunk(cx, cy)
+                if chunk is None:
+                    continue
                 for b in getattr(chunk, "buildings", []):
                     tx0, ty0, w, h = int(b[0]), int(b[1]), int(b[2]), int(b[3])
                     roof_kind = int(b[4]) if len(b) > 4 else 0
@@ -14014,6 +16762,9 @@ class HardcoreSurvivalState(State):
                             for xx in range(open_rect.x + 8 + (var % 5), open_rect.right - 6, step):
                                 surface.fill(mull, pygame.Rect(int(xx), open_rect.y + 2, 1, max(1, open_rect.h - 4)))
 
+                            prev_clip = surface.get_clip()
+                            surface.set_clip(open_rect.inflate(-1, -1))
+
                             # Interior silhouettes near the front wall.
                             if open_rect.h >= 6 and int(w) >= 4 and int(h) >= 4:
                                 sample_ys = [int(ty0 + h - 2), int(ty0 + h - 3)]
@@ -14026,7 +16777,7 @@ class HardcoreSurvivalState(State):
                                         px = int(tx * self.TILE_SIZE - cam_x)
                                         if px + self.TILE_SIZE <= open_rect.x or px >= open_rect.right:
                                             continue
-                                        tid = int(self.world.get_tile(tx, sy))
+                                        tid = int(self.world.peek_tile(tx, sy))
                                         if tid == int(self.T_FLOOR):
                                             if style != 2:
                                                 continue
@@ -14048,6 +16799,45 @@ class HardcoreSurvivalState(State):
                                             continue
 
                                         if tid in (int(self.T_TABLE), int(self.T_SHELF), int(self.T_BED)):
+                                            # More detailed facade furniture silhouettes (legs, shelves, pillows).
+                                            fh = int(self._hash2_u32(int(tx), int(sy), seed ^ 0x9E3779B9))
+                                            floor_y = int(open_rect.bottom - 2 - y_off)
+                                            max_h = int(max(3, open_rect.h - 3))
+                                            if tid == int(self.T_TABLE):
+                                                self._draw_facade_furniture_silhouette(
+                                                    surface,
+                                                    kind="table",
+                                                    x=int(px + 1),
+                                                    floor_y=floor_y,
+                                                    w=int(self.TILE_SIZE - 2),
+                                                    max_h=max_h,
+                                                    seed=fh,
+                                                    depth=y_off,
+                                                )
+                                            elif tid == int(self.T_SHELF):
+                                                self._draw_facade_furniture_silhouette(
+                                                    surface,
+                                                    kind="shelf",
+                                                    x=int(px + 1),
+                                                    floor_y=floor_y,
+                                                    w=int(self.TILE_SIZE - 2),
+                                                    max_h=max_h,
+                                                    seed=fh,
+                                                    depth=y_off,
+                                                )
+                                            else:
+                                                self._draw_facade_furniture_silhouette(
+                                                    surface,
+                                                    kind="bed",
+                                                    x=int(px + 1),
+                                                    floor_y=floor_y,
+                                                    w=int(self.TILE_SIZE - 2),
+                                                    max_h=max_h,
+                                                    seed=fh,
+                                                    depth=y_off,
+                                                )
+                                            continue
+
                                             # Keep facade interior silhouettes readable even if minimap hides interiors.
                                             if tid == int(self.T_TABLE):
                                                 c = (104, 82, 62)
@@ -14085,6 +16875,8 @@ class HardcoreSurvivalState(State):
                                 surface.fill(red, pygame.Rect(int(cx - 3), int(cy - 1), 7, 2))
                                 pygame.draw.rect(surface, outline, pygame.Rect(int(cx - 3), int(cy - 3), 7, 7), 1)
 
+                            surface.set_clip(prev_clip)
+
                     # Re-draw the exterior door if our *front* facade covers it (south only).
                     if isinstance(door_px, pygame.Rect):
                         # Door visual should not scale with the full facade height (especially for high-rises).
@@ -14102,7 +16894,8 @@ class HardcoreSurvivalState(State):
                             door_w = int(clamp(door_open_w - 6, 12, 18))        
 
                         if style == 6:
-                            door_h = int(clamp(14 + int(face_h) // 4, 18, 26))
+                            # High-rise lobby: keep it single-story (do not scale with the whole facade height).
+                            door_h = int(clamp(16 + ((int(var) >> 2) % 3) - 1, 14, 18))
                         else:
                             door_h = int(clamp(10 + int(face_h) // 3, 12, 18))
                         door_h = int(min(int(door_h), max(10, int(south.h - 6))))
@@ -14242,7 +17035,7 @@ class HardcoreSurvivalState(State):
     ) -> None:
         ptx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
         pty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
-        p_tile = self.world.get_tile(ptx, pty)
+        p_tile = self.world.peek_tile(ptx, pty)
         can_be_inside = p_tile in (self.T_FLOOR, self.T_DOOR)
 
         start_cx = start_tx // self.CHUNK_SIZE
@@ -14252,7 +17045,9 @@ class HardcoreSurvivalState(State):
 
         for cy in range(start_cy, end_cy + 1):
             for cx in range(start_cx, end_cx + 1):
-                chunk = self.world.get_chunk(cx, cy)
+                chunk = self.world.peek_chunk(cx, cy)
+                if chunk is None:
+                    continue
                 for b in chunk.buildings:
                     tx0, ty0, w, h = int(b[0]), int(b[1]), int(b[2]), int(b[3])
                     roof_kind = int(b[4]) if len(b) > 4 else 0
@@ -14298,8 +17093,8 @@ class HardcoreSurvivalState(State):
     def _draw_zombies(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         for z in self.zombies:
             p = pygame.Vector2(z.pos) - pygame.Vector2(cam_x, cam_y)
-            sx = int(round(p.x))
-            sy = int(round(p.y))
+            sx = iround(float(p.x))
+            sy = iround(float(p.y))
 
             kind = str(getattr(z, "kind", "walker"))
             by_kind = self._MONSTER_FRAMES.get(kind) or self._MONSTER_FRAMES.get("walker")
@@ -14344,10 +17139,10 @@ class HardcoreSurvivalState(State):
             sy2 = int(sy + wob_y)
 
             rect = spr.get_rect()
-            rect.midbottom = (sx2, int(round(sy2 + z.h / 2)))
+            rect.midbottom = (int(sx2), iround(float(sy2) + float(z.h) / 2.0))
 
             shadow = pygame.Rect(0, 0, max(6, rect.w - 4), 4)
-            shadow.center = (sx2, int(round(sy2 + z.h / 2 - 1)))
+            shadow.center = (int(sx2), iround(float(sy2) + float(z.h) / 2.0 - 1.0))
             pygame.draw.ellipse(surface, (0, 0, 0), shadow)
             surface.blit(spr, rect)
 
@@ -14364,8 +17159,8 @@ class HardcoreSurvivalState(State):
     def _draw_bullets(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         for b in self.bullets:
             p = pygame.Vector2(b.pos) - pygame.Vector2(cam_x, cam_y)
-            x = int(round(p.x))
-            y = int(round(p.y))
+            x = iround(float(p.x))
+            y = iround(float(p.y))
             if 0 <= x < INTERNAL_W and 0 <= y < INTERNAL_H:
                 surface.set_at((x, y), (250, 250, 250))
 
@@ -14676,15 +17471,141 @@ class HardcoreSurvivalState(State):
         draw_text(surface, self.app.font_s, desc, (panel.centerx, panel.bottom - 12), pygame.Color(200, 200, 210), anchor="center")
         draw_text(surface, self.app.font_s, "Tab切换区域 | Enter互动/转移 | Esc关闭", (panel.centerx, panel.bottom - 2), pygame.Color(160, 160, 175), anchor="center")
 
+    def _draw_home_storage_ui(self, surface: pygame.Surface) -> None:
+        overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 190))
+        surface.blit(overlay, (0, 0))
+
+        panel = pygame.Rect(16, 14, INTERNAL_W - 32, INTERNAL_H - 28)
+        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=12)
+        pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=12)
+
+        storage = self._home_ui_storage_inv()
+        storage_label = self._home_ui_storage_label()
+        draw_text(surface, self.app.font_m, self._home_ui_storage_title(), (panel.centerx, panel.top + 14), pygame.Color(240, 240, 240), anchor="center")
+
+        focus = str(getattr(self, "home_ui_focus", "storage"))
+        slot = 22
+        gap = 4
+
+        pcols = max(1, int(self.inventory.cols))
+        prows = int(math.ceil(len(self.inventory.slots) / pcols))
+        pgrid_w = pcols * slot + (pcols - 1) * gap
+        pgrid_h = prows * slot + (prows - 1) * gap
+
+        scols = max(1, int(storage.cols))
+        srows = int(math.ceil(len(storage.slots) / scols))
+        sgrid_w = scols * slot + (scols - 1) * gap
+        sgrid_h = srows * slot + (srows - 1) * gap
+
+        inv_y = panel.top + 46
+        left_x = panel.left + 14
+        right_x = panel.right - 14 - sgrid_w
+
+        content_h = max(pgrid_h, sgrid_h) + 20
+        inv_y = int(clamp(inv_y, panel.top + 42, panel.bottom - 52 - content_h))
+
+        draw_text(surface, self.app.font_s, "背包", (left_x, inv_y - 14), pygame.Color(200, 200, 210), anchor="topleft")
+        draw_text(surface, self.app.font_s, storage_label, (right_x, inv_y - 14), pygame.Color(200, 200, 210), anchor="topleft")
+
+        def draw_inv(
+            inv: HardcoreSurvivalState._Inventory,
+            *,
+            x0: int,
+            y0: int,
+            cols: int,
+            sel_idx: int,
+            focused: bool,
+        ) -> None:
+            for i, st in enumerate(inv.slots):
+                cx = i % cols
+                cy = i // cols
+                r = pygame.Rect(x0 + cx * (slot + gap), y0 + cy * (slot + gap), slot, slot)
+                selected = focused and i == int(sel_idx)
+                bg = (44, 44, 52) if selected else (26, 26, 32)
+                border = (220, 220, 240) if selected else (90, 90, 110)
+                pygame.draw.rect(surface, bg, r, border_radius=6)
+                pygame.draw.rect(surface, border, r, 2, border_radius=6)
+                if st is None:
+                    continue
+                img: pygame.Surface | None = None
+                spr = self._ITEM_SPRITES.get(st.item_id)
+                if spr is not None:
+                    img = spr
+                    max_w = r.w - 4
+                    max_h = r.h - 4
+                    if img.get_width() > max_w or img.get_height() > max_h:
+                        scale = min(max_w / max(1, img.get_width()), max_h / max(1, img.get_height()))
+                        iw = max(1, int(round(img.get_width() * scale)))
+                        ih = max(1, int(round(img.get_height() * scale)))
+                        img = pygame.transform.scale(img, (iw, ih))
+                else:
+                    icon = self._ITEM_ICONS.get(st.item_id)
+                    if icon is None:
+                        idef = self._ITEMS.get(st.item_id)
+                        col = idef.color if idef is not None else (255, 0, 255)
+                        icon_rect = pygame.Rect(0, 0, 10, 10)
+                        icon_rect.center = r.center
+                        pygame.draw.rect(surface, col, icon_rect)
+                    else:
+                        img = icon
+                        if img.get_width() <= 8:
+                            img = pygame.transform.scale(img, (img.get_width() * 2, img.get_height() * 2))
+                if img is not None:
+                    surface.blit(img, img.get_rect(center=r.center))
+                draw_text(surface, self.app.font_s, str(int(st.qty)), (r.right - 2, r.bottom - 2), pygame.Color(240, 240, 240), anchor="topright")
+
+        draw_inv(
+            self.inventory,
+            x0=left_x,
+            y0=inv_y,
+            cols=pcols,
+            sel_idx=int(getattr(self, "home_ui_player_index", 0)),
+            focused=(focus == "player"),
+        )
+        draw_inv(
+            storage,
+            x0=right_x,
+            y0=inv_y,
+            cols=scols,
+            sel_idx=int(getattr(self, "home_ui_storage_index", 0)),
+            focused=(focus == "storage"),
+        )
+
+        desc = ""
+        if focus == "player":
+            st = self.inventory.slots[int(getattr(self, "home_ui_player_index", 0))]
+            if st is None:
+                desc = "背包：空"
+            else:
+                idef = self._ITEMS.get(st.item_id)
+                name = idef.name if idef is not None else st.item_id
+                desc = f"背包: {name} x{int(st.qty)} (Enter → {storage_label})"
+        else:
+            st = storage.slots[int(getattr(self, "home_ui_storage_index", 0))]
+            if st is None:
+                desc = f"{storage_label}：空"
+            else:
+                idef = self._ITEMS.get(st.item_id)
+                name = idef.name if idef is not None else st.item_id
+                desc = f"{storage_label}: {name} x{int(st.qty)} (Enter → 背包)"
+
+        if getattr(self, "home_ui_status", ""):
+            draw_text(surface, self.app.font_s, str(self.home_ui_status), (panel.centerx, panel.bottom - 24), pygame.Color(255, 220, 140), anchor="center")
+        draw_text(surface, self.app.font_s, desc, (panel.centerx, panel.bottom - 12), pygame.Color(200, 200, 210), anchor="center")
+        draw_text(surface, self.app.font_s, f"Tab 切换 背包/{storage_label} | Enter 转移 | Esc 关闭", (panel.centerx, panel.bottom - 2), pygame.Color(160, 160, 175), anchor="center")
+
     def draw(self, surface: pygame.Surface) -> None:
         surface.fill((0, 0, 0))
         if getattr(self, "sch_interior", False):
+            self._hover_tooltip = None
             self._draw_sch_interior_scene(surface)
             self._draw_day_night_overlay(surface, in_rv=True)
             self._draw_survival_ui(surface)
             if getattr(self, "world_map_open", False):
                 self._draw_world_map_ui(surface)
                 return
+            self._draw_hover_tooltip(surface)
             if getattr(self, "sch_elevator_ui_open", False):
                 self._draw_sch_elevator_ui(surface)
             elif self.inv_open:
@@ -14693,12 +17614,17 @@ class HardcoreSurvivalState(State):
                 self._draw_sprite_gallery_ui(surface)
             return
         if getattr(self, "hr_interior", False):
+            self._hover_tooltip = None
             self._draw_hr_interior_scene(surface)
             self._draw_day_night_overlay(surface, in_rv=True)
             self._draw_survival_ui(surface)
             if getattr(self, "world_map_open", False):
                 self._draw_world_map_ui(surface)
                 return
+            if getattr(self, "home_ui_open", False):
+                self._draw_home_storage_ui(surface)
+                return
+            self._draw_hover_tooltip(surface)
             if getattr(self, "hr_elevator_ui_open", False):
                 self._draw_hr_elevator_ui(surface)
             elif self.inv_open:
@@ -14707,6 +17633,7 @@ class HardcoreSurvivalState(State):
                 self._draw_sprite_gallery_ui(surface)
             return
         if getattr(self, "rv_interior", False):
+            self._hover_tooltip = None
             self._draw_rv_interior_scene(surface)
             self._draw_day_night_overlay(surface, in_rv=True)
             self._draw_weather_effects(surface, in_rv=True)
@@ -14714,6 +17641,7 @@ class HardcoreSurvivalState(State):
             if getattr(self, "world_map_open", False):
                 self._draw_world_map_ui(surface)
                 return
+            self._draw_hover_tooltip(surface)
             if getattr(self, "rv_ui_open", False):
                 self._draw_rv_interior_ui(surface)
             elif self.inv_open:
@@ -14740,7 +17668,7 @@ class HardcoreSurvivalState(State):
                 px = tx * self.TILE_SIZE - cam_x
                 if px >= INTERNAL_W:
                     break
-                tile = self.world.get_tile(tx, ty)
+                tile = self.world.peek_tile(tx, ty)
                 rect = pygame.Rect(int(px), int(py), self.TILE_SIZE, self.TILE_SIZE)
                 self._draw_world_tile(surface, rect, tx=tx, ty=ty, tile_id=int(tile))
 
@@ -14823,8 +17751,8 @@ class HardcoreSurvivalState(State):
 
     def _draw_player(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         p = self.player.pos - pygame.Vector2(cam_x, cam_y)
-        px = int(round(p.x))
-        py = int(round(p.y))
+        px = iround(float(p.x))
+        py = iround(float(p.y))
 
         face = pygame.Vector2(self.player.facing)
         if self.gun is not None:
@@ -14832,10 +17760,30 @@ class HardcoreSurvivalState(State):
         if face.length_squared() <= 0.001:
             face = pygame.Vector2(0, 1)
 
-        if abs(face.y) >= abs(face.x):
-            d = "down" if face.y >= 0 else "up"
+        prev_d = str(getattr(self.player, "dir", "down"))
+        ax = abs(float(face.x))
+        ay = abs(float(face.y))
+        bias = 1.12
+        if ax <= 1e-6 and ay <= 1e-6:
+            d = prev_d
+        elif prev_d in ("up", "down"):
+            # Stick to vertical unless X is clearly dominant.
+            if ax > ay * float(bias):
+                d = "right" if float(face.x) >= 0.0 else "left"
+            else:
+                d = "down" if float(face.y) >= 0.0 else "up"
+        elif prev_d in ("left", "right"):
+            # Stick to horizontal unless Y is clearly dominant.
+            if ay > ax * float(bias):
+                d = "down" if float(face.y) >= 0.0 else "up"
+            else:
+                d = "right" if float(face.x) >= 0.0 else "left"
         else:
-            d = "right" if face.x >= 0 else "left"
+            # Fallback: choose the dominant axis.
+            if ay >= ax:
+                d = "down" if float(face.y) >= 0.0 else "up"
+            else:
+                d = "right" if float(face.x) >= 0.0 else "left"
         self.player.dir = d
 
         pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
@@ -14856,10 +17804,10 @@ class HardcoreSurvivalState(State):
             idx = int(phase * len(walk)) % len(walk)
             walk_idx = int(idx)
             spr = walk[idx]
-            if idx in (1, 4):
+            if is_run and idx in (1, 4):
                 bob = 1
         rect = spr.get_rect()
-        rect.midbottom = (px, int(round(py + self.player.h / 2)))        
+        rect.midbottom = (px, iround(float(p.y) + float(self.player.h) / 2.0))
         rect.y += bob
         surface.blit(spr, rect)
 
@@ -14968,21 +17916,39 @@ class HardcoreSurvivalState(State):
 
         cached_key = getattr(self, "_minimap_cache_key", None)
         cached_scaled: pygame.Surface | None = getattr(self, "_minimap_cache_scaled", None)
-        if cached_key != key or cached_scaled is None or cached_scaled.get_size() != (map_px, map_px):
-            base = pygame.Surface((tiles, tiles))
-            base.lock()
-            for oy in range(-int(radius), int(radius) + 1):
-                wy = int(ty) + int(oy)
-                py = int(oy) + int(radius)
-                for ox in range(-int(radius), int(radius) + 1):
-                    wx = int(tx) + int(ox)
-                    px = int(ox) + int(radius)
-                    tid = self.world.get_tile(wx, wy)
-                    base.set_at((px, py), self._minimap_color(tid))
-            base.unlock()
-            cached_scaled = pygame.transform.scale(base, (map_px, map_px))
-            self._minimap_cache_key = key
-            self._minimap_cache_scaled = cached_scaled
+        size_ok = isinstance(cached_scaled, pygame.Surface) and cached_scaled.get_size() == (map_px, map_px)
+        need_rebuild = (cached_key != key) or (not size_ok)
+        if need_rebuild:
+            moving = False
+            if getattr(self, "mount", None) == "rv" and getattr(self, "rv", None) is not None:
+                moving = self.rv.vel.length_squared() > 0.1
+            elif getattr(self, "mount", None) == "bike" and getattr(self, "bike", None) is not None:
+                moving = self.bike.vel.length_squared() > 0.1
+            else:
+                moving = self.player.vel.length_squared() > 0.1
+
+            # Throttle minimap rebuilds while moving to avoid stutter.
+            now = float(time.monotonic())
+            last_t = float(getattr(self, "_minimap_cache_t", 0.0))
+            min_interval = 0.12 if moving else 0.0
+            if size_ok and min_interval > 0.0 and (now - last_t) < float(min_interval):
+                pass
+            else:
+                base = pygame.Surface((tiles, tiles))
+                base.lock()
+                for oy in range(-int(radius), int(radius) + 1):
+                    wy = int(ty) + int(oy)
+                    py = int(oy) + int(radius)
+                    for ox in range(-int(radius), int(radius) + 1):
+                        wx = int(tx) + int(ox)
+                        px = int(ox) + int(radius)
+                        tid = self.world.peek_tile(wx, wy)
+                        base.set_at((px, py), self._minimap_color(tid))
+                base.unlock()
+                cached_scaled = pygame.transform.scale(base, (map_px, map_px))
+                self._minimap_cache_key = key
+                self._minimap_cache_scaled = cached_scaled
+                self._minimap_cache_t = float(now)
 
         draw_text(surface, self.app.font_s, "小地图", (panel.left + pad, panel.top + 3), pygame.Color(200, 200, 210), anchor="topleft")
 
@@ -15308,7 +18274,9 @@ class HardcoreSurvivalState(State):
 
         for cy in range(int(start_cy), int(end_cy) + 1):
             for cx in range(int(start_cx), int(end_cx) + 1):
-                chunk = self.world.get_chunk(cx, cy)
+                chunk = self.world.peek_chunk(cx, cy)
+                if chunk is None:
+                    continue
                 for b in getattr(chunk, "buildings", []):
                     if len(b) < 5:
                         continue
@@ -15519,7 +18487,7 @@ class HardcoreSurvivalState(State):
                 wy = start_ty + py
                 for px in range(view_w):
                     wx = start_tx + px
-                    tid = self.world.get_tile(wx, wy)
+                    tid = self.world.peek_tile(wx, wy)
                     base.set_at((px, py), self._minimap_color(tid))
             base.unlock()
             cached_scaled = pygame.transform.scale(base, (view_w * scale, view_h * scale))
@@ -15707,7 +18675,7 @@ class HardcoreSurvivalState(State):
                 y += 12
             if (self.player.pos - self.bike.pos).length_squared() <= (18.0 * 18.0):
                 draw_text(surface, self.app.font_s, f"F 骑车({self._two_wheel_name(getattr(self.bike, 'model_id', 'bike'))})", (INTERNAL_W - 6, y), pygame.Color(220, 220, 230), anchor="topright")
-        draw_text(surface, self.app.font_s, "WASD移动  Shift冲刺  E拾取  F载具  H房车  G骨骼  Tab背包  Esc菜单", (6, INTERNAL_H - 14), pygame.Color(170, 170, 180), anchor="topleft")
+        draw_text(surface, self.app.font_s, "WASD移动  Shift冲刺  E拾取  F载具  H房车  F3骨骼  Tab背包  Esc菜单", (6, INTERNAL_H - 14), pygame.Color(170, 170, 180), anchor="topleft")
 
     def _draw_debug(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         tx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
@@ -15749,13 +18717,13 @@ class HardcoreSurvivalState(State):
             phase = (float(self.player.walk_phase) % math.tau) / math.tau
             walk_idx = int(phase * len(walk)) % len(walk)
             spr = walk[walk_idx]
-            if walk_idx in (1, 4):
+            if is_run and walk_idx in (1, 4):
                 bob = 1
         else:
             spr = frames[0]
 
         rect = spr.get_rect()
-        rect.midbottom = (px, int(round(py + self.player.h / 2)))
+        rect.midbottom = (px, iround(float(p.y) + float(self.player.h) / 2.0))
         rect.y += bob
 
         height_delta = 0
