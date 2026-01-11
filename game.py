@@ -18113,7 +18113,8 @@ class HardcoreSurvivalState(State):
             total = float(self._PUNCH_TOTAL_S)
             t = 1.0 - float(punch_left) / max(1e-6, total)
             ext = math.sin(float(clamp(t, 0.0, 1.0)) * math.pi)
-            reach = 4.0 + ext * 7.5
+            # Keep the fist close to the body (match 12x16 sprite scale).
+            reach = 1.0 + ext * 4.0
 
             pdir = pygame.Vector2(getattr(self, "punch_dir", pygame.Vector2(1, 0)))
             if pdir.length_squared() <= 0.001:
@@ -18145,7 +18146,7 @@ class HardcoreSurvivalState(State):
             outline = (10, 10, 12)
             skin = tuple(getattr(self, "_PLAYER_PAL", {}).get("S", (220, 190, 160)))
 
-            pygame.draw.line(surface, outline, (int(base_hand.x), int(base_hand.y)), (int(fist.x), int(fist.y)), 3)
+            pygame.draw.line(surface, outline, (int(base_hand.x), int(base_hand.y)), (int(fist.x), int(fist.y)), 2)
             pygame.draw.line(surface, skin, (int(base_hand.x), int(base_hand.y)), (int(fist.x), int(fist.y)), 1)
 
             fx = int(round(float(fist.x)))
