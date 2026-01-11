@@ -5238,6 +5238,16 @@ class HardcoreSurvivalState(State):
             pygame.draw.line(surf, white, (cx - 1, cy - 2), (cx + 1, cy + 1), 1)
             surf.set_at((cx - 2, cy + 2), white)
             surf.set_at((cx + 2, cy + 2), white)
+        elif icon == "gun":
+            # Tiny pistol silhouette (readable at 1x).
+            steel = (230, 230, 236)
+            pygame.draw.rect(surf, steel, pygame.Rect(cx - 3, cy - 1, 6, 2))
+            pygame.draw.rect(surf, outline, pygame.Rect(cx - 3, cy - 1, 6, 2), 1)
+            pygame.draw.rect(surf, steel, pygame.Rect(cx + 3, cy - 1, 2, 1))
+            pygame.draw.rect(surf, outline, pygame.Rect(cx + 3, cy - 1, 2, 1), 1)
+            pygame.draw.rect(surf, steel, pygame.Rect(cx - 1, cy + 1, 2, 3))
+            pygame.draw.rect(surf, outline, pygame.Rect(cx - 1, cy + 1, 2, 3), 1)
+            surf.set_at((cx + 5, cy - 1), outline)
         elif icon == "school":
             blue = (130, 190, 240)
             pygame.draw.rect(surf, blue, pygame.Rect(cx - 3, cy - 2, 6, 5), 1)
@@ -5376,6 +5386,14 @@ class HardcoreSurvivalState(State):
             solid=False,
             collider=(12, 8),
             sprites=(_make_prop_sprite_sign(bg=(70, 70, 86), accent=(240, 200, 120), icon="cart"),),
+        ),
+        "sign_gunshop": _PropDef(
+            id="sign_gunshop",
+            name="枪械店招牌",
+            category="招牌",
+            solid=False,
+            collider=(12, 8),
+            sprites=(_make_prop_sprite_sign(bg=(36, 36, 44), accent=(220, 140, 90), icon="gun"),),
         ),
         "sign_school": _PropDef(
             id="sign_school",
@@ -6187,7 +6205,7 @@ class HardcoreSurvivalState(State):
                 town_kind = "城市"
             elif self._is_town_chunk(cx, cy):
                 rng = random.Random(self.state._hash2_u32(cx, cy, self.seed))
-                kinds = ["超市", "新华书店", "医院", "监狱", "学校", "高层住宅"]
+                kinds = ["超市", "新华书店", "枪械店", "医院", "监狱", "学校", "高层住宅"]
                 stx, sty = self.spawn_tile()
                 is_spawn_chunk = (int(stx) // self.state.CHUNK_SIZE == int(cx)) and (int(sty) // self.state.CHUNK_SIZE == int(cy))
                 if is_spawn_chunk:
@@ -6218,6 +6236,44 @@ class HardcoreSurvivalState(State):
                 # Beach / wetlands / highway decoration on non-city chunks.
                 rng2 = random.Random(self.state._hash2_u32(cx, cy, self.seed ^ 0x0D00BDEC))
                 self._stamp_outdoor_decor(tiles, props, cx, cy, rng=rng2)
+
+            # Safety: prevent parked vehicles from ending up inside building footprints.
+            # This can happen if later stamps overwrite previously spawned vehicles.
+            if buildings and (cars or bikes):
+                tile_size = float(self.state.TILE_SIZE)
+                chunk_size = int(self.state.CHUNK_SIZE)
+                t_floor = int(self.state.T_FLOOR)
+                t_door = int(self.state.T_DOOR)
+
+                def inside_any_building(tx: int, ty: int) -> bool:
+                    for bx0, by0, bw, bh, _roof_kind, _floors in buildings:
+                        if int(bx0) <= int(tx) < int(bx0) + int(bw) and int(by0) <= int(ty) < int(by0) + int(bh):
+                            return True
+                    return False
+
+                def tile_blocks_vehicle(t: int) -> bool:
+                    t = int(t)
+                    if t in (t_floor, t_door):
+                        return True
+                    tdef = self.state._TILES.get(int(t))
+                    if tdef is None:
+                        return False
+                    return bool(getattr(tdef, "solid", False))
+
+                def keep_vehicle_at(px: float, py: float) -> bool:
+                    tx = int(math.floor(float(px) / tile_size))
+                    ty = int(math.floor(float(py) / tile_size))
+                    if inside_any_building(int(tx), int(ty)):
+                        return False
+                    lx = int(tx - base_tx)
+                    ly = int(ty - base_ty)
+                    if not (0 <= lx < chunk_size and 0 <= ly < chunk_size):
+                        return False
+                    t = int(tiles[int(ly) * chunk_size + int(lx)])
+                    return not tile_blocks_vehicle(int(t))
+
+                cars[:] = [c for c in cars if keep_vehicle_at(float(c.pos.x), float(c.pos.y))]
+                bikes[:] = [b for b in bikes if keep_vehicle_at(float(b.pos.x), float(b.pos.y))]
 
             return HardcoreSurvivalState._Chunk(
                 cx=cx,
@@ -6524,7 +6580,7 @@ class HardcoreSurvivalState(State):
                         self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
                 if rng.random() < 0.35:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅大", reserved=reserved)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True, buildings=buildings)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True, buildings=buildings, reserved=reserved)
                 self._spawn_two_wheelers(
                     tiles,
                     bikes,
@@ -6534,13 +6590,14 @@ class HardcoreSurvivalState(State):
                     count=rng.randint(6, 12),
                     models=["bike_lady", "bike_mountain", "bike_auto", "moto", "moto_lux", "moto_long"],
                     buildings=buildings,
+                    reserved=reserved,
                 )
                 buildings_n = max(3, buildings_n - 2)
             elif use_starter_community and in_community:
                 # Community chunks: mostly residential towers; one chunk hosts the school.
                 if school_chunk:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "学校", reserved=reserved)
-                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True, buildings=buildings)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True, buildings=buildings, reserved=reserved)
                 else:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
                     if rng.random() < 0.55:
@@ -6548,13 +6605,13 @@ class HardcoreSurvivalState(State):
                     if core and rng.random() < 0.22:
                         self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅大", reserved=reserved)
                     if rng.random() < 0.55:
-                        self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
+                        self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
                 buildings_n = max(3, buildings_n - 1)
             elif core:
                 big_roll = float(rng.random())
                 if big_roll < 0.07:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "大型超市", reserved=reserved)
-                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
                     buildings_n = max(3, buildings_n - 1)
                 elif big_roll < 0.12:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅大", reserved=reserved)
@@ -6566,7 +6623,7 @@ class HardcoreSurvivalState(State):
                     buildings_n = max(3, buildings_n - 1)
                 elif big_roll < 0.24 and commercial_district:
                     self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "新华书店", reserved=reserved)
-                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
                     buildings_n = max(3, buildings_n - 1)
 
             if chinese_district and (not is_spawn_chunk) and rng.random() < (0.55 + 0.25 * density):
@@ -6578,22 +6635,23 @@ class HardcoreSurvivalState(State):
 
             if roll < 0.16:
                 self._stamp_basketball_court(tiles, rng=rng)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
             elif roll < 0.32:
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "学校", reserved=reserved)
                 self._stamp_basketball_court(tiles, rng=rng)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True, buildings=buildings)
-                self._spawn_two_wheelers(tiles, bikes, cx, cy, rng=rng, count=rng.randint(5, 12), models=["bike_lady", "bike_mountain", "bike_auto", "moto", "moto_lux", "moto_long"], buildings=buildings)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True, buildings=buildings, reserved=reserved)
+                self._spawn_two_wheelers(tiles, bikes, cx, cy, rng=rng, count=rng.randint(5, 12), models=["bike_lady", "bike_mountain", "bike_auto", "moto", "moto_lux", "moto_long"], buildings=buildings, reserved=reserved)
                 buildings_n = max(3, buildings_n - 1)
             elif roll < 0.46:
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "医院", reserved=reserved)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
             elif roll < 0.60:
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "超市", reserved=reserved)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
             elif roll < 0.68 and commercial_district:
-                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "新华书店", reserved=reserved)
-                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
+                kind = "新华书店" if rng.random() < 0.55 else "枪械店"
+                self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, kind, reserved=reserved)
+                self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
             elif roll < 0.74:
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "高层住宅", reserved=reserved)
 
@@ -6602,9 +6660,9 @@ class HardcoreSurvivalState(State):
                     kind = "中式建筑"
                 else:
                     if commercial_district:
-                        pool = ["住宅", "住宅", "住宅", "住宅", "超市", "医院", "新华书店", "高层住宅", "监狱"]
+                        pool = ["住宅", "住宅", "住宅", "超市", "超市", "超市", "医院", "新华书店", "枪械店", "高层住宅", "监狱"]
                     else:
-                        pool = ["住宅", "住宅", "住宅", "住宅", "住宅", "住宅", "超市", "医院", "高层住宅", "监狱"]
+                        pool = ["住宅", "住宅", "住宅", "住宅", "住宅", "住宅", "超市", "超市", "医院", "高层住宅", "监狱"]
                     kind = str(rng.choice(pool))
                 if core:
                     if kind == "超市" and rng.random() < 0.45:
@@ -6613,7 +6671,7 @@ class HardcoreSurvivalState(State):
                         kind = "高层住宅大"
                     elif kind == "监狱" and rng.random() < 0.35:
                         kind = "大型监狱"
-                if kind in ("超市", "医院", "大型超市") and rng.random() < 0.55:
+                if (not commercial_district) and kind in ("超市", "医院", "大型超市", "新华书店", "枪械店") and rng.random() < 0.35:
                     kind = "住宅"
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, kind, reserved=reserved)
 
@@ -6622,9 +6680,9 @@ class HardcoreSurvivalState(State):
             if not is_spawn_chunk:
                 lot_chance = float(clamp(0.24 + 0.40 * density, 0.18, 0.72))
                 if rng.random() < lot_chance:
-                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
                 if core and rng.random() < 0.28:
-                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings)
+                    self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
 
             self._stamp_city_decor(tiles, props, cx, cy, rng=rng)
 
@@ -6657,6 +6715,7 @@ class HardcoreSurvivalState(State):
             rng: random.Random,
             school: bool = False,
             buildings: list[tuple[int, int, int, int, int, int]] | None = None,
+            reserved: set[tuple[int, int]] | None = None,
         ) -> None:
             # Parking lot: stamp tiles + spawn parked vehicles (visual props).
             allowed_base = {
@@ -6699,6 +6758,8 @@ class HardcoreSurvivalState(State):
             for y in range(int(y0), int(y0 + h)):
                 for x in range(int(x0), int(x0 + w)):
                     tiles[idx(x, y)] = int(self.state.T_PARKING)
+                    if reserved is not None:
+                        reserved.add((int(x), int(y)))
 
             # Spawn cars in a loose grid.
             car_pool = [mid for mid in self.state._CAR_MODELS.keys() if str(mid) != "rv"]
@@ -6737,6 +6798,7 @@ class HardcoreSurvivalState(State):
                     count=rng.randint(2, 5),
                     models=["bike_lady", "bike_mountain", "bike_auto"],
                     buildings=buildings,
+                    reserved=reserved,
                 )
 
         def _spawn_two_wheelers(
@@ -6750,6 +6812,7 @@ class HardcoreSurvivalState(State):
             count: int,
             models: list[str],
             buildings: list[tuple[int, int, int, int, int, int]] | None = None,
+            reserved: set[tuple[int, int]] | None = None,
         ) -> None:
             if count <= 0 or not models:
                 return
@@ -6863,6 +6926,8 @@ class HardcoreSurvivalState(State):
                 bikes.append(
                     HardcoreSurvivalState._ParkedBike(pos=pygame.Vector2(px, py), model_id=mid, dir=d, fuel=float(fuel))
                 )
+                if reserved is not None:
+                    reserved.add((int(sx), int(sy)))
                 placed += 1
 
         def _stamp_outdoor_decor(
@@ -7130,6 +7195,9 @@ class HardcoreSurvivalState(State):
                 elif town_kind == "新华书店":
                     w = rng.randint(12, 18)
                     h = rng.randint(10, 15)
+                elif town_kind == "枪械店":
+                    w = rng.randint(10, 15)
+                    h = rng.randint(8, 12)
                 elif town_kind == "医院":
                     w = rng.randint(14, 20)
                     h = rng.randint(12, 18)
@@ -7279,6 +7347,8 @@ class HardcoreSurvivalState(State):
                     sign_id = "sign_shop_big"
                 elif town_kind == "新华书店":
                     sign_id = "sign_bookstore"
+                elif town_kind == "枪械店":
+                    sign_id = "sign_gunshop"
                 elif town_kind == "学校":
                     sign_id = "sign_school"
                 elif town_kind in ("监狱", "大型监狱"):
@@ -7517,9 +7587,65 @@ class HardcoreSurvivalState(State):
                                     if tiles[idx(x, y)] == self.state.T_FLOOR:
                                         tiles[idx(x, y)] = self.state.T_SHELF
 
+                elif town_kind == "枪械店":
+                    # Gun shop: wall racks + a counter + optional backroom.    
+                    backroom: tuple[int, int, int, int] | None = None
+                    if w >= 11 and h >= 9 and rng.random() < 0.85:
+                        rw = min(4, int(w) - 6)
+                        rh = min(3, int(h) - 5)
+                        rx = x0 + 2 if door_side in ("N", "S") else (x0 + w - rw - 2)
+                        ry = y0 + h - rh - 2 if door_side == "N" else (y0 + 2)
+                        backroom = (int(rx), int(ry), int(rw), int(rh))
+                        build_room(int(rx), int(ry), int(rw), int(rh))
+
+                    # Wall racks (leave the main corridor clear).
+                    for x in range(in_left + 1, in_right, 2):
+                        set_interior(int(x), int(in_top + 1), self.state.T_SHELF)
+                        set_interior(int(x), int(in_bottom - 1), self.state.T_SHELF)
+                    for y in range(in_top + 2, in_bottom - 1, 2):
+                        set_interior(int(in_left + 1), int(y), self.state.T_SHELF)
+                        set_interior(int(in_right - 1), int(y), self.state.T_SHELF)
+
+                    # A couple of display islands.
+                    for y in range(y0 + 3, y0 + h - 3, 4):
+                        for x in range(x0 + 3, x0 + w - 3, 5):
+                            if backroom is not None:
+                                bx, by, bw, bh = backroom
+                                if (bx - 1) <= int(x) <= (bx + bw) and (by - 1) <= int(y) <= (by + bh):
+                                    continue
+                            if tiles[idx(int(x), int(y))] == self.state.T_FLOOR:
+                                set_interior(int(x), int(y), self.state.T_SHELF)
+
+                    # Counter near entrance.
+                    if door_side in ("N", "S"):
+                        y = y0 + 2 if door_side == "N" else y0 + h - 3
+                        x0c = int(round(door_cx)) - 2
+                        x1c = int(round(door_cx)) + 2
+                        for x in range(x0c, x1c + 1):
+                            if (int(x), int(y)) in corridor or near_door(int(x), int(y)):
+                                continue
+                            set_interior(int(x), int(y), self.state.T_TABLE)
+                    else:
+                        x = x0 + 2 if door_side == "W" else x0 + w - 3
+                        y0c = int(round(door_cy)) - 2
+                        y1c = int(round(door_cy)) + 2
+                        for y in range(y0c, y1c + 1):
+                            if (int(x), int(y)) in corridor or near_door(int(x), int(y)):
+                                continue
+                            set_interior(int(x), int(y), self.state.T_TABLE)
+
+                    # Backroom storage shelves.
+                    if backroom is not None:
+                        bx, by, bw, bh = backroom
+                        for x in range(bx, bx + bw):
+                            if (x - bx) % 2 == 0:
+                                for y in range(by, by + bh):
+                                    if tiles[idx(x, y)] == self.state.T_FLOOR:
+                                        tiles[idx(x, y)] = self.state.T_SHELF
+
                 elif town_kind in ("超市", "大型超市"):
                     # Optional back room.
-                    backroom: tuple[int, int, int, int] | None = None     
+                    backroom: tuple[int, int, int, int] | None = None
                     if w >= 12 and h >= 9:
                         rw = min(5, int(w) - 6)
                         rh = min(4, int(h) - 5)
@@ -7996,6 +8122,8 @@ class HardcoreSurvivalState(State):
                     loot_choices = ["bandage", "medkit", "water"]
                 elif town_kind == "新华书店":
                     loot_choices = ["food_can", "water", "cola", "cola", "bandage", "scrap", "wood"]
+                elif town_kind == "枪械店":
+                    loot_choices = ["pistol", "ammo_9mm", "ammo_9mm", "ammo_9mm", "scrap", "bandage"]
                 elif town_kind == "监狱":
                     loot_choices = ["pistol", "ammo_9mm", "ammo_9mm", "scrap", "bandage"]
                 elif town_kind == "学校":
@@ -8005,7 +8133,7 @@ class HardcoreSurvivalState(State):
                 else:
                     loot_choices = ["food_can", "water", "cola", "cola", "ammo_9mm", "scrap", "wood"]
 
-                loot_n = rng.randint(2, 4) if town_kind in ("超市", "大型超市", "新华书店", "医院") else rng.randint(2, 3)
+                loot_n = rng.randint(2, 4) if town_kind in ("超市", "大型超市", "新华书店", "医院", "枪械店") else rng.randint(2, 3)
 
                 # Place loot only on tiles reachable from the entrance, so we
                 # don't create "see the item but cannot enter" situations.
@@ -8084,6 +8212,15 @@ class HardcoreSurvivalState(State):
                     items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(px, py), item_id="pistol", qty=1))
                     items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(px, py + 6), item_id="ammo_9mm", qty=rng.randint(18, 34)))
 
+                if town_kind == "枪械店" and spot_i < len(reachable_floor):
+                    ix, iy = reachable_floor[spot_i]
+                    tx = cx * self.state.CHUNK_SIZE + ix
+                    ty = cy * self.state.CHUNK_SIZE + iy
+                    px = (tx + 0.5) * self.state.TILE_SIZE
+                    py = (ty + 0.5) * self.state.TILE_SIZE
+                    items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(px, py), item_id="pistol", qty=1))
+                    items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(px, py + 6), item_id="ammo_9mm", qty=rng.randint(20, 40)))
+
                 roof_style = 0
                 if town_kind == "住宅":
                     roof_style = 1
@@ -8091,6 +8228,8 @@ class HardcoreSurvivalState(State):
                     roof_style = 2
                 elif town_kind == "新华书店":
                     roof_style = 7
+                elif town_kind == "枪械店":
+                    roof_style = 9
                 elif town_kind == "医院":
                     roof_style = 3
                 elif town_kind in ("监狱", "大型监狱"):
@@ -8465,6 +8604,11 @@ class HardcoreSurvivalState(State):
             if self._hr_edit_handle_mouse(event):
                 return
 
+        if self.inv_open:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                self._handle_inventory_mouse(event)
+                return
+
         if event.type == pygame.KEYDOWN:
             if getattr(self, "rv_ui_open", False):
                 self._handle_rv_ui_key(int(event.key))
@@ -8606,6 +8750,67 @@ class HardcoreSurvivalState(State):
             if event.key in (pygame.K_F3,):
                 self._debug = not self._debug
                 return
+
+    def _handle_inventory_mouse(self, event: pygame.event.Event) -> None:
+        if not self.inv_open:
+            return
+        if event.type != pygame.MOUSEBUTTONDOWN:
+            return
+        if not hasattr(event, "pos"):
+            return
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return
+        mx, my = int(internal[0]), int(internal[1])
+        btn = int(getattr(event, "button", 0))
+        if btn not in (1, 3):
+            return
+
+        # Mirror the layout math in _draw_inventory_ui() so hit-testing matches.
+        cols = max(1, int(self.inventory.cols))
+        rows = int(math.ceil(len(self.inventory.slots) / cols))
+        slot = 30
+        gap = 4
+        grid_w = cols * slot + (cols - 1) * gap
+        grid_h = rows * slot + (rows - 1) * gap
+        x0 = (INTERNAL_W - grid_w) // 2
+        y0 = (INTERNAL_H - grid_h) // 2 - 10
+        grid = pygame.Rect(int(x0), int(y0), int(grid_w), int(grid_h))
+        if not grid.collidepoint(mx, my):
+            return
+
+        cell = int(slot + gap)
+        if cell <= 0:
+            return
+        lx = int(mx - int(x0))
+        ly = int(my - int(y0))
+        cx = int(lx // cell)
+        cy = int(ly // cell)
+        if cx < 0 or cy < 0 or cx >= int(cols):
+            return
+        # Ignore clicks on the gap area.
+        if int(lx % cell) >= int(slot) or int(ly % cell) >= int(slot):
+            return
+        idx = int(cy * int(cols) + cx)
+        if not (0 <= idx < len(self.inventory.slots)):
+            return
+
+        # Left-click selects; double-click uses/equips. Right-click uses/equips.
+        if btn == 1:
+            now_ms = int(pygame.time.get_ticks())
+            last_ms = int(getattr(self, "_inv_last_click_ms", -999999))
+            last_idx = int(getattr(self, "_inv_last_click_idx", -1))
+            self.inv_index = int(idx)
+            if int(idx) == int(last_idx) and (now_ms - last_ms) <= 320:
+                self._equip_selected()
+            self._inv_last_click_ms = int(now_ms)
+            self._inv_last_click_idx = int(idx)
+            return
+
+        if btn == 3:
+            self.inv_index = int(idx)
+            self._equip_selected()
+            return
 
     def _apply_rv_model(self) -> None:
         mid = getattr(self.rv, "model_id", "schoolbus")
@@ -15004,7 +15209,19 @@ class HardcoreSurvivalState(State):
             pos = pygame.Vector2(target_pos) + pygame.Vector2(math.cos(ang), math.sin(ang)) * float(dist)
             tx = int(math.floor(pos.x / self.TILE_SIZE))
             ty = int(math.floor(pos.y / self.TILE_SIZE))
-            if self._tile_solid(self.world.get_tile(tx, ty)):
+            tile = int(self.world.get_tile(tx, ty))
+            if self._tile_solid(tile):
+                continue
+            # Don't spawn zombies inside buildings or on interior tiles.
+            if tile in (int(self.T_FLOOR), int(self.T_DOOR)):
+                continue
+            chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
+            in_building = False
+            for bx0, by0, bw, bh, _roof_kind, _floors in getattr(chunk, "buildings", []):
+                if int(bx0) <= int(tx) < int(bx0) + int(bw) and int(by0) <= int(ty) < int(by0) + int(bh):
+                    in_building = True
+                    break
+            if in_building:
                 continue
             hp = int(mdef.hp) + (6 if in_town else 0)
             speed = float(mdef.speed)
@@ -16208,6 +16425,10 @@ class HardcoreSurvivalState(State):
             base_rgb = (34, 64, 44)
             stripe_rgb = (52, 92, 62)
             accent_rgb = (200, 170, 110)
+        elif style == 9:  # 枪械店
+            base_rgb = (34, 34, 40)
+            stripe_rgb = (62, 52, 52)
+            accent_rgb = (220, 140, 90)
 
         base_rgb = tint(base_rgb, dv)
         stripe_rgb = tint(stripe_rgb, dv)
@@ -16352,6 +16573,19 @@ class HardcoreSurvivalState(State):
                 roof.fill(eave, pygame.Rect(w_px - 3, 1, 2, 2))
                 roof.fill(eave, pygame.Rect(1, h_px - 3, 2, 2))
                 roof.fill(eave, pygame.Rect(w_px - 3, h_px - 3, 2, 2))
+        elif style == 9:
+            # Gun shop: darker roof with "warning" diagonals + a few vents.
+            for x in range(-h_px, w_px + h_px, 6):
+                pygame.draw.line(roof, (*stripe_rgb, alpha), (x, 0), (x + h_px, h_px - 1), 1)
+            vent = (*accent_rgb, alpha)
+            frame = (*outline_rgb, alpha)
+            for uy in range(6 + (var % 3), h_px - 6, 14):
+                for ux in range(6 + ((var >> 2) % 5), w_px - 10, 18):
+                    if ((ux + uy + var) % 3) != 0:
+                        continue
+                    r = pygame.Rect(int(ux), int(uy), 7, 4)
+                    roof.fill(vent, r)
+                    pygame.draw.rect(roof, frame, r, 1, border_radius=1)
         else:
             # Default subtle stripes.
             for y in range(0, h_px, 4):
@@ -17470,7 +17704,7 @@ class HardcoreSurvivalState(State):
             name = idef.name if idef is not None else sel.item_id
             desc = f"{name} x{int(sel.qty)}"
         draw_text(surface, self.app.font_s, desc, (panel.centerx, panel.bottom - 22), pygame.Color(200, 200, 210), anchor="center")
-        draw_text(surface, self.app.font_s, "方向键/WASD移动格子  Enter使用/装备  Q丢弃  Tab关闭", (panel.centerx, panel.bottom - 8), pygame.Color(160, 160, 175), anchor="center")
+        draw_text(surface, self.app.font_s, "鼠标左键选择/双击使用  右键使用/装备  Q丢弃  Tab关闭", (panel.centerx, panel.bottom - 8), pygame.Color(160, 160, 175), anchor="center")
 
     def _draw_sprite_gallery_ui(self, surface: pygame.Surface) -> None:
         overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
@@ -17960,7 +18194,12 @@ class HardcoreSurvivalState(State):
         end_ty: int,
     ) -> None:
         mount = getattr(self, "mount", None)
-        if mount == "bike":
+        if mount is None:
+            if not hasattr(self, "player") or self.player is None:
+                return
+            rect = self.player.rect_at(self.player.pos).move(-int(cam_x), -int(cam_y)).inflate(18, 18)
+            ground_y = int(round((float(self.player.pos.y) - float(cam_y)) + float(self.player.h) / 2.0))
+        elif mount == "bike":
             if not hasattr(self, "bike") or self.bike is None:
                 return
             w = int(getattr(self.bike, "w", 14))
@@ -18507,6 +18746,21 @@ class HardcoreSurvivalState(State):
             pygame.draw.line(surface, col, (r.left + 2, r.top + 3), (r.right - 3, r.top + 3), 1)
             return
 
+        if kind == "gunshop":
+            col = (220, 140, 90)
+            r = pygame.Rect(0, 0, s, s)
+            r.center = (x, y)
+            pygame.draw.rect(surface, (0, 0, 0), r)
+            pygame.draw.rect(surface, (60, 60, 72), r.inflate(-2, -2))
+            # Tiny pistol silhouette.
+            pygame.draw.rect(surface, col, pygame.Rect(r.left + 3, r.centery - 1, r.w - 6, 2))
+            pygame.draw.rect(surface, col, pygame.Rect(r.right - 5, r.centery - 1, 2, 1))
+            pygame.draw.rect(surface, col, pygame.Rect(r.centerx - 1, r.centery + 1, 2, 4))
+            pygame.draw.rect(surface, (0, 0, 0), pygame.Rect(r.left + 3, r.centery - 1, r.w - 6, 2), 1)
+            pygame.draw.rect(surface, (0, 0, 0), pygame.Rect(r.centerx - 1, r.centery + 1, 2, 4), 1)
+            pygame.draw.rect(surface, (0, 0, 0), pygame.Rect(r.right - 5, r.centery - 1, 2, 1), 1)
+            return
+
         if kind == "bookstore":
             col = (232, 200, 120)
             r = pygame.Rect(0, 0, s, s)
@@ -18596,6 +18850,7 @@ class HardcoreSurvivalState(State):
 
         style_to_kind = {
             2: "market",
+            9: "gunshop",
             3: "hospital",
             4: "prison",
             5: "school",
@@ -18655,6 +18910,7 @@ class HardcoreSurvivalState(State):
         entries: list[tuple[str, str]] = [
             ("hospital", "医院"),
             ("market", "超市"),
+            ("gunshop", "枪械店"),
             ("bookstore", "书店"),
             ("school", "学校"),
             ("prison", "监狱"),
