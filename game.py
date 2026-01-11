@@ -18153,7 +18153,7 @@ class HardcoreSurvivalState(State):
                 else:
                     # Vertical punch: center the fist between hands.
                     hx = int(round((lhx + rhx) * 0.5))
-                    hy = int(round((lhy + rhy) * 0.5)) - 1
+                    hy = int(round((lhy + rhy) * 0.5))
                     base_hand = pygame.Vector2(int(rect.left + hx), int(rect.top + hy))
             else:
                 hand_key = "r_hand"
@@ -18170,6 +18170,9 @@ class HardcoreSurvivalState(State):
 
             fx = int(round(float(fist.x)))
             fy = int(round(float(fist.y)))
+            # Arm connection (short + pixel-perfect).
+            pygame.draw.line(surface, outline, (int(base_hand.x), int(base_hand.y)), (int(fx), int(fy)), 2)
+            pygame.draw.line(surface, skin, (int(base_hand.x), int(base_hand.y)), (int(fx), int(fy)), 1)
             fr = pygame.Rect(int(fx - 1), int(fy - 1), 3, 3)
             surface.fill(skin, fr)
             pygame.draw.rect(surface, outline, fr, 1)
