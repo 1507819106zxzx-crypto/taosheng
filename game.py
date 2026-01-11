@@ -4737,6 +4737,39 @@ class HardcoreSurvivalState(State):
     _SCH_INT_SPRITE_SCALE = 2
     _SCH_INT_MAX_FLOORS_DEFAULT = 4
 
+    # Multi-floor house (2–3 floors) interior.
+    _HOUSE_INT_F1_LAYOUT: list[str] = [
+        "WWWWWWWWWWWWWWWWWWWWWWW",
+        "WVV.................VVW",
+        "W..BBBBB....SSSS......W",
+        "W..BBBBB....SSSS..TT..W",
+        "W.................TT..W",
+        "W....^^........vv.....D",
+        "W....^^........vv.....W",
+        "W.....................W",
+        "W..KKKKK..TTTT..FFFF..W",
+        "W..KKKKK..TTTT..FFFF..W",
+        "WWWWWWWWWWWWWWWWWWWWWWW",
+    ]
+    _HOUSE_INT_FLOOR_LAYOUT: list[str] = [
+        "WWWWWWWWWWWWWWWWWWWWWWW",
+        "WVV.................VVW",
+        "W......SSSS....BBBBB..W",
+        "W..TT..SSSS....BBBBB..W",
+        "W..TT.................W",
+        "W....^^........vv.....W",
+        "W....^^........vv.....W",
+        "W.....................W",
+        "W..KKKKK..TTTT..SSSS..W",
+        "W..KKKKK..TTTT..SSSS..W",
+        "WWWWWWWWWWWWWWWWWWWWWWW",
+    ]
+    _HOUSE_INT_W = 23
+    _HOUSE_INT_H = 11
+    _HOUSE_INT_TILE_SIZE = 20
+    _HOUSE_INT_SPRITE_SCALE = 2
+    _HOUSE_INT_MAX_FLOORS_DEFAULT = 3
+
     @dataclass(frozen=True)
     class _ItemDef:
         id: str
@@ -7227,8 +7260,9 @@ class HardcoreSurvivalState(State):
                     w = rng.randint(9, 15)
                     h = rng.randint(8, 13)
                 elif town_kind == "住宅":
-                    w = rng.randint(6, 10)
-                    h = rng.randint(6, 10)
+                    # Residential houses: slightly larger footprints so 2F/3F reads well.
+                    w = rng.randint(7, 11)
+                    h = rng.randint(7, 11)
                 else:
                     w = rng.randint(8, 12)
                     h = rng.randint(7, 12)
@@ -7725,10 +7759,78 @@ class HardcoreSurvivalState(State):
                     for y in range(in_top + 2, in_bottom - 1, 2):
                         set_interior(int(shelf_x), int(y), self.state.T_SHELF)
 
+                elif town_kind == "住宅":
+                    # Residential: city houses can be 2–3 floors and become a portal
+                    # to a separate interior scene with stairs.
+                    is_city = bool(self._is_city_chunk(int(cx), int(cy)))
+                    r = float(rng.random())
+                    floors = 1
+                    if is_city:
+                        if r < 0.22:
+                            floors = 3
+                        elif r < 0.72:
+                            floors = 2
+                    else:
+                        # Some multi-floor houses also exist outside the dense city blocks.
+                        if r < 0.08:
+                            floors = 3
+                        elif r < 0.38:
+                            floors = 2
+                    # Tiny footprints read better as 1F.
+                    if int(w) < 7 or int(h) < 7:
+                        floors = 1
+                    building_floors = int(floors)
+
+                    if floors > 1:
+                        # Seal the world-map interior; enter via the door portal.
+                        for y in range(int(y0 + 1), int(y0 + h - 1)):
+                            for x in range(int(x0 + 1), int(x0 + w - 1)):
+                                tiles[idx(int(x), int(y))] = self.state.T_WALL
+
+                        tx0w = cx * self.state.CHUNK_SIZE + x0
+                        ty0w = cy * self.state.CHUNK_SIZE + y0
+                        doors_w = tuple(
+                            (cx * self.state.CHUNK_SIZE + int(dx), cy * self.state.CHUNK_SIZE + int(dy))
+                            for dx, dy in door_tiles
+                        )
+                        special_buildings.append(
+                            HardcoreSurvivalState._SpecialBuilding(
+                                kind="house",
+                                name="住宅",
+                                tx0=int(tx0w),
+                                ty0=int(ty0w),
+                                w=int(w),
+                                h=int(h),
+                                door_tiles=doors_w,
+                                floors=int(floors),
+                            )
+                        )
+                    else:
+                        # Single-floor house: bed + table + shelf.
+                        bx = in_left + 1
+                        if door_side in ("N", "S"):
+                            if int(round(door_cx)) <= int((in_left + in_right) // 2):
+                                bx = in_right - 2
+                            else:
+                                bx = in_left + 1
+                        by = in_top + 1
+                        if tiles[idx(bx, by)] == self.state.T_FLOOR and tiles[idx(bx + 1, by)] == self.state.T_FLOOR:
+                            tiles[idx(bx, by)] = self.state.T_BED
+                            tiles[idx(bx + 1, by)] = self.state.T_BED
+
+                        tx0c = int(clamp(int(round((in_left + in_right) / 2.0)), in_left + 1, in_right - 1))
+                        ty0c = int(clamp(int(round((in_top + in_bottom) / 2.0)), in_top + 1, in_bottom - 1))
+                        if tiles[idx(tx0c, ty0c)] == self.state.T_FLOOR:
+                            tiles[idx(tx0c, ty0c)] = self.state.T_TABLE
+
+                        shelf_x = in_left if bx > int((in_left + in_right) // 2) else in_right
+                        for y in range(in_top + 2, in_bottom - 1, 2):
+                            set_interior(int(shelf_x), int(y), self.state.T_SHELF)
+
                 elif town_kind == "医院":
                     # Reception + ward split.
                     if door_side in ("N", "S"):
-                        wy = y0 + 4 if door_side == "N" else y0 + h - 5   
+                        wy = y0 + 4 if door_side == "N" else y0 + h - 5
                         if in_top + 1 <= wy <= in_bottom - 1:
                             for x in range(in_left, in_right + 1):
                                 if not near_door(x, wy):
@@ -8438,6 +8540,18 @@ class HardcoreSurvivalState(State):
         self.sch_max_floors = int(self._SCH_INT_MAX_FLOORS_DEFAULT)
         self.sch_elevator_input = ""
 
+        # House interior (2–3 floors).
+        self.house_interior = False
+        self.house_int_pos = pygame.Vector2(0, 0)
+        self.house_int_vel = pygame.Vector2(0, 0)
+        self.house_int_facing = pygame.Vector2(0, 1)
+        self.house_int_walk_phase = 0.0
+        self.house_floor = 1
+        self.house_layout: list[str] = list(self._HOUSE_INT_F1_LAYOUT)
+        self.house_building: HardcoreSurvivalState._SpecialBuilding | None = None
+        self.house_world_return = pygame.Vector2(self.player.pos)
+        self.house_max_floors = int(self._HOUSE_INT_MAX_FLOORS_DEFAULT)
+
         tx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
         ty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
         spawn_chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
@@ -8650,6 +8764,15 @@ class HardcoreSurvivalState(State):
             if event.key in (pygame.K_m,):
                 self._toggle_world_map()
                 return
+            if getattr(self, "house_interior", False):
+                if event.key in (pygame.K_ESCAPE,):
+                    self._house_interior_exit()
+                    return
+                if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):
+                    self._house_interior_interact()
+                    return
+                if event.key in (pygame.K_f, pygame.K_v, pygame.K_h):
+                    return
             if getattr(self, "sch_interior", False):
                 if event.key in (pygame.K_ESCAPE,):
                     self._sch_interior_exit()
@@ -8657,7 +8780,7 @@ class HardcoreSurvivalState(State):
                 if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):
                     self._sch_interior_interact()
                     return
-                if event.key in (pygame.K_f, pygame.K_v, pygame.K_h):
+                if event.key in (pygame.K_f, pygame.K_v, pygame.K_h):   
                     return
             if getattr(self, "hr_interior", False):
                 if event.key in (pygame.K_ESCAPE,):
@@ -9515,9 +9638,204 @@ class HardcoreSurvivalState(State):
             if floor <= 1:
                 self._set_hint("已经是一楼", seconds=1.2)
                 return
-            self._sch_set_floor(int(floor - 1), spawn_at="stairs_up")
+            self._sch_set_floor(int(floor - 1), spawn_at="stairs_up")   
+            self._set_hint(f"下楼：{int(floor - 1)}F", seconds=0.9)     
+            return
+        self._set_hint("这里没有可互动", seconds=1.0)
+
+    def _house_int_set_layout(self, layout: list[str]) -> None:
+        self.house_layout = [str(r) for r in layout]
+
+    def _house_int_find(self, ch: str, *, layout: list[str] | None = None) -> tuple[int, int] | None:
+        ch = str(ch)[:1]
+        rows = self.house_layout if layout is None else layout
+        for y, row in enumerate(rows):
+            x = str(row).find(ch)
+            if x >= 0:
+                return int(x), int(y)
+        return None
+
+    def _house_int_char_at(self, x: int, y: int) -> str:
+        x = int(x)
+        y = int(y)
+        if not (0 <= x < int(self._HOUSE_INT_W) and 0 <= y < int(self._HOUSE_INT_H)):
+            return "W"
+        row = self.house_layout[y] if 0 <= y < len(self.house_layout) else ""
+        if 0 <= x < len(row):
+            return row[x]
+        return "W"
+
+    def _house_int_solid_tile(self, ch: str) -> bool:
+        ch = str(ch)[:1]
+        return ch not in (".", "D", "^", "v")
+
+    def _house_int_move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
+        tile = int(self._HOUSE_INT_TILE_SIZE)
+        rect = pygame.Rect(int(round(pos.x - w / 2)), int(round(pos.y - h / 2)), int(w), int(h))
+        dx = float(vel.x * dt)
+        dy = float(vel.y * dt)
+
+        def collide(r: pygame.Rect) -> list[pygame.Rect]:
+            left = int(math.floor(r.left / tile))
+            right = int(math.floor((r.right - 1) / tile))
+            top = int(math.floor(r.top / tile))
+            bottom = int(math.floor((r.bottom - 1) / tile))
+            hits: list[pygame.Rect] = []
+            for ty in range(top, bottom + 1):
+                for tx in range(left, right + 1):
+                    ch = self._house_int_char_at(tx, ty)
+                    if not self._house_int_solid_tile(ch):
+                        continue
+                    tr = pygame.Rect(tx * tile, ty * tile, tile, tile)
+                    if r.colliderect(tr):
+                        hits.append(tr)
+            return hits
+
+        if dx != 0.0:
+            rect.x += int(round(dx))
+            for hit in collide(rect):
+                if dx > 0:
+                    rect.right = hit.left
+                else:
+                    rect.left = hit.right
+
+        if dy != 0.0:
+            rect.y += int(round(dy))
+            for hit in collide(rect):
+                if dy > 0:
+                    rect.bottom = hit.top
+                else:
+                    rect.top = hit.bottom
+
+        pad = 3
+        half_w = float(w) / 2.0
+        half_h = float(h) / 2.0
+        min_x = tile + half_w + pad
+        min_y = tile + half_h + pad
+        max_x = int(self._HOUSE_INT_W) * tile - tile - half_w - pad
+        max_y = int(self._HOUSE_INT_H) * tile - tile - half_h - pad
+        rect.centerx = int(clamp(rect.centerx, min_x, max_x))
+        rect.centery = int(clamp(rect.centery, min_y, max_y))
+
+        return pygame.Vector2(rect.centerx, rect.centery)
+
+    def _house_int_player_tile(self) -> tuple[int, int]:
+        tile = int(self._HOUSE_INT_TILE_SIZE)
+        tx = int(math.floor(float(self.house_int_pos.x) / tile))
+        ty = int(math.floor(float(self.house_int_pos.y) / tile))
+        return tx, ty
+
+    def _house_set_floor(self, floor: int, *, spawn_at: str = "door_inside") -> None:
+        max_f = int(max(1, int(getattr(self, "house_max_floors", int(self._HOUSE_INT_MAX_FLOORS_DEFAULT)))))
+        floor = int(clamp(int(floor), 1, max_f))
+        self.house_floor = int(floor)
+        if floor <= 1:
+            self._house_int_set_layout(self._HOUSE_INT_F1_LAYOUT)
+        else:
+            self._house_int_set_layout(self._HOUSE_INT_FLOOR_LAYOUT)
+
+        tile = int(self._HOUSE_INT_TILE_SIZE)
+        target = "^"
+        if spawn_at == "stairs_up":
+            target = "^"
+        elif spawn_at == "stairs_down":
+            target = "v"
+        elif spawn_at == "door_inside":
+            target = "D"
+
+        pt = self._house_int_find(target)
+        if pt is None:
+            self.house_int_pos = pygame.Vector2((self._HOUSE_INT_W / 2.0) * tile, (self._HOUSE_INT_H / 2.0) * tile)
+        else:
+            sx, sy = pt
+            if spawn_at == "door_inside":
+                spawn = (sx - 1, sy) if sx >= int(self._HOUSE_INT_W) - 1 else (sx + 1, sy)
+                px, py = int(spawn[0]), int(spawn[1])
+                if self._house_int_solid_tile(self._house_int_char_at(px, py)):
+                    px, py = int(sx), int(sy)
+                self.house_int_pos = pygame.Vector2((px + 0.5) * tile, (py + 0.5) * tile)
+            else:
+                self.house_int_pos = pygame.Vector2((sx + 0.5) * tile, (sy + 0.5) * tile)
+
+        self.house_int_vel = pygame.Vector2(0, 0)
+        self.house_int_facing = pygame.Vector2(0, 1)
+        self.house_int_walk_phase = 0.0
+
+    def _house_interior_enter(self, sb: HardcoreSurvivalState._SpecialBuilding) -> None:
+        self.inv_open = False
+        self.rv_ui_open = False
+        self.home_ui_open = False
+        self.hr_elevator_ui_open = False
+        self.sch_elevator_ui_open = False
+        self._gallery_open = False
+        self.house_interior = True
+        self.mount = None
+        self.player.vel.update(0, 0)
+        self.player.walk_phase *= 0.85
+        self.rv.vel.update(0, 0)
+        self.bike.vel.update(0, 0)
+
+        self.house_building = sb
+        self.house_max_floors = int(getattr(sb, "floors", 0) or int(self._HOUSE_INT_MAX_FLOORS_DEFAULT))
+        if self.house_max_floors <= 0:
+            self.house_max_floors = int(self._HOUSE_INT_MAX_FLOORS_DEFAULT)
+        self.house_world_return = pygame.Vector2(self.player.pos)
+        self._house_set_floor(1, spawn_at="door_inside")
+        self._set_hint("住宅：E上下楼 | Esc退出", seconds=1.6)
+
+    def _house_interior_exit(self) -> None:
+        if not getattr(self, "house_interior", False):
+            return
+        self._clear_player_pose()
+        self.house_interior = False
+        self.house_building = None
+        self.house_floor = 1
+        self._house_int_set_layout(self._HOUSE_INT_F1_LAYOUT)
+        self.player.pos.update(self.house_world_return)
+        self._set_hint("离开住宅", seconds=1.0)
+
+    def _house_interior_interact(self) -> None:
+        if not getattr(self, "house_interior", False):
+            return
+        tx, ty = self._house_int_player_tile()
+        candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+        chosen: tuple[int, int, str] | None = None
+        for cx, cy in candidates:
+            ch = self._house_int_char_at(cx, cy)
+            if ch in ("D", "^", "v"):
+                chosen = (int(cx), int(cy), str(ch))
+                break
+        if chosen is None:
+            self._set_hint("这里没有可互动", seconds=1.0)
+            return
+        _cx, _cy, ch = chosen
+
+        floor = int(getattr(self, "house_floor", 1))
+        max_f = int(max(1, int(getattr(self, "house_max_floors", int(self._HOUSE_INT_MAX_FLOORS_DEFAULT)))))
+
+        if ch == "D":
+            if floor > 1:
+                self._set_hint("请先下楼再出去", seconds=1.2)
+                return
+            self._house_interior_exit()
+            return
+
+        if ch == "^":
+            if floor >= max_f:
+                self._set_hint("已经是顶层", seconds=1.2)
+                return
+            self._house_set_floor(int(floor + 1), spawn_at="stairs_down")
+            self._set_hint(f"上楼：{int(floor + 1)}F", seconds=0.9)
+            return
+
+        if ch == "v":
+            if floor <= 1:
+                self._set_hint("已经是一楼", seconds=1.2)
+                return
+            self._house_set_floor(int(floor - 1), spawn_at="stairs_up")
             self._set_hint(f"下楼：{int(floor - 1)}F", seconds=0.9)
             return
+
         self._set_hint("这里没有可互动", seconds=1.0)
 
     def _hr_int_set_layout(self, layout: list[str]) -> None:
@@ -11802,6 +12120,205 @@ class HardcoreSurvivalState(State):
         rect.midbottom = (sx, sy + 12)
         surface.blit(spr, rect)
 
+    def _draw_house_interior_scene(self, surface: pygame.Surface) -> None:
+        surface.fill((10, 10, 14))
+        tile = int(self._HOUSE_INT_TILE_SIZE)
+        map_w = int(self._HOUSE_INT_W) * tile
+        map_h = int(self._HOUSE_INT_H) * tile
+        map_x = (INTERNAL_W - map_w) // 2
+        map_y = 38
+        panel = pygame.Rect(map_x - 10, map_y - 10, map_w + 20, map_h + 20)
+        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=12)
+        pygame.draw.rect(surface, (70, 70, 86), panel, 2, border_radius=12)
+
+        floor = int(getattr(self, "house_floor", 1))
+        max_f = int(max(1, int(getattr(self, "house_max_floors", int(self._HOUSE_INT_MAX_FLOORS_DEFAULT)))))
+        subtitle = f"{floor}F/{max_f}F" if max_f > 1 else f"{floor}F"
+        draw_text(
+            surface,
+            self.app.font_s,
+            f"住宅 - {subtitle}",
+            (INTERNAL_W // 2, panel.top - 14),
+            pygame.Color(240, 240, 240),
+            anchor="center",
+        )
+
+        map_rect = pygame.Rect(map_x, map_y, map_w, map_h)
+        surface.blit(self._interior_floor_surface(map_w, map_h, kind="home"), map_rect.topleft)
+
+        wall = (26, 26, 32)
+        wall_hi = (56, 56, 70)
+        wall_edge = (12, 12, 16)
+        frame = (88, 80, 70)
+        outline = (10, 10, 12)
+
+        wood = (98, 78, 56)
+        wood2 = (74, 58, 42)
+        steel = (216, 220, 228)
+        steel2 = (134, 140, 152)
+
+        bed_matt = (186, 170, 156)
+        bed_blank = (142, 128, 170)
+        pillow = (238, 238, 244)
+
+        wkind = str(getattr(self, "weather_kind", "clear"))
+        inten = float(clamp(float(getattr(self, "weather_intensity", 0.0)), 0.0, 1.0))
+        win_view = self._window_view_surface(max(4, int(tile - 6)), max(4, int(tile - 8)))
+
+        done: set[tuple[int, int]] = set()
+
+        def block_size(x: int, y: int, ch: str) -> tuple[int, int]:
+            bw = 1
+            while self._house_int_char_at(int(x) + int(bw), int(y)) == ch:
+                bw += 1
+            bh = 1
+            while True:
+                ny = int(y) + int(bh)
+                if self._house_int_char_at(int(x), int(ny)) != ch:
+                    break
+                ok = True
+                for dx in range(int(bw)):
+                    if self._house_int_char_at(int(x) + int(dx), int(ny)) != ch:
+                        ok = False
+                        break
+                if not ok:
+                    break
+                bh += 1
+            return int(bw), int(bh)
+
+        for y in range(int(self._HOUSE_INT_H)):
+            for x in range(int(self._HOUSE_INT_W)):
+                ch = self._house_int_char_at(x, y)
+                r = pygame.Rect(map_x + x * tile, map_y + y * tile, tile, tile)
+
+                if ch in ("W", "V", "D"):
+                    pygame.draw.rect(surface, wall, r)
+                    pygame.draw.rect(surface, wall_hi, pygame.Rect(r.x, r.y, r.w, 4))
+                    pygame.draw.rect(surface, wall_edge, r, 1)
+                    pygame.draw.rect(surface, wood2, pygame.Rect(r.x, r.bottom - 4, r.w, 2))
+
+                    if ch == "V":
+                        glass = pygame.Rect(r.x + 3, r.y + 4, r.w - 6, r.h - 8)
+                        wv = win_view
+                        if wv.get_width() != glass.w or wv.get_height() != glass.h:
+                            wv = pygame.transform.scale(wv, (int(glass.w), int(glass.h)))
+                        surface.blit(wv, glass.topleft)
+                        if wkind in ("rain", "storm", "snow"):
+                            self._draw_window_precip(surface, glass, kind=wkind, intensity=inten)
+                        pygame.draw.rect(surface, frame, glass.inflate(4, 4), 1, border_radius=2)
+                        pygame.draw.rect(surface, outline, glass, 1)
+                        pygame.draw.line(surface, (40, 40, 50), (glass.centerx, glass.top + 1), (glass.centerx, glass.bottom - 2), 1)
+                    elif ch == "D":
+                        dr = pygame.Rect(r.x + 5, r.y + 4, r.w - 10, r.h - 8)
+                        pygame.draw.rect(surface, (240, 220, 140), dr, border_radius=2)
+                        pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                        pygame.draw.circle(surface, outline, (dr.right - 5, dr.centery), 2)
+                    continue
+
+                if ch in ("^", "v"):
+                    if (x, y) in done:
+                        continue
+                    bw, bh = block_size(x, y, ch)
+                    for dy in range(int(bh)):
+                        for dx in range(int(bw)):
+                            done.add((int(x) + int(dx), int(y) + int(dy)))
+                    br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
+                    inner = br.inflate(-4, -4)
+                    pygame.draw.rect(surface, steel, inner, border_radius=4)
+                    pygame.draw.rect(surface, outline, inner, 1, border_radius=4)
+                    pygame.draw.rect(surface, steel2, pygame.Rect(inner.x + 3, inner.y + 3, inner.w - 6, 3))
+                    cx = int(inner.centerx)
+                    cy = int(inner.centery)
+                    if ch == "^":
+                        pts = [(cx, cy - 6), (cx - 6, cy + 4), (cx + 6, cy + 4)]
+                    else:
+                        pts = [(cx, cy + 6), (cx - 6, cy - 4), (cx + 6, cy - 4)]
+                    pygame.draw.polygon(surface, (240, 220, 140), pts)
+                    pygame.draw.polygon(surface, outline, pts, 1)
+                    continue
+
+                if ch in ("B", "S", "F", "K", "T") and (x, y) not in done:
+                    bw, bh = block_size(x, y, ch)
+                    for dy in range(int(bh)):
+                        for dx in range(int(bw)):
+                            done.add((int(x) + int(dx), int(y) + int(dy)))
+                    br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
+                    er = br.inflate(-4, -4)
+
+                    if ch == "B":
+                        pygame.draw.rect(surface, wood2, er, border_radius=3)
+                        pygame.draw.rect(surface, outline, er, 1, border_radius=3)
+                        matt = er.inflate(-4, -4)
+                        pygame.draw.rect(surface, bed_matt, matt, border_radius=2)
+                        pygame.draw.rect(surface, outline, matt, 1, border_radius=2)
+                        blank = pygame.Rect(matt.x, matt.y + matt.h // 2, matt.w, matt.h // 2)
+                        pygame.draw.rect(surface, bed_blank, blank, border_radius=2)
+                        pygame.draw.rect(surface, outline, blank, 1, border_radius=2)
+                        pil = pygame.Rect(matt.x + 2, matt.y + 2, 8, 6)
+                        pygame.draw.rect(surface, pillow, pil, border_radius=2)
+                        pygame.draw.rect(surface, outline, pil, 1, border_radius=2)
+                    elif ch == "S":
+                        pygame.draw.rect(surface, (72, 80, 108), er, border_radius=3)
+                        pygame.draw.rect(surface, outline, er, 1, border_radius=3)
+                        for yy in range(er.y + 6, er.bottom - 6, 6):
+                            pygame.draw.line(surface, (40, 40, 50), (er.x + 2, yy), (er.right - 3, yy), 1)
+                        pygame.draw.rect(surface, (210, 180, 110), pygame.Rect(er.x + 3, er.y + 3, 4, 3), border_radius=1)
+                    elif ch == "F":
+                        pygame.draw.rect(surface, (236, 236, 242), er, border_radius=3)
+                        pygame.draw.rect(surface, outline, er, 1, border_radius=3)
+                        pygame.draw.rect(surface, (200, 200, 210), pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4))
+                        pygame.draw.rect(surface, outline, pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4), 1)
+                        pygame.draw.line(surface, outline, (er.x + 6, er.y + 6), (er.x + 6, er.bottom - 6), 1)
+                    elif ch == "K":
+                        pygame.draw.rect(surface, (62, 66, 74), er, border_radius=3)
+                        pygame.draw.rect(surface, outline, er, 1, border_radius=3)
+                        pygame.draw.rect(surface, (96, 102, 112), pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4))
+                        pygame.draw.rect(surface, outline, pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4), 1)
+                        pygame.draw.rect(surface, (18, 18, 22), pygame.Rect(er.x + 6, er.y + 6, 8, 6), border_radius=2)
+                    else:  # T
+                        pygame.draw.rect(surface, wood, er, border_radius=3)
+                        pygame.draw.rect(surface, outline, er, 1, border_radius=3)
+                        top = pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4)
+                        pygame.draw.rect(surface, wood2, top)
+                        pygame.draw.rect(surface, outline, top, 1)
+                        # Legs
+                        pygame.draw.rect(surface, wood2, pygame.Rect(er.x + 3, er.bottom - 5, 2, 4))
+                        pygame.draw.rect(surface, wood2, pygame.Rect(er.right - 5, er.bottom - 5, 2, 4))
+                    continue
+
+        p = pygame.Vector2(self.house_int_pos)
+        speed2 = float(getattr(self, "house_int_vel", pygame.Vector2(0, 0)).length_squared())
+        face = pygame.Vector2(self.house_int_facing)
+        if face.length_squared() <= 0.001:
+            face = pygame.Vector2(0, 1)
+        if abs(face.y) >= abs(face.x):
+            d = "down" if face.y >= 0 else "up"
+        else:
+            d = "right" if face.x >= 0 else "left"
+        pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
+        pf_run = getattr(self, "player_frames_run", None)
+        is_run = bool(getattr(self, "player_sprinting", False))
+        pf = pf_run if (is_run and isinstance(pf_run, dict)) else pf_walk
+        frames = pf.get(d, pf["down"])
+        if speed2 <= 0.2 or len(frames) <= 1:
+            base = frames[0]
+        else:
+            walk = frames[1:]
+            phase = (float(self.house_int_walk_phase) % math.tau) / math.tau
+            idx = int(phase * len(walk)) % len(walk)
+            base = walk[idx]
+
+        scale = int(max(1, int(self._HOUSE_INT_SPRITE_SCALE)))
+        spr = pygame.transform.scale(base, (int(base.get_width()) * scale, int(base.get_height()) * scale))
+        sx = int(round(map_x + p.x))
+        sy = int(round(map_y + p.y))
+        shadow = pygame.Rect(0, 0, 14, 6)
+        shadow.center = (sx, sy + 8)
+        pygame.draw.ellipse(surface, (0, 0, 0), shadow)
+        rect = spr.get_rect()
+        rect.midbottom = (sx, sy + 12)
+        surface.blit(spr, rect)
+
     def _draw_sch_interior_scene(self, surface: pygame.Surface) -> None:
         surface.fill((10, 10, 14))
         tile = int(self._SCH_INT_TILE_SIZE)
@@ -13923,7 +14440,9 @@ class HardcoreSurvivalState(State):
         pose = getattr(self, "player_pose", None)
         if pose:
             cur_space = "world"
-            if getattr(self, "sch_interior", False):
+            if getattr(self, "house_interior", False):
+                cur_space = "house"
+            elif getattr(self, "sch_interior", False):
                 cur_space = "sch"
             elif getattr(self, "hr_interior", False):
                 cur_space = "hr"
@@ -13972,11 +14491,33 @@ class HardcoreSurvivalState(State):
             self._update_gun_timers(dt, allow_fire=False)
             return
 
+        if getattr(self, "house_interior", False):
+            base_speed = 60.0
+            self.house_int_vel = move * base_speed
+            self.player_sprinting = False
+            if self.house_int_vel.length_squared() > 0.1:
+                self.house_int_facing = pygame.Vector2(self.house_int_vel).normalize()
+                self.house_int_walk_phase += dt * 10.0 * (self.house_int_vel.length() / base_speed)
+            else:
+                self.house_int_walk_phase *= 0.90
+            self.house_int_pos = self._house_int_move_box(
+                self.house_int_pos,
+                self.house_int_vel,
+                dt,
+                w=int(getattr(self, "rv_int_player_w", self._RV_INT_PLAYER_W)),
+                h=int(getattr(self, "rv_int_player_h", self._RV_INT_PLAYER_H)),
+            )
+            self.player.vel.update(0, 0)
+            self.rv.vel.update(0, 0)
+            self.bike.vel.update(0, 0)
+            self._update_gun_timers(dt, allow_fire=False)
+            return
+
         if getattr(self, "hr_interior", False):
             base_speed = 60.0
 
             # "Walk into the lobby then to the elevator" feel on entry.
-            if bool(getattr(self, "hr_auto_walk_to_elevator", False)):
+            if bool(getattr(self, "hr_auto_walk_to_elevator", False)):  
                 # Allow player input to cancel the auto-walk.
                 if move.length_squared() > 0.001:
                     self.hr_auto_walk_to_elevator = False
@@ -14283,8 +14824,11 @@ class HardcoreSurvivalState(State):
         # Stream/generate chunks ahead of the camera to avoid hitches when
         # walking diagonally across chunk corners. Render code only "peeks"
         # tiles/chunks and never generates them.
-        if bool(getattr(self, "rv_interior", False)) or bool(getattr(self, "hr_interior", False)) or bool(
-            getattr(self, "sch_interior", False)
+        if (
+            bool(getattr(self, "rv_interior", False))
+            or bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "house_interior", False))
         ):
             return
 
@@ -14544,6 +15088,9 @@ class HardcoreSurvivalState(State):
             if kind == "highrise":
                 self._hr_interior_enter(sb)
                 return True
+            if kind == "house":
+                self._house_interior_enter(sb)
+                return True
             if kind == "school":
                 self._sch_interior_enter(sb)
                 return True
@@ -14760,8 +15307,11 @@ class HardcoreSurvivalState(State):
         if getattr(self, "mount", None) is not None:
             self._set_hint("下车后才能出拳", seconds=0.9)
             return
-        if bool(getattr(self, "rv_interior", False)) or bool(getattr(self, "hr_interior", False)) or bool(
-            getattr(self, "sch_interior", False)
+        if (
+            bool(getattr(self, "rv_interior", False))
+            or bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "house_interior", False))
         ):
             return
         if float(getattr(self, "punch_cooldown_left", 0.0)) > 0.0:
@@ -16770,6 +17320,17 @@ class HardcoreSurvivalState(State):
             max_face = int(max(36, int(roof_h - 18)))
             return int(clamp(int(base), 36, int(min(max_face, 140))))
 
+        if style == 1 and int(floors) > 1:
+            # Multi-floor house: taller facade than single-story homes.
+            f = int(clamp(int(floors), 2, 3))
+            base = 14 + (f - 1) * 10
+            if area >= 220:
+                base += 2
+            base += (int(var) % 5) - 2
+            roof_h = int(max(1, (int(h) - 2) * int(self.TILE_SIZE)))
+            max_face = int(max(12, int(roof_h - 14)))
+            return int(clamp(int(base), 12, int(min(max_face, 60))))
+
         base = {
             1: 3,  # 住宅
             2: 5,  # 超市/商店
@@ -17080,14 +17641,12 @@ class HardcoreSurvivalState(State):
                     if min_ground_y is not None and int(ground_y) <= int(min_ground_y):
                         continue
                     # South (bottom) face: draw the "front facade".
-                    # For high-rises, extend the facade upward so multiple
-                    # window rows can read as "tall" (roof is clipped for
-                    # style==6 to avoid overlap).
+                    # Extend upward for tall facades (high-rises and multi-floor houses).
                     south_y = int(ground_y - self.TILE_SIZE)
                     south_h = int(self.TILE_SIZE)
-                    if style == 6:
+                    if style == 6 or (style == 1 and int(floors) > 1):
                         south_y = int(ground_y - self.TILE_SIZE - int(face_h))
-                        south_h = int(self.TILE_SIZE + int(face_h))
+                        south_h = int(self.TILE_SIZE + int(face_h))     
                     south = pygame.Rect(int(bx), int(south_y), int(bw), int(south_h))
                     pygame.draw.rect(surface, front, south)
                     pygame.draw.rect(surface, outline, south, 1)
@@ -17224,16 +17783,34 @@ class HardcoreSurvivalState(State):
                                     pygame.draw.rect(surface, win, r, border_radius=1)
                                     pygame.draw.rect(surface, frame, r, 1, border_radius=1)
                         else:
-                            # Single row for small residential buildings.
                             step_x = 12
-                            y1 = int(south.y + 4)
-                            for i, xx in enumerate(range(start_x, south.right - 10, step_x)):
-                                # IMPORTANT: use local window index (not screen coordinates) so it doesn't flicker.
-                                if ((i + var) % 3) == 0:
-                                    continue
-                                r = pygame.Rect(int(xx), int(y1), 6, 4)
-                                pygame.draw.rect(surface, win, r, border_radius=1)
-                                pygame.draw.rect(surface, frame, r, 1, border_radius=1)
+                            if int(floors) > 1 and south.h >= 18:
+                                # Multi-floor house: 2–3 window rows so the facade reads taller.
+                                rows = int(clamp(int(floors), 2, 3))
+                                y0w = int(south.y + 4)
+                                y1w = int(south.bottom - 18)
+                                if y1w <= y0w:
+                                    y1w = int(south.y + 4)
+                                span = int(max(0, int(y1w - y0w)))
+                                for row_i in range(int(rows)):
+                                    yy = int(y0w + (span * int(row_i)) / max(1, int(rows - 1)))
+                                    for col_i, xx in enumerate(range(start_x, south.right - 10, step_x)):
+                                        # IMPORTANT: use local indices (not screen coords) so it doesn't flicker.
+                                        if ((col_i + row_i + var) % 4) == 0:
+                                            continue
+                                        r = pygame.Rect(int(xx), int(yy), 6, 4)
+                                        pygame.draw.rect(surface, win, r, border_radius=1)
+                                        pygame.draw.rect(surface, frame, r, 1, border_radius=1)
+                            else:
+                                # Single row for small residential buildings.
+                                y1 = int(south.y + 4)
+                                for i, xx in enumerate(range(start_x, south.right - 10, step_x)):
+                                    # IMPORTANT: use local window index (not screen coordinates) so it doesn't flicker.
+                                    if ((i + var) % 3) == 0:
+                                        continue
+                                    r = pygame.Rect(int(xx), int(y1), 6, 4)
+                                    pygame.draw.rect(surface, win, r, border_radius=1)
+                                    pygame.draw.rect(surface, frame, r, 1, border_radius=1)
 
                     # "Front interior" storefront hint (like the reference): show a cutout window strip with
                     # silhouettes of shelves/props synced to the actual interior tiles.
@@ -17564,11 +18141,10 @@ class HardcoreSurvivalState(State):
                     rh = max(1, int(h) - 2)
                     roof = self._roof_surface(rw, rh, alpha, roof_kind=roof_kind)
                     roof_draw = roof
-                    if style == 6:
-                        # High-rise: the facade is tall; clip a chunk off the
-                        # roof bottom so the facade isn't covered by the roof.
+                    if style == 6 or (style == 1 and int(floors) > 1):
+                        # Tall facade: clip a chunk off the roof bottom so the facade isn't covered by the roof.
                         cut = int(max(0, int(face_h) - 2))
-                        min_vis = 18
+                        min_vis = 18 if style == 6 else 14
                         max_cut = max(0, int(roof.get_height()) - int(min_vis))
                         cut = int(min(int(cut), int(max_cut)))
                         if cut > 0:
@@ -18098,6 +18674,20 @@ class HardcoreSurvivalState(State):
 
     def draw(self, surface: pygame.Surface) -> None:
         surface.fill((0, 0, 0))
+        if getattr(self, "house_interior", False):
+            self._hover_tooltip = None
+            self._draw_house_interior_scene(surface)
+            self._draw_day_night_overlay(surface, in_rv=True)
+            self._draw_survival_ui(surface)
+            if getattr(self, "world_map_open", False):
+                self._draw_world_map_ui(surface)
+                return
+            self._draw_hover_tooltip(surface)
+            if self.inv_open:
+                self._draw_inventory_ui(surface)
+            if getattr(self, "_gallery_open", False):
+                self._draw_sprite_gallery_ui(surface)
+            return
         if getattr(self, "sch_interior", False):
             self._hover_tooltip = None
             self._draw_sch_interior_scene(surface)
@@ -18487,7 +19077,12 @@ class HardcoreSurvivalState(State):
             pygame.draw.circle(surface, (18, 18, 22), (cut_x, cut_y), 4)
 
     def _draw_minimap(self, surface: pygame.Surface) -> pygame.Rect | None:
-        if bool(getattr(self, "rv_interior", False)) or bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "sch_interior", False)):
+        if (
+            bool(getattr(self, "rv_interior", False))
+            or bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "house_interior", False))
+        ):
             return None
 
         # Keep the minimap panel size similar (player-centric).
