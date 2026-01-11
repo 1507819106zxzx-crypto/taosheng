@@ -18134,26 +18134,49 @@ class HardcoreSurvivalState(State):
                 height_delta=int(height_delta),
                 run=bool(is_run),
             )
-            hand_key = "l_hand" if self.gun is not None else "r_hand"
-            hand_node = sk.get(hand_key)
-            if hand_node is not None:
-                hx, hy = hand_node
-                base_hand = pygame.Vector2(int(rect.left + hx), int(rect.top + hy))
+            # Pick a sane punch anchor from the skeleton:
+            # - left/right punches use the hand on that side
+            # - up/down punches use the midpoint of both hands (so it reads "forward")
+            lh = sk.get("l_hand")
+            rh = sk.get("r_hand")
+            base_hand: pygame.Vector2
+            if lh is not None and rh is not None:
+                lhx, lhy = int(lh[0]), int(lh[1])
+                rhx, rhy = int(rh[0]), int(rh[1])
+                if abs(float(pdir.x)) >= abs(float(pdir.y)) and float(pdir.x) != 0.0:
+                    # Horizontal punch: choose the hand on the punch side.
+                    if float(pdir.x) < 0.0:
+                        hx, hy = (lhx, lhy) if lhx <= rhx else (rhx, rhy)
+                    else:
+                        hx, hy = (lhx, lhy) if lhx >= rhx else (rhx, rhy)
+                    base_hand = pygame.Vector2(int(rect.left + hx), int(rect.top + hy))
+                else:
+                    # Vertical punch: center the fist between hands.
+                    hx = int(round((lhx + rhx) * 0.5))
+                    hy = int(round((lhy + rhy) * 0.5)) - 1
+                    base_hand = pygame.Vector2(int(rect.left + hx), int(rect.top + hy))
             else:
-                base_hand = pygame.Vector2(rect.centerx, rect.centery + 3)
+                hand_key = "r_hand"
+                hand_node = sk.get(hand_key)
+                if hand_node is not None:
+                    hx, hy = hand_node
+                    base_hand = pygame.Vector2(int(rect.left + hx), int(rect.top + hy))
+                else:
+                    base_hand = pygame.Vector2(rect.centerx, rect.centery + 3)
 
             fist = base_hand + pdir * float(reach)
             outline = (10, 10, 12)
             skin = tuple(getattr(self, "_PLAYER_PAL", {}).get("S", (220, 190, 160)))
-
-            pygame.draw.line(surface, outline, (int(base_hand.x), int(base_hand.y)), (int(fist.x), int(fist.y)), 2)
-            pygame.draw.line(surface, skin, (int(base_hand.x), int(base_hand.y)), (int(fist.x), int(fist.y)), 1)
 
             fx = int(round(float(fist.x)))
             fy = int(round(float(fist.y)))
             fr = pygame.Rect(int(fx - 1), int(fy - 1), 3, 3)
             surface.fill(skin, fr)
             pygame.draw.rect(surface, outline, fr, 1)
+            # Tiny motion trail (doesn't add a long "stick arm").
+            tx = int(clamp(fx - int(round(float(pdir.x))), 0, INTERNAL_W - 1))
+            ty = int(clamp(fy - int(round(float(pdir.y))), 0, INTERNAL_H - 1))
+            surface.set_at((tx, ty), outline)
             if ext > 0.6:
                 hlx = int(clamp(fx + int(round(pdir.x)), 0, INTERNAL_W - 1))
                 hly = int(clamp(fy + int(round(pdir.y)), 0, INTERNAL_H - 1))
