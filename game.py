@@ -7260,9 +7260,9 @@ class HardcoreSurvivalState(State):
                     w = rng.randint(9, 15)
                     h = rng.randint(8, 13)
                 elif town_kind == "住宅":
-                    # Residential houses: slightly larger footprints so 2F/3F reads well.
-                    w = rng.randint(7, 11)
-                    h = rng.randint(7, 11)
+                    # Residential houses: keep them small (typical 1–2 story size).
+                    w = rng.randint(6, 9)
+                    h = rng.randint(6, 9)
                 else:
                     w = rng.randint(8, 12)
                     h = rng.randint(7, 12)
@@ -7766,15 +7766,15 @@ class HardcoreSurvivalState(State):
                     r = float(rng.random())
                     floors = 1
                     if is_city:
-                        if r < 0.22:
+                        if r < 0.08:
                             floors = 3
-                        elif r < 0.72:
+                        elif r < 0.55:
                             floors = 2
                     else:
                         # Some multi-floor houses also exist outside the dense city blocks.
-                        if r < 0.08:
+                        if r < 0.03:
                             floors = 3
-                        elif r < 0.38:
+                        elif r < 0.22:
                             floors = 2
                     # Tiny footprints read better as 1F.
                     if int(w) < 7 or int(h) < 7:
@@ -14889,13 +14889,25 @@ class HardcoreSurvivalState(State):
         else:
             moving = self.player.vel.length_squared() > 0.1
 
-        # Budgeted generation: generate more when standing still; while moving,
-        # generate occasionally to keep ahead without constant stalls.
-        budget = 2 if not moving else 0
+        # Budgeted generation: keep the world streaming ahead so buildings
+        # (including facades) don't "vanish" while walking into new chunks.
+        try:
+            pending = int(len(getattr(self.world, "_gen_queue", [])) - int(getattr(self.world, "_gen_queue_i", 0)))
+        except Exception:
+            pending = 0
+
+        budget = 0
         if moving:
-            interval = 6 if mount is not None else 12
-            if (tick % int(interval)) == 0:
+            # Always generate a little while moving; ramp up if we're behind.
+            if pending > 0:
                 budget = 1
+            if pending > 18:
+                budget = 2
+        else:
+            # Standing still: catch up faster.
+            budget = 2 if pending > 0 else 0
+            if pending > 18:
+                budget = 3
         if budget > 0:
             self.world.pump_generation(max_chunks=int(budget))
 
@@ -17323,13 +17335,13 @@ class HardcoreSurvivalState(State):
         if style == 1 and int(floors) > 1:
             # Multi-floor house: taller facade than single-story homes.
             f = int(clamp(int(floors), 2, 3))
-            base = 14 + (f - 1) * 10
+            base = 10 + (f - 1) * 8
             if area >= 220:
                 base += 2
             base += (int(var) % 5) - 2
             roof_h = int(max(1, (int(h) - 2) * int(self.TILE_SIZE)))
             max_face = int(max(12, int(roof_h - 14)))
-            return int(clamp(int(base), 12, int(min(max_face, 60))))
+            return int(clamp(int(base), 12, int(min(max_face, 50))))
 
         base = {
             1: 3,  # 住宅
