@@ -18586,7 +18586,8 @@ class HardcoreSurvivalState(State):
                     icon_ty = int(clamp(float(ty), float(bty0), float(y1)))
                     mx = int(map_x0 + (int(icon_tx) - int(start_tx)) * int(scale) + int(scale) // 2)
                     my = int(map_y0 + (int(icon_ty) - int(start_ty)) * int(scale) + int(scale) // 2)
-                    self._draw_world_map_icon(surface, mx, my, str(kind), scale=1)
+                    # Use the same icon scale as the big-map legend so symbols match.
+                    self._draw_world_map_icon(surface, mx, my, str(kind), scale=2)
                     drawn_pois += 1
                     if drawn_pois >= 16:
                         break
@@ -18807,13 +18808,24 @@ class HardcoreSurvivalState(State):
             r.center = (x, y)
             pygame.draw.rect(surface, (0, 0, 0), r)
             pygame.draw.rect(surface, (60, 60, 72), r.inflate(-2, -2))
-            # Tiny pistol silhouette.
-            pygame.draw.rect(surface, col, pygame.Rect(r.left + 3, r.centery - 1, r.w - 6, 2))
-            pygame.draw.rect(surface, col, pygame.Rect(r.right - 5, r.centery - 1, 2, 1))
-            pygame.draw.rect(surface, col, pygame.Rect(r.centerx - 1, r.centery + 1, 2, 4))
-            pygame.draw.rect(surface, (0, 0, 0), pygame.Rect(r.left + 3, r.centery - 1, r.w - 6, 2), 1)
-            pygame.draw.rect(surface, (0, 0, 0), pygame.Rect(r.centerx - 1, r.centery + 1, 2, 4), 1)
-            pygame.draw.rect(surface, (0, 0, 0), pygame.Rect(r.right - 5, r.centery - 1, 2, 1), 1)
+            # Tiny pistol silhouette that still reads at small sizes.
+            body_w = max(3, int(r.w) - 4)
+            body_h = max(2, int(r.h) // 3)
+            body = pygame.Rect(0, 0, int(body_w), int(body_h))
+            body.center = (int(r.centerx), int(r.centery) - 1)
+            barrel_w = max(2, int(body.w) // 3)
+            barrel = pygame.Rect(int(body.right) - 1, int(body.top), int(barrel_w), 1)
+            grip_w = max(2, int(body.w) // 4)
+            grip_h = max(3, int(r.h) - int(body.h) - 2)
+            grip = pygame.Rect(0, 0, int(grip_w), int(grip_h))
+            grip.midtop = (int(body.centerx), int(body.bottom) - 1)
+
+            pygame.draw.rect(surface, col, body)
+            pygame.draw.rect(surface, col, barrel)
+            pygame.draw.rect(surface, col, grip)
+            pygame.draw.rect(surface, (0, 0, 0), body, 1)
+            pygame.draw.rect(surface, (0, 0, 0), barrel, 1)
+            pygame.draw.rect(surface, (0, 0, 0), grip, 1)
             return
 
         if kind == "bookstore":
