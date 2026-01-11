@@ -271,16 +271,36 @@ def _sfx_swing(rate: int) -> pygame.mixer.Sound | None:
     return _make_sound(out, volume=0.26)
 
 
+def _sfx_hit(rate: int) -> pygame.mixer.Sound | None:
+    # Short "thump" for melee hits.
+    dur_s = 0.075
+    n = max(1, int(rate * dur_s))
+    out = array("h")
+    max_amp = 32767
+    for i in range(n):
+        t = i / rate
+        u = t / max(1e-6, dur_s)
+        env = math.exp(-t * 75.0) * (1.0 if u < 1.0 else 0.0)
+        thump = math.sin(math.tau * 90.0 * t) * 0.45
+        noise = random.uniform(-1.0, 1.0) * 0.35
+        v = (thump + noise) * env
+        v = clamp(v, -1.0, 1.0)
+        out.append(int(v * max_amp))
+    return _make_sound(out, volume=0.34)
+
+
 class SFX:
     def __init__(self) -> None:
         self.enabled = pygame.mixer.get_init() is not None
         self.shot: pygame.mixer.Sound | None = None
         self.swing: pygame.mixer.Sound | None = None
+        self.hit: pygame.mixer.Sound | None = None
         if not self.enabled:
             return
         rate = pygame.mixer.get_init()[0] if pygame.mixer.get_init() else 22050
         self.shot = _sfx_shot(int(rate))
         self.swing = _sfx_swing(int(rate))
+        self.hit = _sfx_hit(int(rate))
 
     def play(self, name: str) -> None:
         if not self.enabled:
@@ -5160,6 +5180,13 @@ class HardcoreSurvivalState(State):
         color: tuple[int, int, int] = (255, 220, 140)
 
     @dataclass
+    class _HitFX:
+        pos: pygame.Vector2
+        vel: pygame.Vector2
+        ttl: float
+        color: tuple[int, int, int] = (170, 80, 90)  # blood-ish
+
+    @dataclass
     class _ParkedCar:
         pos: pygame.Vector2
         model_id: str
@@ -5599,6 +5626,16 @@ class HardcoreSurvivalState(State):
             scream_spawn=4,
         ),
     }
+
+    # Player melee (unarmed punch).
+    _PUNCH_TOTAL_S = 0.26
+    _PUNCH_WINDUP_S = 0.06
+    _PUNCH_COOLDOWN_S = 0.28
+    _PUNCH_RANGE_PX = 18.0
+    _PUNCH_ARC_DOT = 0.28  # smaller => wider arc
+    _PUNCH_DAMAGE = 7
+    _PUNCH_STAGGER_S = 0.18
+    _PUNCH_STAGGER_SPEED = 95.0
 
     @dataclass
     class _Zombie:
@@ -8327,6 +8364,13 @@ class HardcoreSurvivalState(State):
         self.muzzle_flash_left = 0.0
         self.noise_left = 0.0
         self.noise_radius = 0.0
+        self.punch_left = 0.0
+        self.punch_cooldown_left = 0.0
+        self.punch_hit_done = False
+        self.punch_dir = pygame.Vector2(1, 0)
+        self.hit_fx: list[HardcoreSurvivalState._HitFX] = []
+        # Visual-only RNG: keep it separate so FX doesn't affect gameplay RNG.
+        self.fx_rng = random.Random(self.seed ^ 0x51C0B1A7)
 
         # Weather (visual-first prototype).
         self.weather_kind = "clear"  # clear | cloudy | rain | storm | snow
@@ -8533,6 +8577,9 @@ class HardcoreSurvivalState(State):
                 return
             if not self.inv_open and event.key in (pygame.K_r,):
                 self._start_reload()
+                return
+            if not self.inv_open and event.key in (pygame.K_j,):
+                self._start_punch()
                 return
             if not self.inv_open and event.key in (pygame.K_v,):
                 self._cycle_rv_model()
@@ -13985,8 +14032,10 @@ class HardcoreSurvivalState(State):
 
         self._update_gun_timers(dt, allow_fire=True)
 
+        self._update_punch(dt)
         self._update_zombies(dt)
         self._update_bullets(dt)
+        self._update_hit_fx(dt)
 
     def _set_hint(self, text: str, *, seconds: float = 1.2) -> None:
         self.hint_text = str(text)
@@ -14474,6 +14523,165 @@ class HardcoreSurvivalState(State):
         self.gun.reload_total = float(gun_def.reload_s)
         self.gun.reload_left = float(gun_def.reload_s)
         self._set_hint("换弹中…", seconds=0.8)
+
+    def _start_punch(self) -> None:
+        # J: unarmed punch (works even if holding a gun; uses the free hand).
+        if self.player.hp <= 0:
+            return
+        if getattr(self, "mount", None) is not None:
+            self._set_hint("下车后才能出拳", seconds=0.9)
+            return
+        if bool(getattr(self, "rv_interior", False)) or bool(getattr(self, "hr_interior", False)) or bool(
+            getattr(self, "sch_interior", False)
+        ):
+            return
+        if float(getattr(self, "punch_cooldown_left", 0.0)) > 0.0:
+            return
+
+        d = pygame.Vector2(getattr(self, "aim_dir", pygame.Vector2(0, 0)))
+        if d.length_squared() <= 0.001:
+            d = pygame.Vector2(self.player.facing)
+        if d.length_squared() <= 0.001:
+            d = pygame.Vector2(1, 0)
+        self.punch_dir = d.normalize()
+        self.punch_left = float(self._PUNCH_TOTAL_S)
+        self.punch_hit_done = False
+        self.punch_cooldown_left = float(self._PUNCH_COOLDOWN_S)
+
+        # Small stamina cost (no hard gate).
+        try:
+            self.player.stamina = float(clamp(float(self.player.stamina) - 5.0, 0.0, 100.0))
+        except Exception:
+            pass
+
+        self.app.play_sfx("swing")
+
+    def _update_punch(self, dt: float) -> None:
+        self.punch_cooldown_left = max(0.0, float(getattr(self, "punch_cooldown_left", 0.0)) - dt)
+
+        left = float(getattr(self, "punch_left", 0.0))
+        if left <= 0.0:
+            self.punch_left = 0.0
+            return
+
+        left = max(0.0, left - dt)
+        self.punch_left = float(left)
+
+        if bool(getattr(self, "punch_hit_done", False)):
+            return
+
+        total = float(self._PUNCH_TOTAL_S)
+        t = 1.0 - float(left) / max(1e-6, total)
+        if t < float(self._PUNCH_WINDUP_S) / max(1e-6, total):
+            return
+
+        self.punch_hit_done = True
+        self._punch_apply_hit()
+
+    def _punch_apply_hit(self) -> None:
+        if not self.zombies:
+            return
+
+        d = pygame.Vector2(getattr(self, "punch_dir", pygame.Vector2(0, 0)))
+        if d.length_squared() <= 0.001:
+            d = pygame.Vector2(self.player.facing)
+        if d.length_squared() <= 0.001:
+            d = pygame.Vector2(1, 0)
+        d = d.normalize()
+
+        origin = pygame.Vector2(self.player.pos) + d * (float(self.player.w) * 0.5 + 2.0)
+        r = float(self._PUNCH_RANGE_PX)
+        r2 = r * r
+        dot_min = float(self._PUNCH_ARC_DOT)
+        dmg = int(self._PUNCH_DAMAGE)
+        hit = 0
+
+        for z in self.zombies:
+            if int(getattr(z, "hp", 0)) <= 0:
+                continue
+            to_z = pygame.Vector2(z.pos) - origin
+            reach = float(r) + float(getattr(z, "w", 10)) * 0.35
+            if to_z.length_squared() > reach * reach:
+                continue
+            if to_z.length_squared() > 0.001:
+                if to_z.normalize().dot(d) < dot_min:
+                    continue
+
+            z.hp = int(z.hp) - int(dmg)
+            hit += 1
+            if int(z.hp) > 0:
+                z.stagger_left = max(float(getattr(z, "stagger_left", 0.0)), float(self._PUNCH_STAGGER_S))
+                z.stagger_vel = pygame.Vector2(d) * float(self._PUNCH_STAGGER_SPEED)
+            else:
+                self._on_zombie_killed(z)
+
+            self._spawn_hit_fx(pygame.Vector2(z.pos), dir=d)
+
+        if hit > 0:
+            self.app.play_sfx("hit")
+            self.noise_left = max(float(getattr(self, "noise_left", 0.0)), 0.22)
+            self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), 120.0)
+            self.zombies = [z for z in self.zombies if int(z.hp) > 0]
+
+    def _spawn_hit_fx(self, pos: pygame.Vector2, *, dir: pygame.Vector2) -> None:
+        pos = pygame.Vector2(pos)
+        d = pygame.Vector2(dir)
+        if d.length_squared() <= 0.001:
+            d = pygame.Vector2(1, 0)
+        d = d.normalize()
+
+        rnd = getattr(self, "fx_rng", None)
+        if not isinstance(rnd, random.Random):
+            rnd = random.Random(1234)
+
+        base_ang = float(math.atan2(float(d.y), float(d.x)))
+        count = 7
+        for _ in range(count):
+            ang = base_ang + float(rnd.uniform(-1.15, 1.15))
+            spd = float(rnd.uniform(35.0, 130.0))
+            vel = pygame.Vector2(math.cos(ang), math.sin(ang)) * spd
+            ttl = float(rnd.uniform(0.10, 0.22))
+            self.hit_fx.append(HardcoreSurvivalState._HitFX(pos=pygame.Vector2(pos), vel=vel, ttl=ttl))
+
+        # A brighter "spark" reads better than pure blood at 1x.
+        self.hit_fx.append(
+            HardcoreSurvivalState._HitFX(
+                pos=pygame.Vector2(pos) + d * 2.0,
+                vel=pygame.Vector2(d) * 10.0,
+                ttl=0.08,
+                color=(255, 220, 160),
+            )
+        )
+
+        if len(self.hit_fx) > 240:
+            self.hit_fx = self.hit_fx[-240:]
+
+    def _update_hit_fx(self, dt: float) -> None:
+        if not getattr(self, "hit_fx", None):
+            return
+        alive: list[HardcoreSurvivalState._HitFX] = []
+        for fx in self.hit_fx:
+            fx.pos += fx.vel * dt
+            fx.vel *= 0.82
+            fx.ttl -= dt
+            if float(fx.ttl) > 0.0:
+                alive.append(fx)
+        self.hit_fx = alive
+
+    def _draw_hit_fx(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        if not getattr(self, "hit_fx", None):
+            return
+        for fx in self.hit_fx:
+            p = pygame.Vector2(fx.pos) - pygame.Vector2(cam_x, cam_y)
+            x = iround(float(p.x))
+            y = iround(float(p.y))
+            if not (0 <= x < INTERNAL_W and 0 <= y < INTERNAL_H):
+                continue
+            # Big at first, then fade to single pixels.
+            if float(fx.ttl) > 0.14:
+                surface.fill(fx.color, pygame.Rect(int(x), int(y), 2, 1))
+            else:
+                surface.fill(fx.color, pygame.Rect(int(x), int(y), 1, 1))
 
     def _toggle_vehicle(self) -> None:
         if self.mount is not None:
@@ -17683,6 +17891,7 @@ class HardcoreSurvivalState(State):
         self._draw_bullets(surface, cam_x, cam_y)
         if self.mount is None:
             self._draw_player(surface, cam_x, cam_y)
+        self._draw_hit_fx(surface, cam_x, cam_y)
         # Occlude the mounted vehicle by front facades when it is behind buildings.
         self._occlude_mounted_vehicle_with_facades(surface, cam_x, cam_y, start_tx - 3, end_tx + 3, start_ty - 3, end_ty + 3)
         self._draw_roofs(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
@@ -17759,6 +17968,11 @@ class HardcoreSurvivalState(State):
             face = pygame.Vector2(self.aim_dir)
         if face.length_squared() <= 0.001:
             face = pygame.Vector2(0, 1)
+        punch_left = float(getattr(self, "punch_left", 0.0))
+        if punch_left > 0.0:
+            pd = pygame.Vector2(getattr(self, "punch_dir", face))
+            if pd.length_squared() > 0.001:
+                face = pd.normalize()
 
         prev_d = str(getattr(self.player, "dir", "down"))
         ax = abs(float(face.x))
@@ -17860,6 +18074,55 @@ class HardcoreSurvivalState(State):
                 r = 3 if self.muzzle_flash_left > 0.03 else 2
                 pygame.draw.circle(surface, (255, 240, 190), (int(round(muzzle.x)), int(round(muzzle.y))), r)
                 pygame.draw.circle(surface, (255, 200, 120), (int(round(muzzle.x)), int(round(muzzle.y))), max(1, r - 1))
+
+        if punch_left > 0.0:
+            total = float(self._PUNCH_TOTAL_S)
+            t = 1.0 - float(punch_left) / max(1e-6, total)
+            ext = math.sin(float(clamp(t, 0.0, 1.0)) * math.pi)
+            reach = 4.0 + ext * 7.5
+
+            pdir = pygame.Vector2(getattr(self, "punch_dir", pygame.Vector2(1, 0)))
+            if pdir.length_squared() <= 0.001:
+                pdir = pygame.Vector2(1, 0)
+            pdir = pdir.normalize()
+
+            height_delta = 0
+            av = getattr(self, "avatar", None)
+            if av is not None:
+                hidx = int(getattr(av, "height", 1))
+                height_delta = 1 if hidx == 0 else -1 if hidx == 2 else 0
+
+            sk = self._survivor_skeleton_nodes(
+                d,
+                int(walk_idx),
+                idle=bool(idle_anim),
+                height_delta=int(height_delta),
+                run=bool(is_run),
+            )
+            hand_key = "l_hand" if self.gun is not None else "r_hand"
+            hand_node = sk.get(hand_key)
+            if hand_node is not None:
+                hx, hy = hand_node
+                base_hand = pygame.Vector2(int(rect.left + hx), int(rect.top + hy))
+            else:
+                base_hand = pygame.Vector2(rect.centerx, rect.centery + 3)
+
+            fist = base_hand + pdir * float(reach)
+            outline = (10, 10, 12)
+            skin = tuple(getattr(self, "_PLAYER_PAL", {}).get("S", (220, 190, 160)))
+
+            pygame.draw.line(surface, outline, (int(base_hand.x), int(base_hand.y)), (int(fist.x), int(fist.y)), 3)
+            pygame.draw.line(surface, skin, (int(base_hand.x), int(base_hand.y)), (int(fist.x), int(fist.y)), 1)
+
+            fx = int(round(float(fist.x)))
+            fy = int(round(float(fist.y)))
+            fr = pygame.Rect(int(fx - 1), int(fy - 1), 3, 3)
+            surface.fill(skin, fr)
+            pygame.draw.rect(surface, outline, fr, 1)
+            if ext > 0.6:
+                hlx = int(clamp(fx + int(round(pdir.x)), 0, INTERNAL_W - 1))
+                hly = int(clamp(fy + int(round(pdir.y)), 0, INTERNAL_H - 1))
+                surface.set_at((hlx, hly), (255, 220, 160))
 
     def _draw_sun_moon_widget(self, surface: pygame.Surface, *, tday: float) -> None:
         rect = pygame.Rect(0, 0, 116, 22)
