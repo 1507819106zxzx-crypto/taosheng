@@ -1,6 +1,5 @@
 {
   "scale": 2,
   "fullscreen": true,
-  "show_grid": false,
-  "debug_highrise_test": true
+  "show_grid": false
 }
