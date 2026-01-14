@@ -6429,8 +6429,8 @@ class HardcoreSurvivalState(State):
                 usable_h = int(in_bottom - in_top + 1)
                 usable_w = int(in_right - in_left + 1)
 
-                if int(usable_h) >= 7 and int(usable_w) >= 7:
-                    lobby_h = int(clamp(int(round(float(usable_h) * 0.33)), 3, 5))
+                if int(usable_h) >= 6 and int(usable_w) >= 7:
+                    lobby_h = int(clamp(int(round(float(usable_h) * 0.33)), 2, 5))
                     sep_y = int(in_bottom - int(lobby_h))
 
                     elev_x = int(clamp(int(door_x0 + 1), int(in_left + 1), int(in_right - 1)))
@@ -8254,12 +8254,12 @@ class HardcoreSurvivalState(State):
                         usable_h = int(in_bottom - in_top + 1)
                         usable_w = int(in_right - in_left + 1)
 
-                        if int(usable_h) >= 7 and int(usable_w) >= 7 and door_tiles:
+                        if int(usable_h) >= 6 and int(usable_w) >= 7 and door_tiles:
                             door_xs = [int(p[0]) for p in door_tiles]
                             door_y = int(max(int(p[1]) for p in door_tiles))
                             door_cx_i = int(round(sum(int(x) for x in door_xs) / max(1, len(door_xs))))
 
-                            lobby_h = int(clamp(int(round(float(usable_h) * 0.33)), 3, 5))
+                            lobby_h = int(clamp(int(round(float(usable_h) * 0.33)), 2, 5))
                             sep_y = int(in_bottom - int(lobby_h))
 
                             elev_x = int(clamp(int(door_cx_i), int(in_left + 1), int(in_right - 1)))
