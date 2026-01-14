@@ -6460,7 +6460,7 @@ class HardcoreSurvivalState(State):
                         tiles[idx(int(door_rx), int(sep_y))] = int(self.state.T_DOOR)
 
                         # Elevator inside the public lobby.
-                        elev_y = int(clamp(int(door_y - 3), int(sep_y + 1), int(in_bottom - 1)))
+                        elev_y = int(clamp(int(sep_y + 1), int(sep_y + 1), int(in_bottom - 1)))
                         if int(tiles[idx(int(elev_x), int(elev_y))]) != int(self.state.T_WALL):
                             tiles[idx(int(elev_x), int(elev_y))] = int(self.state.T_ELEVATOR)
 
@@ -8289,7 +8289,7 @@ class HardcoreSurvivalState(State):
                                 tiles[idx(int(door_rx), int(sep_y))] = int(self.state.T_DOOR)
 
                                 # Elevator inside the public lobby.
-                                elev_y = int(clamp(int(door_y - 3), int(sep_y + 1), int(in_bottom - 1)))
+                                elev_y = int(clamp(int(sep_y + 1), int(sep_y + 1), int(in_bottom - 1)))
                                 if int(tiles[idx(int(elev_x), int(elev_y))]) != int(self.state.T_WALL):
                                     tiles[idx(int(elev_x), int(elev_y))] = int(self.state.T_ELEVATOR)
 
