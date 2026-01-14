@@ -6420,7 +6420,7 @@ class HardcoreSurvivalState(State):
             except Exception:
                 pass
 
-            # 1F interior: two-room residential layout (living + bedroom) with basic furniture.
+            # Interior: public elevator lobby + two apartment doors (2 units per floor).
             try:
                 in_left = int(x0 + 1)
                 in_right = int(x0 + w - 2)
@@ -6429,48 +6429,88 @@ class HardcoreSurvivalState(State):
                 usable_h = int(in_bottom - in_top + 1)
                 usable_w = int(in_right - in_left + 1)
 
-                if int(usable_h) >= 6 and int(usable_w) >= 6:
-                    split_y = int(in_top + (int(usable_h) // 2))
-                    split_y = int(clamp(int(split_y), int(in_top + 2), int(in_bottom - 2)))
+                if int(usable_h) >= 7 and int(usable_w) >= 7:
+                    lobby_h = int(clamp(int(round(float(usable_h) * 0.33)), 3, 5))
+                    sep_y = int(in_bottom - int(lobby_h))
 
-                    pass_x0 = int(clamp(int(door_x0), int(in_left + 1), int(in_right - 2)))
-                    pass_xs = (int(pass_x0), int(pass_x0 + 1))
+                    elev_x = int(clamp(int(door_x0 + 1), int(in_left + 1), int(in_right - 1)))
+                    split_x = int(clamp(int(elev_x), int(in_left + 3), int(in_right - 3)))
+                    left_w = int(split_x - in_left)
+                    right_w = int(in_right - split_x)
 
-                    for xx in range(int(in_left), int(in_right) + 1):
-                        if int(xx) in pass_xs:
-                            tiles[idx(int(xx), int(split_y))] = int(self.state.T_DOOR)
-                            continue
-                        if int(tiles[idx(int(xx), int(split_y))]) == int(self.state.T_ELEVATOR):
-                            continue
-                        tiles[idx(int(xx), int(split_y))] = int(self.state.T_WALL)
+                    if int(sep_y) >= int(in_top + 3) and int(left_w) >= 3 and int(right_w) >= 3:
+                        # Clear any pre-placed elevator tiles so we keep a single public lobby spot.
+                        for yy in range(int(in_top), int(in_bottom) + 1):
+                            for xx in range(int(in_left), int(in_right) + 1):
+                                if int(tiles[idx(int(xx), int(yy))]) == int(self.state.T_ELEVATOR):
+                                    tiles[idx(int(xx), int(yy))] = int(self.state.T_FLOOR)
 
-                    def place_if_floor(tx: int, ty: int, tile_id: int) -> None:
-                        tx = int(tx)
-                        ty = int(ty)
-                        if not (int(in_left) <= int(tx) <= int(in_right) and int(in_top) <= int(ty) <= int(in_bottom)):
-                            return
-                        if int(tiles[idx(int(tx), int(ty))]) != int(self.state.T_FLOOR):
-                            return
-                        if int(tx) in pass_xs and int(ty) >= int(split_y) - 1:
-                            return
-                        tiles[idx(int(tx), int(ty))] = int(tile_id)
+                        # Horizontal separator: lobby (south) vs apartments (north).
+                        for xx in range(int(in_left), int(in_right) + 1):
+                            tiles[idx(int(xx), int(sep_y))] = int(self.state.T_WALL)
 
-                    # Bedroom (top room): a bed + a shelf.
-                    bed_y = int(clamp(int(in_top + 1), int(in_top), int(split_y - 2)))
-                    bed_x = int(clamp(int(in_left + 1), int(in_left), int(in_right - 2)))
-                    if (
-                        int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
-                        and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
-                    ):
-                        tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
-                        tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
-                    shelf_y = int(clamp(int(bed_y + 2), int(in_top + 1), int(split_y - 2)))
-                    place_if_floor(int(in_right - 1), int(shelf_y), int(self.state.T_SHELF))
+                        # Vertical separator between the two units (only above the lobby line).
+                        for yy in range(int(in_top), int(sep_y)):
+                            tiles[idx(int(split_x), int(yy))] = int(self.state.T_WALL)
 
-                    # Living (bottom room): a table + a shelf.
-                    table_y = int(clamp(int(split_y + 2), int(split_y + 1), int(in_bottom - 1)))
-                    place_if_floor(int(in_left + 2), int(table_y), int(self.state.T_TABLE))
-                    place_if_floor(int(in_right - 1), int(table_y), int(self.state.T_SHELF))
+                        # Two apartment doors next to the lobby/elevator.
+                        door_lx = int(clamp(int(split_x - 2), int(in_left + 1), int(split_x - 1)))
+                        door_rx = int(clamp(int(split_x + 2), int(split_x + 1), int(in_right - 1)))
+                        tiles[idx(int(door_lx), int(sep_y))] = int(self.state.T_DOOR)
+                        tiles[idx(int(door_rx), int(sep_y))] = int(self.state.T_DOOR)
+
+                        # Elevator inside the public lobby.
+                        elev_y = int(clamp(int(door_y - 3), int(sep_y + 1), int(in_bottom - 1)))
+                        if int(tiles[idx(int(elev_x), int(elev_y))]) != int(self.state.T_WALL):
+                            tiles[idx(int(elev_x), int(elev_y))] = int(self.state.T_ELEVATOR)
+
+                        reserved: set[tuple[int, int]] = set()
+                        for dx in (-1, 0, 1):
+                            for dy in (-1, 0, 1):
+                                reserved.add((int(door_lx + dx), int(sep_y + dy)))
+                                reserved.add((int(door_rx + dx), int(sep_y + dy)))
+                                reserved.add((int(elev_x + dx), int(elev_y + dy)))
+
+                        def place_if_floor(tx: int, ty: int, tile_id: int) -> None:
+                            tx = int(tx)
+                            ty = int(ty)
+                            if not (int(in_left) <= int(tx) <= int(in_right) and int(in_top) <= int(ty) <= int(in_bottom)):
+                                return
+                            if (int(tx), int(ty)) in reserved:
+                                return
+                            if int(tiles[idx(int(tx), int(ty))]) != int(self.state.T_FLOOR):
+                                return
+                            tiles[idx(int(tx), int(ty))] = int(tile_id)
+
+                        # Left unit (apartment): bed + table + shelf.
+                        l_x0 = int(in_left)
+                        l_x1 = int(split_x - 1)
+                        a_y0 = int(in_top)
+                        a_y1 = int(sep_y - 1)
+                        bed_y = int(clamp(int(a_y0 + 1), int(a_y0), int(a_y1 - 1)))
+                        bed_x = int(clamp(int(l_x0 + 1), int(l_x0), int(l_x1 - 2)))
+                        if (
+                            int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
+                            and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
+                        ):
+                            tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
+                            tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
+                        place_if_floor(int((l_x0 + l_x1) // 2), int((a_y0 + a_y1) // 2), int(self.state.T_TABLE))
+                        place_if_floor(int(l_x0 + 1), int(bed_y + 2), int(self.state.T_SHELF))
+
+                        # Right unit (apartment): bed + table + shelf.
+                        r_x0 = int(split_x + 1)
+                        r_x1 = int(in_right)
+                        bed_y2 = int(clamp(int(a_y0 + 1), int(a_y0), int(a_y1 - 1)))
+                        bed_x2 = int(clamp(int(r_x1 - 2), int(r_x0), int(r_x1 - 2)))
+                        if (
+                            int(tiles[idx(int(bed_x2), int(bed_y2))]) == int(self.state.T_FLOOR)
+                            and int(tiles[idx(int(bed_x2 + 1), int(bed_y2))]) == int(self.state.T_FLOOR)
+                        ):
+                            tiles[idx(int(bed_x2), int(bed_y2))] = int(self.state.T_BED)
+                            tiles[idx(int(bed_x2 + 1), int(bed_y2))] = int(self.state.T_BED)
+                        place_if_floor(int((r_x0 + r_x1) // 2), int((a_y0 + a_y1) // 2), int(self.state.T_TABLE))
+                        place_if_floor(int(r_x1 - 1), int(bed_y2 + 2), int(self.state.T_SHELF))
             except Exception:
                 pass
 
@@ -8203,7 +8243,7 @@ class HardcoreSurvivalState(State):
                     except Exception:
                         pass
 
-                    # 1F interior: two-room residential layout (living + bedroom) with basic furniture.
+                    # Interior: public elevator lobby + two apartment doors (2 units per floor).
                     try:
                         top_cut = int(max(0, (int(h) - 2) - int(core_h)))
                         floor_y0 = int(y0 + 1 + int(top_cut))
@@ -8214,52 +8254,96 @@ class HardcoreSurvivalState(State):
                         usable_h = int(in_bottom - in_top + 1)
                         usable_w = int(in_right - in_left + 1)
 
-                        if int(usable_h) >= 6 and int(usable_w) >= 6 and door_tiles:
+                        if int(usable_h) >= 7 and int(usable_w) >= 7 and door_tiles:
                             door_xs = [int(p[0]) for p in door_tiles]
+                            door_y = int(max(int(p[1]) for p in door_tiles))
                             door_cx_i = int(round(sum(int(x) for x in door_xs) / max(1, len(door_xs))))
-                            split_y = int(in_top + (int(usable_h) // 2))
-                            split_y = int(clamp(int(split_y), int(in_top + 2), int(in_bottom - 2)))
 
-                            pass_x0 = int(clamp(int(door_cx_i - 1), int(in_left + 1), int(in_right - 2)))
-                            pass_xs = (int(pass_x0), int(pass_x0 + 1))
+                            lobby_h = int(clamp(int(round(float(usable_h) * 0.33)), 3, 5))
+                            sep_y = int(in_bottom - int(lobby_h))
 
-                            for xx in range(int(in_left), int(in_right) + 1):
-                                if int(xx) in pass_xs:
-                                    tiles[idx(int(xx), int(split_y))] = int(self.state.T_DOOR)
-                                    continue
-                                if (int(xx), int(split_y)) in corridor:
-                                    continue
-                                tiles[idx(int(xx), int(split_y))] = int(self.state.T_WALL)
+                            elev_x = int(clamp(int(door_cx_i), int(in_left + 1), int(in_right - 1)))
+                            split_x = int(clamp(int(elev_x), int(in_left + 3), int(in_right - 3)))
+                            left_w = int(split_x - in_left)
+                            right_w = int(in_right - split_x)
 
-                            def place_if_floor(tx: int, ty: int, tile_id: int) -> None:
-                                tx = int(tx)
-                                ty = int(ty)
-                                if not (int(in_left) <= int(tx) <= int(in_right) and int(in_top) <= int(ty) <= int(in_bottom)):
-                                    return
-                                if near_door(int(tx), int(ty)):
-                                    return
-                                if (int(tx), int(ty)) in corridor:
-                                    return
-                                if int(tiles[idx(int(tx), int(ty))]) != int(self.state.T_FLOOR):
-                                    return
-                                tiles[idx(int(tx), int(ty))] = int(tile_id)
+                            if int(sep_y) >= int(in_top + 3) and int(left_w) >= 3 and int(right_w) >= 3:
+                                # Clear any pre-placed elevator tiles so we keep a single public lobby spot.
+                                for yy in range(int(in_top), int(in_bottom) + 1):
+                                    for xx in range(int(in_left), int(in_right) + 1):
+                                        if int(tiles[idx(int(xx), int(yy))]) == int(self.state.T_ELEVATOR):
+                                            tiles[idx(int(xx), int(yy))] = int(self.state.T_FLOOR)
 
-                            # Bedroom (top room): bed + shelf.
-                            bed_y = int(clamp(int(in_top + 1), int(in_top), int(split_y - 2)))
-                            bed_x = int(clamp(int(in_left + 1), int(in_left), int(in_right - 2)))
-                            if (
-                                int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
-                                and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
-                            ):
-                                tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
-                                tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
-                            shelf_y = int(clamp(int(bed_y + 2), int(in_top + 1), int(split_y - 2)))
-                            place_if_floor(int(in_right - 1), int(shelf_y), int(self.state.T_SHELF))
+                                # Horizontal separator: lobby (south) vs apartments (north).
+                                for xx in range(int(in_left), int(in_right) + 1):
+                                    tiles[idx(int(xx), int(sep_y))] = int(self.state.T_WALL)
 
-                            # Living (bottom room): table + shelf.
-                            table_y = int(clamp(int(split_y + 2), int(split_y + 1), int(in_bottom - 1)))
-                            place_if_floor(int(in_left + 2), int(table_y), int(self.state.T_TABLE))
-                            place_if_floor(int(in_right - 1), int(table_y), int(self.state.T_SHELF))
+                                # Vertical separator between the two units (only above the lobby line).
+                                for yy in range(int(in_top), int(sep_y)):
+                                    tiles[idx(int(split_x), int(yy))] = int(self.state.T_WALL)
+
+                                # Two apartment doors next to the lobby/elevator.
+                                door_lx = int(clamp(int(split_x - 2), int(in_left + 1), int(split_x - 1)))
+                                door_rx = int(clamp(int(split_x + 2), int(split_x + 1), int(in_right - 1)))
+                                tiles[idx(int(door_lx), int(sep_y))] = int(self.state.T_DOOR)
+                                tiles[idx(int(door_rx), int(sep_y))] = int(self.state.T_DOOR)
+
+                                # Elevator inside the public lobby.
+                                elev_y = int(clamp(int(door_y - 3), int(sep_y + 1), int(in_bottom - 1)))
+                                if int(tiles[idx(int(elev_x), int(elev_y))]) != int(self.state.T_WALL):
+                                    tiles[idx(int(elev_x), int(elev_y))] = int(self.state.T_ELEVATOR)
+
+                                reserved: set[tuple[int, int]] = set()
+                                for dx in (-1, 0, 1):
+                                    for dy in (-1, 0, 1):
+                                        reserved.add((int(door_lx + dx), int(sep_y + dy)))
+                                        reserved.add((int(door_rx + dx), int(sep_y + dy)))
+                                        reserved.add((int(elev_x + dx), int(elev_y + dy)))
+
+                                def place_if_floor(tx: int, ty: int, tile_id: int) -> None:
+                                    tx = int(tx)
+                                    ty = int(ty)
+                                    if not (int(in_left) <= int(tx) <= int(in_right) and int(in_top) <= int(ty) <= int(in_bottom)):
+                                        return
+                                    if near_door(int(tx), int(ty)):
+                                        return
+                                    if (int(tx), int(ty)) in corridor:
+                                        return
+                                    if (int(tx), int(ty)) in reserved:
+                                        return
+                                    if int(tiles[idx(int(tx), int(ty))]) != int(self.state.T_FLOOR):
+                                        return
+                                    tiles[idx(int(tx), int(ty))] = int(tile_id)
+
+                                # Left unit: bed + table + shelf.
+                                l_x0 = int(in_left)
+                                l_x1 = int(split_x - 1)
+                                a_y0 = int(in_top)
+                                a_y1 = int(sep_y - 1)
+                                bed_y = int(clamp(int(a_y0 + 1), int(a_y0), int(a_y1 - 1)))
+                                bed_x = int(clamp(int(l_x0 + 1), int(l_x0), int(l_x1 - 2)))
+                                if (
+                                    int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
+                                    and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
+                                ):
+                                    tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
+                                    tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
+                                place_if_floor(int((l_x0 + l_x1) // 2), int((a_y0 + a_y1) // 2), int(self.state.T_TABLE))
+                                place_if_floor(int(l_x0 + 1), int(bed_y + 2), int(self.state.T_SHELF))
+
+                                # Right unit: bed + table + shelf.
+                                r_x0 = int(split_x + 1)
+                                r_x1 = int(in_right)
+                                bed_y2 = int(clamp(int(a_y0 + 1), int(a_y0), int(a_y1 - 1)))
+                                bed_x2 = int(clamp(int(r_x1 - 2), int(r_x0), int(r_x1 - 2)))
+                                if (
+                                    int(tiles[idx(int(bed_x2), int(bed_y2))]) == int(self.state.T_FLOOR)
+                                    and int(tiles[idx(int(bed_x2 + 1), int(bed_y2))]) == int(self.state.T_FLOOR)
+                                ):
+                                    tiles[idx(int(bed_x2), int(bed_y2))] = int(self.state.T_BED)
+                                    tiles[idx(int(bed_x2 + 1), int(bed_y2))] = int(self.state.T_BED)
+                                place_if_floor(int((r_x0 + r_x1) // 2), int((a_y0 + a_y1) // 2), int(self.state.T_TABLE))
+                                place_if_floor(int(r_x1 - 1), int(bed_y2 + 2), int(self.state.T_SHELF))
                     except Exception:
                         pass
 
@@ -16619,13 +16703,47 @@ class HardcoreSurvivalState(State):
 
     def _update_zombies(self, dt: float) -> None:
         target = pygame.Vector2(self.player.pos)
+        suppress_gather = False
+        try:
+            tx = int(math.floor(float(target.x) / float(self.TILE_SIZE)))
+            ty = int(math.floor(float(target.y) / float(self.TILE_SIZE)))
+            p_tile = int(self.world.get_tile(int(tx), int(ty)))
+            if p_tile in (
+                int(self.T_FLOOR),
+                int(self.T_DOOR),
+                int(self.T_ELEVATOR),
+                int(self.T_STAIRS_UP),
+                int(self.T_STAIRS_DOWN),
+            ):
+                found = self._multi_house_at(int(tx), int(ty))
+                if found is not None:
+                    chunk, mh = found
+                    style = 0
+                    tx0 = int(getattr(mh, "tx0", 0))
+                    ty0 = int(getattr(mh, "ty0", 0))
+                    bw = int(getattr(mh, "w", 0))
+                    bh = int(getattr(mh, "h", 0))
+                    for b in getattr(chunk, "buildings", []):
+                        if int(b[0]) == int(tx0) and int(b[1]) == int(ty0) and int(b[2]) == int(bw) and int(b[3]) == int(bh):
+                            roof_kind = int(b[4]) if len(b) > 4 else 0
+                            style, _var = self._building_roof_style_var(int(roof_kind))
+                            break
+                    if int(style) == 6:
+                        cur_floor = int(max(1, int(getattr(mh, "cur_floor", 1))))
+                        if int(cur_floor) > 4:
+                            suppress_gather = True
+        except Exception:
+            suppress_gather = False
 
         cap = max(0, int(getattr(self, "zombie_cap", 8)))
         if cap <= 0:
             return
 
         self.spawn_left -= dt
-        if self.spawn_left <= 0.0 and len(self.zombies) < cap:
+        if suppress_gather:
+            # High floors shouldn't endlessly pull/spawn hordes at the building base.
+            self.spawn_left = max(float(self.spawn_left), 3.0)
+        elif self.spawn_left <= 0.0 and len(self.zombies) < cap:
             tx = int(math.floor(target.x / self.TILE_SIZE))
             ty = int(math.floor(target.y / self.TILE_SIZE))
             chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
@@ -16660,12 +16778,12 @@ class HardcoreSurvivalState(State):
 
             sense = float(mdef.sense)
             # Vehicles are loud: pull monsters from farther away (even if RV is "safe").
-            if self.mount == "rv":
+            if (not suppress_gather) and self.mount == "rv":
                 sense += 80.0 + min(120.0, abs(float(getattr(self.rv, "speed", 0.0))) * 1.1)
-            if getattr(self, "noise_left", 0.0) > 0.0:
+            if (not suppress_gather) and getattr(self, "noise_left", 0.0) > 0.0:
                 sense = max(sense, float(getattr(self, "noise_radius", 0.0)))
 
-            alerted = d2 <= (sense * sense)
+            alerted = (not suppress_gather) and d2 <= (sense * sense)
             if alerted:
                 if kind == "screamer" and float(z.scream_left) <= 0.0 and d2 <= float(mdef.scream_radius) ** 2:
                     z.scream_left = float(mdef.scream_cd)
