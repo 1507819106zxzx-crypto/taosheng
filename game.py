@@ -9732,6 +9732,7 @@ class HardcoreSurvivalState(State):
         self.home_highrise_door_index = 0
         self.home_highrise_unit = 0
         self.home_highrise_room = ""
+        self.home_highrise_dialog_armed = True
 
         self.hr_elevator_ui_open = False
         self.hr_elevator_sel = 0
@@ -9865,6 +9866,13 @@ class HardcoreSurvivalState(State):
         self._roof_cache: dict[tuple[int, int, int, int], pygame.Surface] = {}
         self._sprite_outline_cache: dict[tuple[int, int, int, int], pygame.Surface] = {}
         self._hover_tooltip: tuple[list[str], tuple[int, int]] | None = None
+        # Simple dialog / typewriter box (used for home guidance, etc).
+        self.dialog_open = False
+        self.dialog_title = ""
+        self.dialog_text_full = ""
+        self.dialog_reveal = 0.0  # float char cursor
+        self.dialog_speed = 42.0  # chars/sec
+        self.dialog_blink = 0.0
         self.muzzle_flash_left = 0.0
         self.noise_left = 0.0
         self.noise_radius = 0.0
@@ -9920,6 +9928,26 @@ class HardcoreSurvivalState(State):
                 return
             if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION, pygame.MOUSEWHEEL):
                 self._handle_world_map_mouse(event)
+                return
+
+        if getattr(self, "dialog_open", False):
+            if event.type == pygame.KEYDOWN:
+                if int(event.key) in (pygame.K_ESCAPE,):
+                    self._dialog_close()
+                    return
+                if int(event.key) in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_e):
+                    if not self._dialog_finished():
+                        self._dialog_finish()
+                    else:
+                        self._dialog_close()
+                    return
+                # Swallow other UI keys while the dialog is up.
+                return
+            if event.type == pygame.MOUSEBUTTONDOWN and int(getattr(event, "button", 0)) == 1:
+                if not self._dialog_finished():
+                    self._dialog_finish()
+                else:
+                    self._dialog_close()
                 return
 
         if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, "button", 0) == 1:
@@ -16256,13 +16284,15 @@ class HardcoreSurvivalState(State):
                 if int(inter.w) <= 0 or int(inter.h) <= 0:
                     continue
                 # For horizontal movement, only keep hits that are "mostly side walls"
-                # (penetration in X clearly smaller than in Y). Otherwise, treat the hit
-                # as a top/bottom scrape and resolve via a small Y depenetration.
+                # (penetration in X smaller than in Y, plus a small skin). Otherwise,
+                # treat the hit as a top/bottom scrape and resolve via a small
+                # orthogonal depenetration. This also avoids getting stuck on
+                # outside corners where inter.w ~= inter.h.
                 if axis == "x":
-                    if int(inter.w) + int(skin) < int(inter.h):
+                    if int(inter.w) <= int(inter.h) + int(skin):
                         kept.append(h)
                 else:
-                    if int(inter.h) + int(skin) < int(inter.w):
+                    if int(inter.h) <= int(inter.w) + int(skin):
                         kept.append(h)
             return kept
 
@@ -16539,6 +16569,8 @@ class HardcoreSurvivalState(State):
             self.hint_left = max(0.0, float(self.hint_left) - dt)
             if self.hint_left <= 0.0:
                 self.hint_text = ""
+
+        self._dialog_update(float(dt))
 
         if getattr(self, "rv_ui_status_left", 0.0) > 0.0:
             self.rv_ui_status_left = max(0.0, float(self.rv_ui_status_left) - dt)
@@ -17013,6 +17045,8 @@ class HardcoreSurvivalState(State):
             else:
                 self.player.pos.update(new_pos)
 
+        self._maybe_show_home_highrise_dialog()
+
         focus = pygame.Vector2(self.player.pos)
         target_cam_x = float(focus.x - INTERNAL_W / 2)
         target_cam_y = float(focus.y - INTERNAL_H / 2)
@@ -17046,6 +17080,140 @@ class HardcoreSurvivalState(State):
     def _set_hint(self, text: str, *, seconds: float = 1.2) -> None:    
         self.hint_text = str(text)
         self.hint_left = float(seconds)
+
+    def _dialog_start(self, title: str, lines: list[str], *, speed: float = 42.0) -> None:
+        title = str(title).strip()
+        if not title:
+            title = "提示"
+        self.dialog_open = True
+        self.dialog_title = title
+        self.dialog_text_full = "\n".join(str(s) for s in (lines or [])).strip()
+        self.dialog_reveal = 0.0
+        self.dialog_speed = float(clamp(float(speed), 10.0, 120.0))
+        self.dialog_blink = 0.0
+
+    def _dialog_close(self) -> None:
+        self.dialog_open = False
+        self.dialog_title = ""
+        self.dialog_text_full = ""
+        self.dialog_reveal = 0.0
+        self.dialog_blink = 0.0
+
+    def _dialog_finished(self) -> bool:
+        full = str(getattr(self, "dialog_text_full", ""))
+        return int(max(0.0, float(getattr(self, "dialog_reveal", 0.0)))) >= len(full)
+
+    def _dialog_finish(self) -> None:
+        full = str(getattr(self, "dialog_text_full", ""))
+        self.dialog_reveal = float(len(full))
+
+    def _dialog_update(self, dt: float) -> None:
+        if not bool(getattr(self, "dialog_open", False)):
+            return
+        full = str(getattr(self, "dialog_text_full", ""))
+        if not full:
+            self.dialog_reveal = 0.0
+            return
+        self.dialog_blink = float(getattr(self, "dialog_blink", 0.0)) + float(dt)
+        if self._dialog_finished():
+            return
+        speed = float(getattr(self, "dialog_speed", 42.0))
+        self.dialog_reveal = float(min(float(len(full)), float(getattr(self, "dialog_reveal", 0.0)) + speed * float(dt)))
+
+    def _maybe_show_home_highrise_dialog(self) -> None:
+        # Show a small home guidance dialog when the player walks up to their
+        # home high-rise entrance on the world map.
+        if bool(getattr(self, "dialog_open", False)):
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return
+        home = getattr(self, "home_highrise_door", None)
+        if home is None or not isinstance(home, tuple) or len(home) != 2:
+            return
+        try:
+            hx, hy = int(home[0]), int(home[1])
+        except Exception:
+            return
+        center = pygame.Vector2((float(hx) + 0.5) * float(self.TILE_SIZE), (float(hy) + 0.5) * float(self.TILE_SIZE))
+        d2 = float((pygame.Vector2(self.player.pos) - center).length_squared())
+        near = float(self.TILE_SIZE) * 3.2
+        far = float(self.TILE_SIZE) * 4.8
+        armed = bool(getattr(self, "home_highrise_dialog_armed", True))
+        if armed and d2 <= near * near:
+            home_floor = int(getattr(self, "home_highrise_floor", 0))
+            home_room = str(getattr(self, "home_highrise_room", "")).strip()
+            if home_floor > 0 and home_room:
+                line1 = f"你的家：{home_room}（{home_floor}F）"
+            elif home_floor > 0:
+                line1 = f"你的家在 {home_floor}F"
+            else:
+                line1 = "这是你的家"
+            line2 = f"进楼后坐电梯到 {home_floor}F，找绿色门进入。" if home_floor > 0 else "进楼后找绿色门进入。"
+            self._dialog_start("家", [line1, line2], speed=44.0)
+            self.home_highrise_dialog_armed = False
+            return
+        if (not armed) and d2 >= far * far:
+            self.home_highrise_dialog_armed = True
+
+    def _draw_dialog(self, surface: pygame.Surface) -> None:
+        if not bool(getattr(self, "dialog_open", False)):
+            return
+        title = str(getattr(self, "dialog_title", "")).strip() or "提示"
+        full = str(getattr(self, "dialog_text_full", ""))
+        shown = full[: int(max(0.0, float(getattr(self, "dialog_reveal", 0.0))))]
+
+        panel_h = 74
+        pad_x = 12
+        pad_y = 10
+        panel = pygame.Rect(pad_x, INTERNAL_H - panel_h - pad_y, INTERNAL_W - pad_x * 2, panel_h)
+        if panel.y < 6:
+            panel.y = 6
+        bg = pygame.Surface((panel.w, panel.h), pygame.SRCALPHA)
+        bg.fill((0, 0, 0, 180))
+        pygame.draw.rect(bg, (240, 220, 140, 26), bg.get_rect(), border_radius=10)
+        pygame.draw.rect(bg, (220, 220, 235, 140), bg.get_rect(), 2, border_radius=10)
+        surface.blit(bg, panel.topleft)
+
+        font_t = self.app.font_m
+        font = self.app.font_s
+        surface.blit(font_t.render(title, False, pygame.Color(240, 240, 240)), (panel.x + 10, panel.y + 8))
+
+        max_w = int(panel.w - 20)
+        lines: list[str] = []
+        for para in str(shown).split("\n"):
+            cur = ""
+            for ch in para:
+                test = cur + ch
+                if cur and font.size(test)[0] > max_w:
+                    lines.append(cur)
+                    cur = ch
+                else:
+                    cur = test
+            lines.append(cur)
+        # Trim trailing empty lines (but keep at least one line).
+        while len(lines) > 1 and not str(lines[-1]).strip():
+            lines.pop()
+
+        tx = panel.x + 10
+        ty = panel.y + 32
+        drawn = lines[:3]
+        for ln in drawn:
+            surface.blit(font.render(str(ln), False, pygame.Color(230, 230, 240)), (tx, ty))
+            ty += int(font.get_height() + 2)
+
+        if not self._dialog_finished() and (int(float(getattr(self, "dialog_blink", 0.0)) * 3.0) % 2 == 0):
+            last_ln = str(drawn[-1]) if drawn else ""
+            cx = tx + max(0, int(font.size(last_ln)[0]))
+            cy = ty - int(font.get_height() + 2)
+            surface.blit(font.render("|", False, pygame.Color(240, 220, 140)), (cx, cy))
+        if self._dialog_finished():
+            tip = "空格/Enter 关闭"
+            surface.blit(font.render(tip, False, pygame.Color(170, 170, 180)), (panel.right - 10 - font.size(tip)[0], panel.bottom - 16))
 
     def _bleed_total_rate(self) -> float:
         wounds = getattr(self, "bleed_wounds", None)
@@ -21755,6 +21923,7 @@ class HardcoreSurvivalState(State):
                 self._draw_inventory_ui(surface)
             if getattr(self, "_gallery_open", False):
                 self._draw_sprite_gallery_ui(surface)
+            self._draw_dialog(surface)
             return
         if getattr(self, "sch_interior", False):
             self._hover_tooltip = None
@@ -21771,6 +21940,7 @@ class HardcoreSurvivalState(State):
                 self._draw_inventory_ui(surface)
             if getattr(self, "_gallery_open", False):
                 self._draw_sprite_gallery_ui(surface)
+            self._draw_dialog(surface)
             return
         if getattr(self, "hr_interior", False):
             self._hover_tooltip = None
@@ -21790,6 +21960,7 @@ class HardcoreSurvivalState(State):
                 self._draw_inventory_ui(surface)
             if getattr(self, "_gallery_open", False):
                 self._draw_sprite_gallery_ui(surface)
+            self._draw_dialog(surface)
             return
         if getattr(self, "rv_interior", False):
             self._hover_tooltip = None
@@ -21807,6 +21978,7 @@ class HardcoreSurvivalState(State):
                 self._draw_inventory_ui(surface)
             if getattr(self, "_gallery_open", False):
                 self._draw_sprite_gallery_ui(surface)
+            self._draw_dialog(surface)
             return
         cam_x = int(getattr(self, "cam_x", 0))
         cam_y = int(getattr(self, "cam_y", 0))
@@ -22065,6 +22237,7 @@ class HardcoreSurvivalState(State):
             return
 
         self._draw_hover_tooltip(surface)
+        self._draw_dialog(surface)
 
         if self._debug:
             self._draw_debug(surface, cam_x, cam_y_draw)
