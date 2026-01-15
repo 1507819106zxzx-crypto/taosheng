@@ -2220,6 +2220,17 @@ class HardcoreSurvivalState(State):
     T_STAIRS_DOWN = 22
     T_ELEVATOR = 23
     T_BARRICADE = 24
+    # Furniture / home markers (world-map interiors)
+    T_DOOR_HOME = 25
+    T_SOFA = 26
+    T_FRIDGE = 27
+    T_TV = 28
+    T_CHAIR = 29
+    # Locked doors (require keys)
+    T_DOOR_LOCKED = 30
+    T_DOOR_HOME_LOCKED = 31
+    # Extra furniture
+    T_PC = 32
 
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
@@ -2273,6 +2284,14 @@ class HardcoreSurvivalState(State):
         T_STAIRS_DOWN: _TileDef("stairs_down", (84, 76, 62), solid=False),
         T_ELEVATOR: _TileDef("elevator", (82, 82, 96), solid=False),     
         T_BARRICADE: _TileDef("barricade", (96, 78, 52), solid=True),
+        T_DOOR_HOME: _TileDef("door_home", (56, 156, 96), solid=False),
+        T_SOFA: _TileDef("sofa", (94, 78, 112), solid=True),
+        T_FRIDGE: _TileDef("fridge", (182, 186, 194), solid=True),
+        T_TV: _TileDef("tv", (34, 34, 40), solid=True),
+        T_CHAIR: _TileDef("chair", (92, 72, 54), solid=True),
+        T_DOOR_LOCKED: _TileDef("door_locked", (120, 96, 52), solid=True),
+        T_DOOR_HOME_LOCKED: _TileDef("door_home_locked", (56, 156, 96), solid=True),
+        T_PC: _TileDef("pc", (78, 68, 56), solid=True),
     }
 
     _PLAYER_PAL = {
@@ -5080,6 +5099,7 @@ class HardcoreSurvivalState(State):
     _EXTRA_CORE: list[tuple[str, str, str, tuple[int, int, int], int]] = [
         ("key_rv", "房车钥匙", "key", (220, 220, 240), 1),
         ("key_moto", "摩托钥匙", "key", (220, 220, 240), 1),
+        ("key_house", "房门钥匙", "key", (220, 220, 240), 1),
         ("gas_can", "汽油桶", "fuel", (210, 170, 90), 1),
     ]
     for _iid, _name, _kind, _base_col, _stack in _EXTRA_CORE:
@@ -9665,6 +9685,7 @@ class HardcoreSurvivalState(State):
         self.home_storage.add("bandage", 6, self._ITEMS)
         self.home_storage.add("key_rv", 1, self._ITEMS)
         self.home_storage.add("key_moto", 1, self._ITEMS)
+        self.inventory.add("key_house", 1, self._ITEMS)
         self.fridge_storage.add("water", 2, self._ITEMS)
         self.fridge_storage.add("cola", 2, self._ITEMS)
         # Some visible "snacks" so home doesn't feel empty.
@@ -9837,6 +9858,7 @@ class HardcoreSurvivalState(State):
         except Exception:
             pass
         self._set_hint(f"你的家：{self.home_highrise_room}", seconds=2.0)
+        self._setup_home_highrise_world()
 
         # Ensure the starter vehicles don't spawn "inside" a building.
         def vehicle_clear(p: pygame.Vector2, w: int, h: int) -> bool:
@@ -9965,7 +9987,7 @@ class HardcoreSurvivalState(State):
                     self._dialog_close()
                 return
 
-        if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, "button", 0) == 1:
+        if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, "button", 0) == 1 and not bool(getattr(self, "home_ui_open", False)):
             internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
             if internal is not None and isinstance(getattr(self, "minimap_rect", None), pygame.Rect):
                 if self.minimap_rect.collidepoint(internal):
@@ -10142,6 +10164,9 @@ class HardcoreSurvivalState(State):
                 return
             if event.key in (pygame.K_e,):
                 self._interact_primary()
+                return
+            if not self.inv_open and event.key in (pygame.K_l,):
+                self._toggle_door_lock()
                 return
             if not self.inv_open and event.key in (pygame.K_b,):
                 self._toggle_barricade()
@@ -15034,17 +15059,25 @@ class HardcoreSurvivalState(State):
                     mon.center = (int(top.centerx - top.w * 0.12), int(top.centery + 1))
                     pygame.draw.rect(surface, (32, 34, 40), mon, border_radius=3)
                     pygame.draw.rect(surface, outline, mon, 1, border_radius=3)
+                    # Give the monitor a tiny "thickness" so it reads 3D.
+                    side = pygame.Rect(mon.right - 1, mon.y + 1, 2, max(1, mon.h - 2))
+                    pygame.draw.rect(surface, (22, 22, 28), side, border_radius=2)
+                    pygame.draw.line(surface, outline, (side.x, side.y + 1), (side.x, side.bottom - 2), 1)
                     scr = mon.inflate(-3, -3)
                     pygame.draw.rect(surface, (14, 14, 18), scr, border_radius=2)
                     pygame.draw.rect(surface, (120, 200, 240), pygame.Rect(scr.x + 2, scr.y + 2, max(3, scr.w // 3), max(3, scr.h // 3)), border_radius=2)
                     kb = pygame.Rect(int(mon.right + 3), int(top.bottom - 6), max(12, int(top.w * 0.30)), 4)
                     pygame.draw.rect(surface, (36, 36, 44), kb, border_radius=2)
                     pygame.draw.rect(surface, outline, kb, 1, border_radius=2)
+                    for xx in range(int(kb.x + 2), int(kb.right - 2), 3):
+                        surface.fill((60, 60, 72), pygame.Rect(int(xx), int(kb.y + 1), 1, 1))
 
                     # PC tower.
                     tower = pygame.Rect(int(top.right - 10), int(front.y + 4), 8, max(10, int(front.h - 8)))
                     pygame.draw.rect(surface, (28, 28, 34), tower, border_radius=2)
                     pygame.draw.rect(surface, outline, tower, 1, border_radius=2)
+                    surface.fill((18, 18, 22), pygame.Rect(tower.right - 2, tower.y + 1, 1, max(1, tower.h - 2)))
+                    surface.fill((56, 56, 66), pygame.Rect(tower.x + 1, tower.y + 2, max(1, tower.w - 3), 1))
                     pygame.draw.circle(surface, (120, 200, 140), (tower.centerx, tower.y + 5), 1)
                     continue
 
@@ -16059,9 +16092,7 @@ class HardcoreSurvivalState(State):
         open_block: tuple[int, int, int, int] | None = None,
         storage_kind: str = "cabinet",
     ) -> None:
-        if not getattr(self, "hr_interior", False):
-            return
-        if str(getattr(self, "hr_mode", "lobby")) != "home":
+        if bool(getattr(self, "hr_interior", False)) and str(getattr(self, "hr_mode", "lobby")) != "home":
             return
         self.inv_open = False
         self.rv_ui_open = False
@@ -16516,6 +16547,10 @@ class HardcoreSurvivalState(State):
                     continue
                 inter = r.clip(h)
                 if int(inter.w) <= 0 or int(inter.h) <= 0:
+                    continue
+                # Ignore tiny 1-2px corner overlaps; treating them as "blocking"
+                # causes visible jitter when sliding along walls (esp. while sprinting).
+                if int(inter.w) <= int(skin) and int(inter.h) <= int(skin):
                     continue
                 # For horizontal movement, only keep hits that are "mostly side walls"
                 # (penetration in X smaller than in Y, plus a small skin). Otherwise,
@@ -17265,7 +17300,9 @@ class HardcoreSurvivalState(State):
                 can_sprint = False
 
             if can_sprint:
-                speed *= 1.35
+                # Keep sprint pixel-perfect at the fixed timestep (dt=1/FPS):
+                # base_speed=60 -> 1px/frame; sprint=120 -> 2px/frame (no camera jitter).
+                speed *= 2.0
                 self.player.stamina = float(clamp(stamina - dt * 28.0, 0.0, 100.0))
             else:
                 regen_mod = 0.50 + 0.50 * (min(self.player.hunger, self.player.thirst) / 100.0)
@@ -17945,11 +17982,190 @@ class HardcoreSurvivalState(State):
                 return True
         return False
 
+    def _try_open_home_storage_world(self) -> bool:
+        if getattr(self, "mount", None) is not None:
+            return False
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return False
+
+        home = getattr(self, "home_highrise_door", None)
+        if home is None or not isinstance(home, tuple) or len(home) != 2:
+            return False
+        try:
+            hx, hy = int(home[0]), int(home[1])
+        except Exception:
+            return False
+
+        tx, ty = self._player_tile()
+        found = self._multi_house_at(int(tx), int(ty))
+        if found is None:
+            return False
+        _chunk, mh = found
+        mh_tx0 = int(getattr(mh, "tx0", 0))
+        mh_ty0 = int(getattr(mh, "ty0", 0))
+        mh_w = int(getattr(mh, "w", 0))
+        mh_h = int(getattr(mh, "h", 0))
+        if not (mh_tx0 <= int(hx) < mh_tx0 + mh_w and mh_ty0 <= int(hy) < mh_ty0 + mh_h):
+            return False
+
+        home_floor = int(getattr(self, "home_highrise_floor", 0))
+        cur_floor = int(getattr(mh, "cur_floor", 1))
+        if home_floor <= 0 or int(cur_floor) != int(home_floor):
+            return False
+
+        # Ensure the home door + furniture exist (runs once).
+        self._setup_home_highrise_world()
+
+        candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+        for cx, cy in candidates:
+            tid = int(self.world.get_tile(int(cx), int(cy)))
+            if tid == int(self.T_FRIDGE):
+                self._home_ui_open(storage_kind="fridge")
+                return True
+            if tid == int(self.T_SHELF):
+                self._home_ui_open(storage_kind="cabinet")
+                return True
+        return False
+
+    def _try_rest_world_bed(self) -> bool:
+        if getattr(self, "mount", None) is not None:
+            return False
+
+        # Pressing E again while sleeping gets you up.
+        if str(getattr(self, "player_pose", "")) == "sleep" and str(getattr(self, "player_pose_space", "")) == "world":
+            self._clear_player_pose()
+            self._set_hint("����", seconds=0.8)
+            return True
+
+        tx, ty = self._player_tile()
+        candidates = [
+            (tx, ty),
+            (tx + 1, ty),
+            (tx - 1, ty),
+            (tx, ty + 1),
+            (tx, ty - 1),
+            (tx + 1, ty + 1),
+            (tx + 1, ty - 1),
+            (tx - 1, ty + 1),
+            (tx - 1, ty - 1),
+        ]
+        bed_tile: tuple[int, int] | None = None
+        for cx, cy in candidates:
+            if int(self.world.get_tile(int(cx), int(cy))) == int(self.T_BED):
+                bed_tile = (int(cx), int(cy))
+                break
+        if bed_tile is None:
+            return False
+
+        # Find the whole bed block (usually 2 tiles) so the anchor is centered.
+        bx, by = bed_tile
+        seen: set[tuple[int, int]] = set()
+        stack = [(int(bx), int(by))]
+        cells: list[tuple[int, int]] = []
+        while stack and len(cells) < 24:
+            cx, cy = stack.pop()
+            cx = int(cx)
+            cy = int(cy)
+            if (cx, cy) in seen:
+                continue
+            seen.add((cx, cy))
+            if int(self.world.get_tile(int(cx), int(cy))) != int(self.T_BED):
+                continue
+            cells.append((cx, cy))
+            stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+
+        if not cells:
+            return False
+        min_x = min(int(p[0]) for p in cells)
+        max_x = max(int(p[0]) for p in cells)
+        min_y = min(int(p[1]) for p in cells)
+        max_y = max(int(p[1]) for p in cells)
+
+        ax = (float(min_x + max_x + 1) * float(self.TILE_SIZE)) * 0.5
+        ay = (float(min_y + max_y + 1) * float(self.TILE_SIZE)) * 0.5
+
+        self.player.stamina = 100.0
+        self.player.morale = float(clamp(self.player.morale + 10.0, 0.0, 100.0))
+        self._set_player_pose("sleep", space="world", anchor=(ax, ay), seconds=0.0)
+        self._set_hint("������Ϣ", seconds=1.1)
+        return True
+
+    def _try_unlock_near_door_world(self) -> bool:
+        if getattr(self, "mount", None) is not None:
+            return False
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return False
+
+        tx, ty = self._player_tile()
+        candidates = [
+            (tx, ty),
+            (tx + 1, ty),
+            (tx - 1, ty),
+            (tx, ty + 1),
+            (tx, ty - 1),
+            (tx + 1, ty + 1),
+            (tx + 1, ty - 1),
+            (tx - 1, ty + 1),
+            (tx - 1, ty - 1),
+        ]
+        for cx, cy in candidates:
+            t = int(self.world.get_tile(int(cx), int(cy)))
+            if t not in (int(self.T_DOOR_LOCKED), int(self.T_DOOR_HOME_LOCKED)):
+                continue
+            if int(self.inventory.count("key_house")) <= 0:
+                self._set_hint("��Ҫ��Կ", seconds=1.1)
+                return True
+
+            want = int(t)
+            seen: set[tuple[int, int]] = set()
+            stack = [(int(cx), int(cy))]
+            cells: list[tuple[int, int]] = []
+            while stack and len(cells) < 12:
+                sx, sy = stack.pop()
+                sx = int(sx)
+                sy = int(sy)
+                if (sx, sy) in seen:
+                    continue
+                seen.add((sx, sy))
+                if int(self.world.get_tile(int(sx), int(sy))) != int(want):
+                    continue
+                cells.append((sx, sy))
+                stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
+            if not cells:
+                cells = [(int(cx), int(cy))]
+
+            new_tid = int(self.T_DOOR) if int(want) == int(self.T_DOOR_LOCKED) else int(self.T_DOOR_HOME)
+            for sx, sy in cells:
+                self._world_set_tile(int(sx), int(sy), int(new_tid))
+            self._set_hint("�ѽ���", seconds=0.9)
+            return True
+        return False
+
     def _interact_primary(self) -> None:
         # Primary interact key on the world map: stairs/pickup (doors are walk-into).
+        if str(getattr(self, "player_pose", "")) == "sleep" and str(getattr(self, "player_pose_space", "")) == "world":
+            self._clear_player_pose()
+            self._set_hint("����", seconds=0.8)
+            return
         if self._try_use_highrise_elevator():
             return
         if self._try_use_multi_house_stairs():
+            return
+        if self._try_unlock_near_door_world():
+            return
+        if self._try_open_home_storage_world():
+            return
+        if self._try_rest_world_bed():
             return
         self._try_pickup()
 
@@ -17985,6 +18201,97 @@ class HardcoreSurvivalState(State):
             return
         tiles[int(my) * int(w) + int(mx)] = int(tile_id)
 
+    def _toggle_door_lock(self) -> None:
+        if getattr(self, "mount", None) is not None:
+            self._set_hint("下车再锁门", seconds=1.1)
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return
+
+        if int(self.inventory.count("key_house")) <= 0:
+            self._set_hint("需要钥匙", seconds=1.1)
+            return
+
+        tx, ty = self._player_tile()
+        candidates = [
+            (tx, ty),
+            (tx + 1, ty),
+            (tx - 1, ty),
+            (tx, ty + 1),
+            (tx, ty - 1),
+            (tx + 1, ty + 1),
+            (tx + 1, ty - 1),
+            (tx - 1, ty + 1),
+            (tx - 1, ty - 1),
+        ]
+        chosen: tuple[int, int, int] | None = None
+        for cx, cy in candidates:
+            t = int(self.world.get_tile(int(cx), int(cy)))
+            if t in (int(self.T_DOOR_HOME), int(self.T_DOOR_HOME_LOCKED)):
+                chosen = (int(cx), int(cy), int(t))
+                break
+        if chosen is None:
+            for cx, cy in candidates:
+                t = int(self.world.get_tile(int(cx), int(cy)))
+                if t in (int(self.T_DOOR), int(self.T_DOOR_LOCKED)):
+                    chosen = (int(cx), int(cy), int(t))
+                    break
+        if chosen is None:
+            self._set_hint("附近没门", seconds=1.0)
+            return
+        cx, cy, t = chosen
+
+        if t in (int(self.T_DOOR), int(self.T_DOOR_LOCKED)):
+            group = (int(self.T_DOOR), int(self.T_DOOR_LOCKED))
+            lock_tid = int(self.T_DOOR_LOCKED)
+            unlock_tid = int(self.T_DOOR)
+            is_locked = int(t) == int(self.T_DOOR_LOCKED)
+        else:
+            group = (int(self.T_DOOR_HOME), int(self.T_DOOR_HOME_LOCKED))
+            lock_tid = int(self.T_DOOR_HOME_LOCKED)
+            unlock_tid = int(self.T_DOOR_HOME)
+            is_locked = int(t) == int(self.T_DOOR_HOME_LOCKED)
+
+        seen: set[tuple[int, int]] = set()
+        stack = [(int(cx), int(cy))]
+        cells: list[tuple[int, int]] = []
+        while stack and len(cells) < 12:
+            sx, sy = stack.pop()
+            sx = int(sx)
+            sy = int(sy)
+            if (sx, sy) in seen:
+                continue
+            seen.add((sx, sy))
+            if int(self.world.get_tile(int(sx), int(sy))) not in group:
+                continue
+            cells.append((sx, sy))
+            stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
+        if not cells:
+            cells = [(int(cx), int(cy))]
+
+        if not is_locked:
+            # Don't lock the doorway if the player is standing on it.
+            prect = self.player.rect_at(self.player.pos)
+            ts = int(self.TILE_SIZE)
+            for sx, sy in cells:
+                door_rect = pygame.Rect(int(sx) * ts, int(sy) * ts, ts, ts)
+                if prect.colliderect(door_rect):
+                    self._set_hint("离开门口", seconds=1.0)
+                    return
+            for sx, sy in cells:
+                self._world_set_tile(int(sx), int(sy), int(lock_tid))
+            self._set_hint("已上锁", seconds=0.9)
+            return
+
+        for sx, sy in cells:
+            self._world_set_tile(int(sx), int(sy), int(unlock_tid))
+        self._set_hint("已解锁", seconds=0.9)
+
     def _toggle_barricade(self) -> None:
         if getattr(self, "mount", None) is not None:
             self._set_hint("下车后再封门", seconds=1.1)
@@ -17994,7 +18301,13 @@ class HardcoreSurvivalState(State):
         chosen: tuple[int, int, int] | None = None
         for cx, cy in candidates:
             t = int(self.world.get_tile(int(cx), int(cy)))
-            if t in (int(self.T_DOOR), int(self.T_BARRICADE)):
+            if t in (
+                int(self.T_DOOR),
+                int(self.T_DOOR_HOME),
+                int(self.T_DOOR_LOCKED),
+                int(self.T_DOOR_HOME_LOCKED),
+                int(self.T_BARRICADE),
+            ):
                 chosen = (int(cx), int(cy), int(t))
                 break
         if chosen is None:
@@ -18002,7 +18315,7 @@ class HardcoreSurvivalState(State):
             return
         cx, cy, t = chosen
 
-        if t == int(self.T_DOOR):
+        if t in (int(self.T_DOOR), int(self.T_DOOR_HOME), int(self.T_DOOR_LOCKED), int(self.T_DOOR_HOME_LOCKED)):
             need_plank = 1
             need_nails = 4
             if int(self.inventory.count("plank")) < int(need_plank) or int(self.inventory.count("nails")) < int(need_nails):
@@ -18099,6 +18412,222 @@ class HardcoreSurvivalState(State):
             src_off = int(yy * w)
             for xx in range(int(w)):
                 chunk.tiles[int(row_off + xx)] = int(tiles[int(src_off + xx)])
+
+    def _setup_home_highrise_world(self) -> None:
+        if bool(getattr(self, "_home_highrise_world_setup_done", False)):
+            return
+        home = getattr(self, "home_highrise_door", None)
+        if not isinstance(home, tuple) or len(home) != 2:
+            return
+        try:
+            hx, hy = int(home[0]), int(home[1])
+        except Exception:
+            return
+
+        found = self._multi_house_at(int(hx), int(hy))
+        if found is None:
+            return
+        chunk, mh = found
+
+        tx0 = int(getattr(mh, "tx0", 0))
+        ty0 = int(getattr(mh, "ty0", 0))
+        bw = int(getattr(mh, "w", 0))
+        bh = int(getattr(mh, "h", 0))
+        if bw <= 0 or bh <= 0:
+            return
+
+        # Confirm this multi-house is a high-rise building footprint.
+        style = 0
+        for b in getattr(chunk, "buildings", []):
+            if int(b[0]) == int(tx0) and int(b[1]) == int(ty0) and int(b[2]) == int(bw) and int(b[3]) == int(bh):
+                roof_kind = int(b[4]) if len(b) > 4 else 0
+                style, _var = self._building_roof_style_var(int(roof_kind))
+                break
+        if int(style) != 6:
+            return
+
+        floors = int(max(1, int(getattr(mh, "floors", 1))))
+        floors = int(min(int(floors), int(getattr(self, "HIGHRISE_MAX_FLOORS", 10))))
+        if floors <= 1:
+            return
+
+        home_floor = int(getattr(self, "home_highrise_floor", 0))
+        if home_floor <= 0:
+            return
+        home_floor = int(clamp(int(home_floor), 1, int(floors)))
+
+        base_tiles = mh.floor_tiles.get(int(home_floor))
+        if not isinstance(base_tiles, list):
+            return
+        w = int(bw)
+        h = int(bh)
+        if len(base_tiles) != int(w) * int(h):
+            return
+
+        # IMPORTANT: upper floors may share the same list instance; copy so only the home floor is furnished.
+        tiles = list(int(t) for t in base_tiles)
+        mh.floor_tiles[int(home_floor)] = tiles
+
+        def get(x: int, y: int) -> int:
+            return int(tiles[int(y) * int(w) + int(x)])
+
+        def set_t(x: int, y: int, tid: int) -> None:
+            tiles[int(y) * int(w) + int(x)] = int(tid)
+
+        # Internal apartment doors (exclude building border doors).
+        internal_doors: list[tuple[int, int]] = []
+        for yy in range(1, int(h) - 1):
+            row_off = int(yy) * int(w)
+            for xx in range(1, int(w) - 1):
+                tid = int(tiles[int(row_off + xx)])
+                if tid == int(self.T_DOOR):
+                    internal_doors.append((int(xx), int(yy)))
+        if not internal_doors:
+            return
+        internal_doors.sort(key=lambda p: (int(p[0]), int(p[1])))
+
+        unit = int(getattr(self, "home_highrise_unit", 1))
+        unit = int(clamp(int(unit), 1, int(len(internal_doors))))
+        dx, dy = internal_doors[int(unit - 1)]
+
+        # Mark the home door as green (matches the guidance dialog text).
+        set_t(int(dx), int(dy), int(self.T_DOOR_HOME))
+        self.home_highrise_world_key = (int(tx0), int(ty0), int(w), int(h))
+        self.home_highrise_world_floor = int(home_floor)
+        self.home_highrise_world_home_door = (int(tx0 + dx), int(ty0 + dy))
+
+        # Flood-fill the apartment region above the door (skip the elevator lobby below).
+        start: tuple[int, int] | None = (int(dx), int(dy - 1))
+
+        def is_floor(x: int, y: int) -> bool:
+            if not (0 <= int(x) < int(w) and 0 <= int(y) < int(h)):
+                return False
+            return int(get(int(x), int(y))) == int(self.T_FLOOR)
+
+        if start is None or not is_floor(int(start[0]), int(start[1])):
+            start = None
+            for sx, sy in ((dx, dy - 1), (dx - 1, dy), (dx + 1, dy), (dx, dy + 1)):
+                if is_floor(int(sx), int(sy)):
+                    start = (int(sx), int(sy))
+                    break
+        if start is None:
+            return
+
+        region: set[tuple[int, int]] = set()
+        stack = [start]
+        while stack:
+            x, y = stack.pop()
+            x = int(x)
+            y = int(y)
+            if (x, y) in region:
+                continue
+            if not is_floor(int(x), int(y)):
+                continue
+            region.add((int(x), int(y)))
+            stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+        if not region:
+            return
+
+        min_x = min(int(p[0]) for p in region)
+        max_x = max(int(p[0]) for p in region)
+        min_y = min(int(p[1]) for p in region)
+        max_y = max(int(p[1]) for p in region)
+
+        # Keep the entry area clear so the player never gets stuck at the door.
+        reserved: set[tuple[int, int]] = set()
+        ex, ey = start
+        for oy in (-1, 0, 1):
+            for ox in (-1, 0, 1):
+                reserved.add((int(ex + ox), int(ey + oy)))
+
+        def can_place(cells: list[tuple[int, int]]) -> bool:
+            for x, y in cells:
+                x = int(x)
+                y = int(y)
+                if (x, y) in reserved:
+                    return False
+                if (x, y) not in region:
+                    return False
+                if int(get(x, y)) != int(self.T_FLOOR):
+                    return False
+            return True
+
+        def place(tid: int, cells: list[tuple[int, int]]) -> bool:
+            if not can_place(cells):
+                return False
+            for x, y in cells:
+                set_t(int(x), int(y), int(tid))
+            return True
+
+        # Basic furnishing: bed + sofa + table + fridge + cabinet + TV + chair.
+        for cells in (
+            [(min_x + 1, min_y + 1), (min_x + 2, min_y + 1)],
+            [(max_x - 2, min_y + 1), (max_x - 1, min_y + 1)],
+            [(min_x + 1, max_y - 1), (min_x + 2, max_y - 1)],
+            [(max_x - 2, max_y - 1), (max_x - 1, max_y - 1)],
+        ):
+            if place(int(self.T_BED), [(int(c[0]), int(c[1])) for c in cells]):
+                break
+
+        for cells in ([(max_x - 1, min_y + 2)], [(max_x - 1, min_y + 1)], [(min_x + 1, min_y + 2)]):
+            if place(int(self.T_FRIDGE), [(int(c[0]), int(c[1])) for c in cells]):
+                break
+
+        for cells in ([(max_x - 2, min_y + 2)], [(max_x - 2, min_y + 3)], [(min_x + 1, min_y + 3)]):
+            if place(int(self.T_SHELF), [(int(c[0]), int(c[1])) for c in cells]):
+                break
+
+        cx = int((min_x + max_x) // 2)
+        cy = int((min_y + max_y) // 2)
+        table_pos: tuple[int, int] | None = None
+        for r in range(0, max(2, max(max_x - min_x, max_y - min_y) + 1)):
+            for dy2 in range(-int(r), int(r) + 1):
+                for dx2 in range(-int(r), int(r) + 1):
+                    tx2 = int(cx + dx2)
+                    ty2 = int(cy + dy2)
+                    if (tx2, ty2) in reserved:
+                        continue
+                    if (tx2, ty2) not in region:
+                        continue
+                    if int(get(tx2, ty2)) != int(self.T_FLOOR):
+                        continue
+                    if place(int(self.T_TABLE), [(int(tx2), int(ty2))]):
+                        table_pos = (int(tx2), int(ty2))
+                        break
+                if table_pos is not None:
+                    break
+            if table_pos is not None:
+                break
+
+        for cells in (
+            [(min_x + 1, max_y - 2), (min_x + 2, max_y - 2)],
+            [(max_x - 2, max_y - 2), (max_x - 1, max_y - 2)],
+            [(min_x + 1, max_y - 3), (min_x + 2, max_y - 3)],
+        ):
+            if place(int(self.T_SOFA), [(int(c[0]), int(c[1])) for c in cells]):
+                break
+
+        for cells in ([(min_x + 4, max_y - 2)], [(max_x - 4, max_y - 2)], [(cx, max_y - 2)]):
+            if place(int(self.T_TV), [(int(c[0]), int(c[1])) for c in cells]):
+                break
+
+        # Simple computer desk (2 tiles).
+        for cells in (
+            [(max_x - 3, min_y + 3), (max_x - 2, min_y + 3)],
+            [(min_x + 1, min_y + 3), (min_x + 2, min_y + 3)],
+            [(cx - 1, max_y - 3), (cx, max_y - 3)],
+            [(cx, min_y + 2), (cx + 1, min_y + 2)],
+        ):
+            if place(int(self.T_PC), [(int(c[0]), int(c[1])) for c in cells]):
+                break
+
+        if table_pos is not None:
+            tx2, ty2 = table_pos
+            for cells in ([(tx2, ty2 + 1)], [(tx2 + 1, ty2)], [(tx2 - 1, ty2)], [(tx2, ty2 - 1)]):
+                if place(int(self.T_CHAIR), [(int(c[0]), int(c[1])) for c in cells]):
+                    break
+
+        self._home_highrise_world_setup_done = True
 
     def _try_use_multi_house_stairs(self) -> bool:
         tx, ty = self._player_tile()
@@ -19560,9 +20089,14 @@ class HardcoreSurvivalState(State):
             int(self.T_WALL),
             int(self.T_FLOOR),
             int(self.T_DOOR),
+            int(self.T_DOOR_HOME),
             int(self.T_TABLE),
             int(self.T_SHELF),
             int(self.T_BED),
+            int(self.T_SOFA),
+            int(self.T_FRIDGE),
+            int(self.T_TV),
+            int(self.T_CHAIR),
             int(self.T_ELEVATOR),
         ):
             return (72, 72, 92)
@@ -19643,12 +20177,20 @@ class HardcoreSurvivalState(State):
             if tile_id in (
                 int(self.T_FLOOR),
                 int(self.T_DOOR),
+                int(self.T_DOOR_HOME),
+                int(self.T_DOOR_LOCKED),
+                int(self.T_DOOR_HOME_LOCKED),
                 int(self.T_ELEVATOR),
                 int(self.T_STAIRS_UP),
                 int(self.T_STAIRS_DOWN),
                 int(self.T_TABLE),
                 int(self.T_SHELF),
                 int(self.T_BED),
+                int(self.T_SOFA),
+                int(self.T_FRIDGE),
+                int(self.T_TV),
+                int(self.T_CHAIR),
+                int(self.T_PC),
             ):
                 inside_key = getattr(self, "_inside_building_key", None)
                 try:
@@ -19883,6 +20425,166 @@ class HardcoreSurvivalState(State):
                 pygame.draw.polygon(surface, ink, [(rect.centerx, rect.y + 2), (rect.centerx - 2, rect.y + 6), (rect.centerx + 2, rect.y + 6)])
             else:
                 pygame.draw.polygon(surface, ink, [(rect.centerx, rect.bottom - 3), (rect.centerx - 2, rect.bottom - 7), (rect.centerx + 2, rect.bottom - 7)])
+
+        # World-map furniture (top-down pixel tiles).
+        if tile_id in (
+            self.T_TABLE,
+            self.T_SHELF,
+            self.T_BED,
+            self.T_SOFA,
+            self.T_FRIDGE,
+            self.T_TV,
+            self.T_CHAIR,
+            self.T_DOOR,
+            self.T_DOOR_HOME,
+            self.T_DOOR_LOCKED,
+            self.T_DOOR_HOME_LOCKED,
+            self.T_PC,
+        ):
+            outline = (10, 10, 12)
+            hi = self._tint(col, add=(24, 24, 26))
+            lo = self._tint(col, add=(-28, -28, -30))
+
+            if tile_id in (self.T_DOOR, self.T_DOOR_LOCKED):
+                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
+                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 2, rect.w - 4, 1))
+                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
+                surface.fill((30, 30, 34), pygame.Rect(rect.right - 3, rect.centery, 1, 1))
+                if tile_id == self.T_DOOR_LOCKED:
+                    lock = pygame.Rect(rect.centerx - 1, rect.centery - 1, 3, 3)
+                    surface.fill((255, 220, 140), lock)
+                    pygame.draw.rect(surface, outline, lock, 1)
+            elif tile_id in (self.T_DOOR_HOME, self.T_DOOR_HOME_LOCKED):
+                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
+                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 2, rect.w - 4, 1))
+                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
+                surface.fill((30, 30, 34), pygame.Rect(rect.right - 3, rect.centery, 1, 1))
+                if tile_id == self.T_DOOR_HOME_LOCKED:
+                    lock = pygame.Rect(rect.centerx - 1, rect.centery - 1, 3, 3)
+                    surface.fill((255, 220, 140), lock)
+                    pygame.draw.rect(surface, outline, lock, 1)
+            elif tile_id == self.T_PC:
+                # Simple 2-tile computer desk: left tile prefers monitor, right tile prefers tower.
+                left_is_pc = int(self.world.peek_tile(int(tx - 1), int(ty))) == int(self.T_PC)
+                right_is_pc = int(self.world.peek_tile(int(tx + 1), int(ty))) == int(self.T_PC)
+                part = "single"
+                if right_is_pc and not left_is_pc:
+                    part = "left"
+                elif left_is_pc and not right_is_pc:
+                    part = "right"
+                elif left_is_pc and right_is_pc:
+                    part = "mid"
+
+                # Desk body (top + front face).
+                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 3, rect.w - 2, rect.h - 4), 1)
+                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 4, rect.w - 4, 1))
+                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
+                # Legs hint.
+                surface.fill(outline, pygame.Rect(rect.x + 2, rect.bottom - 4, 1, 2))
+                surface.fill(outline, pygame.Rect(rect.right - 3, rect.bottom - 4, 1, 2))
+
+                # Monitor (left side).
+                if part in ("left", "single", "mid"):
+                    mon = pygame.Rect(rect.x + 2, rect.y + 1, 5, 4)
+                    pygame.draw.rect(surface, (34, 34, 42), mon, border_radius=1)
+                    pygame.draw.rect(surface, outline, mon, 1, border_radius=1)
+                    scr = mon.inflate(-2, -2)
+                    surface.fill((14, 14, 18), scr)
+                    surface.fill((120, 200, 240), pygame.Rect(scr.x + 1, scr.y + 1, 2, 1))
+                    # Tiny stand.
+                    surface.fill(outline, pygame.Rect(mon.centerx, mon.bottom, 1, 1))
+
+                # Keyboard + tower (right side).
+                if part in ("right", "single", "mid"):
+                    kb = pygame.Rect(rect.x + 2, rect.y + 6, rect.w - 4, 2)
+                    pygame.draw.rect(surface, (36, 36, 44), kb, border_radius=1)
+                    pygame.draw.rect(surface, outline, kb, 1, border_radius=1)
+                    if part in ("right", "single"):
+                        tower = pygame.Rect(rect.right - 4, rect.y + 1, 3, 6)
+                        pygame.draw.rect(surface, (26, 26, 32), tower, border_radius=1)
+                        pygame.draw.rect(surface, outline, tower, 1, border_radius=1)
+                        surface.fill((120, 200, 140), pygame.Rect(tower.x + 1, tower.y + 2, 1, 1))
+            elif tile_id == self.T_FRIDGE:
+                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
+                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 2, rect.w - 4, 1))
+                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
+                surface.fill(outline, pygame.Rect(rect.x + 2, rect.y + 4, rect.w - 4, 1))
+                surface.fill(outline, pygame.Rect(rect.right - 3, rect.y + 3, 1, rect.h - 6))
+            elif tile_id == self.T_TV:
+                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, rect.h - 3), 1)
+                surface.fill((12, 12, 16), pygame.Rect(rect.x + 2, rect.y + 3, rect.w - 4, rect.h - 5))
+                surface.fill((60, 110, 140), pygame.Rect(rect.x + 3, rect.y + 4, 2, 1))
+                surface.fill(outline, pygame.Rect(rect.centerx - 1, rect.bottom - 2, 2, 1))
+            elif tile_id == self.T_SOFA:
+                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, rect.h - 3), 1)
+                surface.fill(lo, pygame.Rect(rect.x + 2, rect.y + 3, rect.w - 4, 2))
+                surface.fill(hi, pygame.Rect(rect.x + 2, rect.bottom - 4, rect.w - 4, 1))
+                # Seam when this tile is part of a multi-tile sofa.
+                if int(self.world.peek_tile(int(tx - 1), int(ty))) == int(self.T_SOFA) and int(self.world.peek_tile(int(tx + 1), int(ty))) != int(self.T_SOFA):
+                    surface.fill(outline, pygame.Rect(rect.x + 1, rect.y + 2, 1, rect.h - 3))
+                if int(self.world.peek_tile(int(tx + 1), int(ty))) == int(self.T_SOFA) and int(self.world.peek_tile(int(tx - 1), int(ty))) != int(self.T_SOFA):
+                    surface.fill(outline, pygame.Rect(rect.right - 2, rect.y + 2, 1, rect.h - 3))
+                if int(self.world.peek_tile(int(tx - 1), int(ty))) == int(self.T_SOFA) and int(self.world.peek_tile(int(tx + 1), int(ty))) == int(self.T_SOFA):
+                    surface.fill(outline, pygame.Rect(rect.right - 1, rect.y + 2, 1, rect.h - 3))
+            elif tile_id == self.T_BED:
+                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
+                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 2, rect.w - 4, 1))
+                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
+                left_is_bed = int(self.world.peek_tile(int(tx - 1), int(ty))) == int(self.T_BED)
+                right_is_bed = int(self.world.peek_tile(int(tx + 1), int(ty))) == int(self.T_BED)
+                # Pillow on the head side (prefer the "outer" end of a 2-tile bed).
+                if right_is_bed and not left_is_bed:
+                    surface.fill((230, 230, 236), pygame.Rect(rect.x + 2, rect.y + 3, 3, 2))
+                elif left_is_bed and not right_is_bed:
+                    surface.fill((230, 230, 236), pygame.Rect(rect.right - 5, rect.y + 3, 3, 2))
+                else:
+                    surface.fill((230, 230, 236), pygame.Rect(rect.centerx - 1, rect.y + 3, 2, 2))
+            elif tile_id == self.T_TABLE:
+                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, rect.h - 3), 1)
+                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 3, rect.w - 4, 1))
+                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 4, rect.w - 4, 1))
+                surface.fill(outline, pygame.Rect(rect.x + 3, rect.y + 5, 1, rect.h - 7))
+                surface.fill(outline, pygame.Rect(rect.right - 4, rect.y + 5, 1, rect.h - 7))
+            elif tile_id == self.T_CHAIR:
+                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 2, rect.y + 3, rect.w - 4, rect.h - 4), 1)
+                surface.fill(hi, pygame.Rect(rect.x + 3, rect.y + 4, rect.w - 6, 1))
+                surface.fill(outline, pygame.Rect(rect.centerx, rect.y + 2, 1, 2))
+            else:  # shelf
+                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
+                surface.fill(lo, pygame.Rect(rect.x + 2, rect.y + 3, rect.w - 4, 1))
+                surface.fill(lo, pygame.Rect(rect.x + 2, rect.y + 6, rect.w - 4, 1))
+                surface.fill(hi, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
+
+        # Proximity outline for interactable world tiles (keyboard-friendly).
+        try:
+            if (
+                not self.inv_open
+                and not bool(getattr(self, "world_map_open", False))
+                and not bool(getattr(self, "home_ui_open", False))
+                and not bool(getattr(self, "world_elevator_ui_open", False))
+                and getattr(self, "mount", None) is None
+            ):
+                pt = getattr(self, "_draw_player_tile_xy", None)
+                if isinstance(pt, tuple) and len(pt) == 2:
+                    ptx, pty = int(pt[0]), int(pt[1])
+                    if abs(int(tx) - int(ptx)) <= 1 and abs(int(ty) - int(pty)) <= 1:
+                        if tile_id in (
+                            int(self.T_DOOR),
+                            int(self.T_DOOR_HOME),
+                            int(self.T_DOOR_LOCKED),
+                            int(self.T_DOOR_HOME_LOCKED),
+                            int(self.T_BARRICADE),
+                            int(self.T_ELEVATOR),
+                            int(self.T_STAIRS_UP),
+                            int(self.T_STAIRS_DOWN),
+                            int(self.T_FRIDGE),
+                            int(self.T_SHELF),
+                            int(self.T_BED),
+                        ):
+                            pygame.draw.rect(surface, (0, 0, 0), rect, 1)
+                            pygame.draw.rect(surface, (255, 220, 140), rect.inflate(-2, -2), 1)
+        except Exception:
+            pass
 
     def _blit_sprite_outline(self, surface: pygame.Surface, spr: pygame.Surface, rect: pygame.Rect, *, color: tuple[int, int, int]) -> None:
         r, g, b = (int(color[0]), int(color[1]), int(color[2]))
@@ -20149,7 +20851,7 @@ class HardcoreSurvivalState(State):
         near_item: HardcoreSurvivalState._WorldItem | None = None
         near_spr: pygame.Surface | None = None
         near_rect: pygame.Rect | None = None
-        if mouse is not None:
+        if not self.inv_open and not bool(getattr(self, "rv_ui_open", False)) and not bool(getattr(self, "world_map_open", False)):
             _nchunk, near_item = self._find_nearest_item(radius_px=20.0)
 
         start_cx = start_tx // self.CHUNK_SIZE
@@ -21077,6 +21779,7 @@ class HardcoreSurvivalState(State):
             can_be_inside = int(p_tile) in (
                 int(self.T_FLOOR),
                 int(self.T_DOOR),
+                int(self.T_DOOR_HOME),
                 int(self.T_ELEVATOR),
                 int(self.T_STAIRS_UP),
                 int(self.T_STAIRS_DOWN),
@@ -22358,13 +23061,16 @@ class HardcoreSurvivalState(State):
         self._inside_highrise_floor_overlay = None
         self._inside_highrise_facade_slice = None
         self._inside_building_key = None
+        self._draw_player_tile_xy = None
         try:
             ptx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
             pty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
+            self._draw_player_tile_xy = (int(ptx), int(pty))
             p_tile = int(self.world.peek_tile(int(ptx), int(pty)))
             can_be_inside = p_tile in (
                 int(self.T_FLOOR),
                 int(self.T_DOOR),
+                int(self.T_DOOR_HOME),
                 int(self.T_ELEVATOR),
                 int(self.T_STAIRS_UP),
                 int(self.T_STAIRS_DOWN),
@@ -22462,6 +23168,7 @@ class HardcoreSurvivalState(State):
             self._inside_highrise_floor_overlay = None
             self._inside_highrise_facade_slice = None
             self._inside_building_key = None
+            self._draw_player_tile_xy = None
 
         # High-rise upper floors: shift the camera up slightly so the elevated
         # interior/player doesn't leave the screen on very high floors.
@@ -22601,6 +23308,9 @@ class HardcoreSurvivalState(State):
         if getattr(self, "world_elevator_ui_open", False):
             self._draw_world_elevator_ui(surface)
             return
+        if getattr(self, "home_ui_open", False):
+            self._draw_home_storage_ui(surface)
+            return
 
         self._draw_hover_tooltip(surface)
         self._draw_dialog(surface)
@@ -22681,6 +23391,38 @@ class HardcoreSurvivalState(State):
         p = self.player.pos - pygame.Vector2(cam_x, cam_y)
         px = iround(float(p.x))
         py = iround(float(p.y))
+
+        pose = str(getattr(self, "player_pose", "")).strip()
+        pose_space = str(getattr(self, "player_pose_space", "")).strip()
+        pose_anchor = getattr(self, "player_pose_anchor", None)
+        use_pose = bool(pose and pose_space == "world" and pose_anchor is not None)
+        if use_pose:
+            ap = pygame.Vector2(float(pose_anchor[0]) - float(cam_x), float(pose_anchor[1]) - float(cam_y))
+            ax = iround(float(ap.x))
+            ay = iround(float(ap.y))
+            if pose == "sleep":
+                frame = int(float(getattr(self, "player_pose_phase", 0.0)) * 2.0) % 2
+                spr = self._get_pose_sprite("sleep", frame=frame)
+                shadow = pygame.Rect(0, 0, 18, 7)
+                shadow.center = (ax, ay + 4)
+                sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
+                pygame.draw.ellipse(sh, (0, 0, 0, 100), sh.get_rect())
+                surface.blit(sh, shadow.topleft)
+                rect = spr.get_rect(center=(ax, ay + 2))
+                surface.blit(spr, rect)
+                self._last_player_screen_rect = pygame.Rect(rect)
+                return
+            if pose == "sit":
+                spr = self._get_pose_sprite("sit", direction=str(getattr(self.player, "dir", "down")), frame=0)
+                shadow = pygame.Rect(0, 0, 16, 6)
+                shadow.center = (ax, ay + 5)
+                sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
+                pygame.draw.ellipse(sh, (0, 0, 0, 115), sh.get_rect())
+                surface.blit(sh, shadow.topleft)
+                rect = spr.get_rect(center=(ax, ay + 3))
+                surface.blit(spr, rect)
+                self._last_player_screen_rect = pygame.Rect(rect)
+                return
 
         face = pygame.Vector2(self.player.facing)
         if self.gun is not None:
