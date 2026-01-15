@@ -16039,7 +16039,13 @@ class HardcoreSurvivalState(State):
                 prev = rect_at(float(p.x), float(p.y))
                 p.x += float(dx)
                 rect = rect_at(float(p.x), float(p.y))
-                hits = self._collide_rect_world(rect)
+                # Shrink slightly in the orthogonal axis to avoid 1px corner catches
+                # when sliding along walls (prevents right->left "卡住").
+                probe = pygame.Rect(rect)
+                if int(probe.height) > 2:
+                    probe.y += 1
+                    probe.height -= 2
+                hits = self._collide_rect_world(probe)
                 if hits:
                     # Corner correction: when moving purely horizontally, a tiny Y nudge
                     # makes 1-tile corridors/doorways feel smooth instead of "pixel perfect".
@@ -16124,7 +16130,11 @@ class HardcoreSurvivalState(State):
                 prev = rect_at(float(p.x), float(p.y))
                 p.y += float(dy)
                 rect = rect_at(float(p.x), float(p.y))
-                hits = self._collide_rect_world(rect)
+                probe = pygame.Rect(rect)
+                if int(probe.width) > 2:
+                    probe.x += 1
+                    probe.width -= 2
+                hits = self._collide_rect_world(probe)
                 if hits:
                     corrected = False
                     depen_fixed = False
@@ -16206,7 +16216,16 @@ class HardcoreSurvivalState(State):
             # Final safety: never return a penetrated position (prevents "贴墙卡住").
             final = rect_at(float(p.x), float(p.y))
             if self._collide_rect_world(final):
-                final = depenetrate(final)
+                # Prefer resolving along the orthogonal axis when sliding,
+                # otherwise the depenetration can cancel movement in one direction.
+                if abs(float(vel.y)) < 1e-6 and abs(float(vel.x)) > 1e-6:
+                    fixed = depenetrate_axis(final, axis="y")
+                    final = fixed if not self._collide_rect_world(fixed) else depenetrate(final)
+                elif abs(float(vel.x)) < 1e-6 and abs(float(vel.y)) > 1e-6:
+                    fixed = depenetrate_axis(final, axis="x")
+                    final = fixed if not self._collide_rect_world(fixed) else depenetrate(final)
+                else:
+                    final = depenetrate(final)
                 p.update(float(final.centerx), float(final.centery))
 
         return p
