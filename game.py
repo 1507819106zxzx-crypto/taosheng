@@ -16073,6 +16073,15 @@ class HardcoreSurvivalState(State):
                                     break
                             if corrected:
                                 break
+                    if not corrected:
+                        # If this collision can be fixed by a tiny vertical push (common when
+                        # sliding along the top/bottom walls), prefer that so horizontal motion
+                        # doesn't get cancelled at 1px corner overlaps.
+                        rect2 = depenetrate_axis(rect, axis="y")
+                        if not self._collide_rect_world(rect2):
+                            rect = rect2
+                            corrected = True
+                            depen_fixed = True
                     if corrected:
                         # Accept the corrected position and skip the blocking clamp for X.
                         p.x = float(rect.centerx)
@@ -16083,22 +16092,30 @@ class HardcoreSurvivalState(State):
                             if blocks:
                                 rect.right = int(min(blocks))
                             else:
-                                rect = depenetrate(rect)
+                                rect2 = depenetrate_axis(rect, axis="x")
+                                if rect2.topleft != rect.topleft:
+                                    rect = rect2
+                                else:
+                                    rect = depenetrate(rect)
                                 depen_fixed = True
                         else:
                             blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
                             if blocks:
                                 rect.left = int(max(blocks))
                             else:
-                                rect = depenetrate(rect)
+                                rect2 = depenetrate_axis(rect, axis="x")
+                                if rect2.topleft != rect.topleft:
+                                    rect = rect2
+                                else:
+                                    rect = depenetrate(rect)
                                 depen_fixed = True
-                        if abs(float(vel.y)) < 1e-6 and self._collide_rect_world(rect):
+                        if self._collide_rect_world(rect):
                             rect2 = depenetrate_axis(rect, axis="y")
                             if rect2.topleft != rect.topleft:
                                 rect = rect2
                                 depen_fixed = True
-                        # Important: do NOT depenetrate in Y here; otherwise you can
-                        # get stuck when sliding along a wall while holding diagonal.
+                        # Keep wall sliding stable: avoid large cross-axis corrections here.
+                        # We only apply tiny axis depenetration when we're still overlapping.
                         p.x = float(rect.centerx)
                         if depen_fixed:
                             p.y = float(rect.centery)
@@ -16143,21 +16160,40 @@ class HardcoreSurvivalState(State):
                         p.x = float(rect.centerx)
                         p.y = float(rect.centery)
                         continue
+                    if not corrected:
+                        # Mirror of the horizontal case: if we can clear the collision by
+                        # nudging in X, do so to avoid 1px corner lockups.
+                        rect2 = depenetrate_axis(rect, axis="x")
+                        if not self._collide_rect_world(rect2):
+                            rect = rect2
+                            corrected = True
+                            depen_fixed = True
+                            p.x = float(rect.centerx)
+                            p.y = float(rect.centery)
+                            continue
                     if dy > 0.0:
                         blocks = [int(r.top) for r in hits if int(prev.bottom) <= int(r.top)]
                         if blocks:
                             rect.bottom = int(min(blocks))
                         else:
-                            rect = depenetrate(rect)
+                            rect2 = depenetrate_axis(rect, axis="y")
+                            if rect2.topleft != rect.topleft:
+                                rect = rect2
+                            else:
+                                rect = depenetrate(rect)
                             depen_fixed = True
                     else:
                         blocks = [int(r.bottom) for r in hits if int(prev.top) >= int(r.bottom)]
                         if blocks:
                             rect.top = int(max(blocks))
                         else:
-                            rect = depenetrate(rect)
+                            rect2 = depenetrate_axis(rect, axis="y")
+                            if rect2.topleft != rect.topleft:
+                                rect = rect2
+                            else:
+                                rect = depenetrate(rect)
                             depen_fixed = True
-                    if abs(float(vel.x)) < 1e-6 and self._collide_rect_world(rect):
+                    if self._collide_rect_world(rect):
                         rect2 = depenetrate_axis(rect, axis="x")
                         if rect2.topleft != rect.topleft:
                             rect = rect2
