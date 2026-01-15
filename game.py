@@ -11220,23 +11220,11 @@ class HardcoreSurvivalState(State):
         return ch not in (".", "D", "E", "A", "H", "B")
 
     def _hr_int_move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
+        # Match the collision/slide behavior of other interior scenes (house/school/RV).
         tile = int(self._HR_INT_TILE_SIZE)
-        w = int(w)
-        h = int(h)
-        p = pygame.Vector2(pos)
-        dt = float(dt)
-        if dt > 0.25:
-            dt = 0.25
-        dx_total = float(vel.x) * dt
-        dy_total = float(vel.y) * dt
-
-        def rect_at(px: float, py: float) -> pygame.Rect:
-            return pygame.Rect(
-                iround(float(px) - float(w) / 2.0),
-                iround(float(py) - float(h) / 2.0),
-                int(w),
-                int(h),
-            )
+        rect = pygame.Rect(int(round(pos.x - w / 2)), int(round(pos.y - h / 2)), int(w), int(h))
+        dx = float(vel.x * dt)
+        dy = float(vel.y * dt)
 
         def collide(r: pygame.Rect) -> list[pygame.Rect]:
             left = int(math.floor(r.left / tile))
@@ -11254,158 +11242,21 @@ class HardcoreSurvivalState(State):
                         hits.append(tr)
             return hits
 
-        def depenetrate(r: pygame.Rect) -> pygame.Rect:
-            r = pygame.Rect(r)
-            for _ in range(10):
-                hits = collide(r)
-                if not hits:
-                    break
-                best: tuple[int, int, int] | None = None
-                for hit in hits:
-                    if not r.colliderect(hit):
-                        continue
-                    dx_l = int(hit.left - r.right)
-                    dx_r = int(hit.right - r.left)
-                    dy_u = int(hit.top - r.bottom)
-                    dy_d = int(hit.bottom - r.top)
-                    for absd, ox, oy in (
-                        (abs(dx_l), dx_l, 0),
-                        (abs(dx_r), dx_r, 0),
-                        (abs(dy_u), 0, dy_u),
-                        (abs(dy_d), 0, dy_d),
-                    ):
-                        if absd <= 0:
-                            continue
-                        if best is None or absd < best[0]:
-                            best = (int(absd), int(ox), int(oy))
-                if best is None:
-                    break
-                _absd, ox, oy = best
-                r.move_ip(int(ox), int(oy))
-            return r
+        if dx != 0.0:
+            rect.x += int(round(dx))
+            for hit in collide(rect):
+                if dx > 0:
+                    rect.right = hit.left
+                else:
+                    rect.left = hit.right
 
-        # Safety: if we ever start inside a wall (rounding edge-case), push out gently.
-        cur = rect_at(float(p.x), float(p.y))
-        if collide(cur):
-            cur = depenetrate(cur)
-            p.update(float(cur.centerx), float(cur.centery))
-        start_p = pygame.Vector2(p)
-
-        # Move in small sub-steps to avoid tunneling across 1-tile gaps on hitches.
-        # Use pixel-ish steps in interiors to prevent any corner jitter/teleport.
-        max_step = 1.0
-        steps = int(max(1, math.ceil(max(abs(dx_total), abs(dy_total)) / max_step)))
-        dx = float(dx_total) / float(steps)
-        dy = float(dy_total) / float(steps)
-        nudge_max = int(clamp(int(tile) // 2, 1, 4))
-        for _ in range(int(steps)):
-            if dx != 0.0:
-                prev = rect_at(float(p.x), float(p.y))
-                p.x += float(dx)
-                rect = rect_at(float(p.x), float(p.y))
-                hits = collide(rect)
-                if hits:
-                    corrected = False
-                    if abs(float(vel.y)) < 1e-6:
-                        prefer = 0
-                        try:
-                            avg = sum(int(hh.centery) for hh in hits) / float(max(1, len(hits)))
-                            if float(avg) < float(rect.centery):
-                                prefer = 1  # obstacles above -> move down first
-                            elif float(avg) > float(rect.centery):
-                                prefer = -1  # obstacles below -> move up first
-                        except Exception:
-                            prefer = 0
-
-                        base = pygame.Rect(rect)
-                        for n in range(1, int(nudge_max) + 1):
-                            if prefer > 0:
-                                cands = (n, -n)
-                            elif prefer < 0:
-                                cands = (-n, n)
-                            else:
-                                cands = (-n, n)
-                            for sy in cands:
-                                test = pygame.Rect(base)
-                                test.y += int(sy)
-                                if not collide(test):
-                                    rect = test
-                                    corrected = True
-                                    break
-                            if corrected:
-                                break
-                    if corrected:
-                        p.x = float(rect.centerx)
-                        p.y = float(rect.centery)
-                    else:
-                        if dx > 0.0:
-                            blocks = [int(r.left) for r in hits if int(prev.right) <= int(r.left)]
-                            if blocks:
-                                rect.right = int(min(blocks))
-                            else:
-                                rect = pygame.Rect(prev)
-                        else:
-                            blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
-                            if blocks:
-                                rect.left = int(max(blocks))
-                            else:
-                                rect = pygame.Rect(prev)
-                        # Only clamp along X so sliding along walls stays smooth.
-                        p.x = float(rect.centerx)
-
-            if dy != 0.0:
-                prev = rect_at(float(p.x), float(p.y))
-                p.y += float(dy)
-                rect = rect_at(float(p.x), float(p.y))
-                hits = collide(rect)
-                if hits:
-                    corrected = False
-                    if abs(float(vel.x)) < 1e-6:
-                        prefer = 0
-                        try:
-                            avg = sum(int(hh.centerx) for hh in hits) / float(max(1, len(hits)))
-                            if float(avg) < float(rect.centerx):
-                                prefer = 1  # obstacles left -> move right first
-                            elif float(avg) > float(rect.centerx):
-                                prefer = -1  # obstacles right -> move left first
-                        except Exception:
-                            prefer = 0
-
-                        base = pygame.Rect(rect)
-                        for n in range(1, int(nudge_max) + 1):
-                            if prefer > 0:
-                                cands = (n, -n)
-                            elif prefer < 0:
-                                cands = (-n, n)
-                            else:
-                                cands = (-n, n)
-                            for sx in cands:
-                                test = pygame.Rect(base)
-                                test.x += int(sx)
-                                if not collide(test):
-                                    rect = test
-                                    corrected = True
-                                    break
-                            if corrected:
-                                break
-                    if corrected:
-                        p.x = float(rect.centerx)
-                        p.y = float(rect.centery)
-                        continue
-                    if dy > 0.0:
-                        blocks = [int(r.top) for r in hits if int(prev.bottom) <= int(r.top)]
-                        if blocks:
-                            rect.bottom = int(min(blocks))
-                        else:
-                            rect = pygame.Rect(prev)
-                    else:
-                        blocks = [int(r.bottom) for r in hits if int(prev.top) >= int(r.bottom)]
-                        if blocks:
-                            rect.top = int(max(blocks))
-                        else:
-                            rect = pygame.Rect(prev)
-                    # Only clamp along Y so sliding along walls stays smooth.
-                    p.y = float(rect.centery)
+        if dy != 0.0:
+            rect.y += int(round(dy))
+            for hit in collide(rect):
+                if dy > 0:
+                    rect.bottom = hit.top
+                else:
+                    rect.top = hit.bottom
 
         pad = 3
         half_w = float(w) / 2.0
@@ -11414,25 +11265,10 @@ class HardcoreSurvivalState(State):
         min_y = tile + half_h + pad
         max_x = int(self._HR_INT_W) * tile - tile - half_w - pad
         max_y = int(self._HR_INT_H) * tile - tile - half_h - pad
-        rect = rect_at(float(p.x), float(p.y))
         rect.centerx = int(clamp(rect.centerx, min_x, max_x))
         rect.centery = int(clamp(rect.centery, min_y, max_y))
-        out = pygame.Vector2(rect.centerx, rect.centery)
 
-        # Hard guard: never allow multi-tile jumps from movement (reported as "闪现").
-        # If something goes wrong, keep position stable instead of teleporting.
-        max_ok = max(float(vel.length()) * float(dt) + 2.0, float(tile) * 0.95)
-        if float((out - start_p).length_squared()) > float(max_ok * max_ok):
-            try:
-                with open("__hr_int_teleport.log", "a", encoding="utf-8") as f:
-                    f.write(
-                        f"tp_guard start=({start_p.x:.2f},{start_p.y:.2f}) out=({out.x:.2f},{out.y:.2f}) "
-                        f"vel=({float(vel.x):.2f},{float(vel.y):.2f}) dt={float(dt):.4f}\\n"
-                    )
-            except Exception:
-                pass
-            return pygame.Vector2(int(round(float(start_p.x))), int(round(float(start_p.y))))
-        return out
+        return pygame.Vector2(rect.centerx, rect.centery)
 
     def _hr_int_player_tile(self) -> tuple[int, int]:
         tile = int(self._HR_INT_TILE_SIZE)
