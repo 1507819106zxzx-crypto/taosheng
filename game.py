@@ -7299,75 +7299,9 @@ class HardcoreSurvivalState(State):
                         dx = int(clamp(int((ux0 + ux1) // 2), int(ux0 + 1), int(ux1 - 1)))
                         tiles[idx(int(dx), int(sep_y))] = int(self.state.T_DOOR)
                         apt_doors.append((int(dx), int(sep_y)))
-                        for dy in (-1, 0, 1):
-                            for dx2 in (-1, 0, 1):
-                                reserved.add((int(dx + dx2), int(sep_y + dy)))
-
-                    def place_if_floor(tx: int, ty: int, tile_id: int) -> None:
-                        tx = int(tx)
-                        ty = int(ty)
-                        if not (int(in_left) <= int(tx) <= int(in_right) and int(in_top) <= int(ty) <= int(in_bottom)):
-                            return
-                        if (int(tx), int(ty)) in reserved:
-                            return
-                        if int(tiles[idx(int(tx), int(ty))]) != int(self.state.T_FLOOR):
-                            return
-                        tiles[idx(int(tx), int(ty))] = int(tile_id)
-
-                    # Furnish each unit with a small 2-room split when possible.
-                    uy0 = int(in_top)
-                    uy1 = int(sep_y - 1)
-                    for ux0, ux1 in unit_ranges:
-                        uw = int(ux1 - ux0 + 1)
-                        uh = int(uy1 - uy0 + 1)
-                        if uw <= 0 or uh <= 0:
-                            continue
-
-                        if int(uw) >= 6 and int(uh) >= 6:
-                            split_y = int(uy0 + (uh // 2))
-                            split_y = int(clamp(int(split_y), int(uy0 + 2), int(uy1 - 2)))
-                            inner_door_x = int(clamp(int((ux0 + ux1) // 2), int(ux0 + 1), int(ux1 - 1)))
-                            for xx in range(int(ux0), int(ux1) + 1):
-                                if int(xx) == int(inner_door_x):
-                                    if (int(xx), int(split_y)) not in reserved and int(tiles[idx(int(xx), int(split_y))]) != int(self.state.T_ELEVATOR):
-                                        tiles[idx(int(xx), int(split_y))] = int(self.state.T_DOOR)
-                                else:
-                                    if int(tiles[idx(int(xx), int(split_y))]) != int(self.state.T_ELEVATOR):
-                                        tiles[idx(int(xx), int(split_y))] = int(self.state.T_WALL)
-                            bed_y = int(clamp(int(uy0 + 1), int(uy0), int(split_y - 2)))
-                        else:
-                            split_y = None
-                            bed_y = int(clamp(int(uy0 + 1), int(uy0), int(uy1 - 1)))
-
-                        bed_x = int(clamp(int(ux0 + 1), int(ux0), int(ux1 - 2)))
-                        if (
-                            int(ux1 - ux0 + 1) >= 2
-                            and int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
-                            and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
-                            and (int(bed_x), int(bed_y)) not in reserved
-                            and (int(bed_x + 1), int(bed_y)) not in reserved
-                        ):
-                            tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
-                            tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
-
-                        # Shelf in the bedroom area, table + shelf in living area.
-                        shelf_y = int(clamp(int(bed_y + 2), int(uy0 + 1), int(uy1 - 1)))
-                        place_if_floor(int(ux1 - 1), int(shelf_y), int(self.state.T_SHELF))
-
-                        if split_y is not None:
-                            table_y = int(clamp(int(split_y + 2), int(split_y + 1), int(uy1 - 1)))
-                        else:
-                            table_y = int(clamp(int((uy0 + uy1) // 2), int(uy0 + 1), int(uy1 - 1)))
-                        place_if_floor(int(ux0 + 2), int(table_y), int(self.state.T_TABLE))
-                        place_if_floor(int(ux1 - 1), int(table_y), int(self.state.T_SHELF))
-
-                    # Ensure the elevator lobby stays empty (floor only).
-                    for xx, yy in tuple(reserved):
-                        if not (int(in_left) <= int(xx) <= int(in_right) and int(in_top) <= int(yy) <= int(in_bottom)):
-                            continue
-                        tid = int(tiles[idx(int(xx), int(yy))])
-                        if tid in (int(self.state.T_TABLE), int(self.state.T_SHELF), int(self.state.T_BED)):
-                            tiles[idx(int(xx), int(yy))] = int(self.state.T_FLOOR)
+                    for dy in (-1, 0, 1):
+                        for dx2 in (-1, 0, 1):
+                            reserved.add((int(dx + dx2), int(sep_y + dy)))
             except Exception:
                 pass
 
@@ -9185,71 +9119,6 @@ class HardcoreSurvivalState(State):
                                 for ddy in (-1, 0, 1):
                                     for ddx in (-1, 0, 1):
                                         reserved.add((int(dx + ddx), int(sep_y + ddy)))
-
-                            def place_if_floor(tx: int, ty: int, tile_id: int) -> None:
-                                tx = int(tx)
-                                ty = int(ty)
-                                if not (int(in_left) <= int(tx) <= int(in_right) and int(in_top) <= int(ty) <= int(in_bottom)):
-                                    return
-                                if near_door(int(tx), int(ty)):
-                                    return
-                                if (int(tx), int(ty)) in corridor:
-                                    return
-                                if (int(tx), int(ty)) in reserved:
-                                    return
-                                if int(tiles[idx(int(tx), int(ty))]) != int(self.state.T_FLOOR):
-                                    return
-                                tiles[idx(int(tx), int(ty))] = int(tile_id)
-
-                            # Furnish each unit with a small 2-room split when possible.
-                            uy0 = int(in_top)
-                            uy1 = int(sep_y - 1)
-                            for ux0, ux1 in unit_ranges:
-                                uw = int(ux1 - ux0 + 1)
-                                uh = int(uy1 - uy0 + 1)
-                                if uw <= 0 or uh <= 0:
-                                    continue
-
-                                if int(uw) >= 6 and int(uh) >= 6:
-                                    split_y = int(uy0 + (uh // 2))
-                                    split_y = int(clamp(int(split_y), int(uy0 + 2), int(uy1 - 2)))
-                                    inner_door_x = int(clamp(int((ux0 + ux1) // 2), int(ux0 + 1), int(ux1 - 1)))
-                                    for xx in range(int(ux0), int(ux1) + 1):
-                                        if int(xx) == int(inner_door_x):
-                                            if (int(xx), int(split_y)) not in reserved:
-                                                tiles[idx(int(xx), int(split_y))] = int(self.state.T_DOOR)
-                                        else:
-                                            if (int(xx), int(split_y)) not in reserved:
-                                                tiles[idx(int(xx), int(split_y))] = int(self.state.T_WALL)
-                                    bed_y = int(clamp(int(uy0 + 1), int(uy0), int(split_y - 2)))
-                                    table_y = int(clamp(int(split_y + 2), int(split_y + 1), int(uy1 - 1)))
-                                else:
-                                    bed_y = int(clamp(int(uy0 + 1), int(uy0), int(uy1 - 1)))
-                                    table_y = int(clamp(int((uy0 + uy1) // 2), int(uy0 + 1), int(uy1 - 1)))
-
-                                bed_x = int(clamp(int(ux0 + 1), int(ux0), int(ux1 - 2)))
-                                if (
-                                    int(ux1 - ux0 + 1) >= 2
-                                    and int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
-                                    and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
-                                    and (int(bed_x), int(bed_y)) not in reserved
-                                    and (int(bed_x + 1), int(bed_y)) not in reserved
-                                ):
-                                    tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
-                                    tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
-
-                                shelf_y = int(clamp(int(bed_y + 2), int(uy0 + 1), int(uy1 - 1)))
-                                place_if_floor(int(ux1 - 1), int(shelf_y), int(self.state.T_SHELF))
-                                place_if_floor(int(ux0 + 2), int(table_y), int(self.state.T_TABLE))
-                                place_if_floor(int(ux1 - 1), int(table_y), int(self.state.T_SHELF))
-
-                            # Ensure the lobby area stays empty (floor only).
-                            for xx, yy in tuple(reserved):
-                                if not (int(in_left) <= int(xx) <= int(in_right) and int(in_top) <= int(yy) <= int(in_bottom)):
-                                    continue
-                                tid = int(tiles[idx(int(xx), int(yy))])
-                                if tid in (int(self.state.T_TABLE), int(self.state.T_SHELF), int(self.state.T_BED)):
-                                    tiles[idx(int(xx), int(yy))] = int(self.state.T_FLOOR)
 
                     except Exception:
                         pass
@@ -18844,6 +18713,41 @@ class HardcoreSurvivalState(State):
                         tile_id = outside
                 except Exception:
                     pass
+
+            # Cutaway-roof buildings: don't reveal interiors unless the player is inside that building.
+            if tile_id in (
+                int(self.T_FLOOR),
+                int(self.T_DOOR),
+                int(self.T_ELEVATOR),
+                int(self.T_STAIRS_UP),
+                int(self.T_STAIRS_DOWN),
+                int(self.T_TABLE),
+                int(self.T_SHELF),
+                int(self.T_BED),
+            ):
+                inside_key = getattr(self, "_inside_building_key", None)
+                try:
+                    chunk = self.world.peek_chunk(int(tx) // int(self.CHUNK_SIZE), int(ty) // int(self.CHUNK_SIZE))
+                    if chunk is not None:
+                        for b in getattr(chunk, "buildings", []):
+                            btx0, bty0, bw, bh = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                            if not (
+                                int(btx0) <= int(tx) < int(btx0) + int(bw)
+                                and int(bty0) <= int(ty) < int(bty0) + int(bh)
+                            ):
+                                continue
+                            if inside_key is not None and (int(btx0), int(bty0), int(bw), int(bh)) == tuple(inside_key):
+                                break
+                            if int(tx) in (int(btx0), int(btx0) + int(bw) - 1) or int(ty) in (int(bty0), int(bty0) + int(bh) - 1):
+                                break
+                            roof_kind = int(b[4]) if len(b) > 4 else 0
+                            style, _var = self._building_roof_style_var(int(roof_kind))
+                            floors = int(b[5]) if len(b) > 5 else 0
+                            if int(style) == 6 or (int(style) == 1 and int(floors) > 1):
+                                tile_id = int(self.T_WALL)
+                            break
+                except Exception:
+                    pass
         col = self._tile_color(tile_id)
         surface.fill(col, rect)
 
@@ -20859,27 +20763,7 @@ class HardcoreSurvivalState(State):
         start_ty: int,
         end_ty: int,
     ) -> None:
-        ptx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
-        pty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
-        p_tile = self.world.peek_tile(ptx, pty)
-        can_be_inside = p_tile in (self.T_FLOOR, self.T_DOOR, self.T_ELEVATOR, self.T_STAIRS_UP, self.T_STAIRS_DOWN)
-        inside_key: tuple[int, int, int, int] | None = None
-        if can_be_inside:
-            try:
-                pchunk = self.world.peek_chunk(int(ptx) // int(self.CHUNK_SIZE), int(pty) // int(self.CHUNK_SIZE))
-                if pchunk is None:
-                    pchunk = self.world.get_chunk(int(ptx) // int(self.CHUNK_SIZE), int(pty) // int(self.CHUNK_SIZE))
-                best_area = None
-                for b in getattr(pchunk, "buildings", []):
-                    tx0, ty0, w, h = int(b[0]), int(b[1]), int(b[2]), int(b[3])
-                    if not (int(tx0) <= int(ptx) < int(tx0) + int(w) and int(ty0) <= int(pty) < int(ty0) + int(h)):
-                        continue
-                    area = int(w) * int(h)
-                    if best_area is None or int(area) < int(best_area):
-                        best_area = int(area)
-                        inside_key = (int(tx0), int(ty0), int(w), int(h))
-            except Exception:
-                inside_key = None
+        inside_key: tuple[int, int, int, int] | None = getattr(self, "_inside_building_key", None)
 
         start_cx = start_tx // self.CHUNK_SIZE
         end_cx = end_tx // self.CHUNK_SIZE
@@ -21521,6 +21405,7 @@ class HardcoreSurvivalState(State):
         self._inside_highrise_draw_mask = None
         self._inside_highrise_floor_overlay = None
         self._inside_highrise_facade_slice = None
+        self._inside_building_key = None
         try:
             ptx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
             pty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
@@ -21534,7 +21419,22 @@ class HardcoreSurvivalState(State):
             )
             if can_be_inside:
                 pchunk = self.world.peek_chunk(int(ptx) // int(self.CHUNK_SIZE), int(pty) // int(self.CHUNK_SIZE))
+                if pchunk is None:
+                    pchunk = self.world.get_chunk(int(ptx) // int(self.CHUNK_SIZE), int(pty) // int(self.CHUNK_SIZE))
                 if pchunk is not None:
+                    # Cache the building footprint the player is inside of (if any).
+                    best_area = None
+                    inside_key = None
+                    for b in getattr(pchunk, "buildings", []):
+                        tx0, ty0, w, h = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                        if not (int(tx0) <= int(ptx) < int(tx0) + int(w) and int(ty0) <= int(pty) < int(ty0) + int(h)):
+                            continue
+                        area = int(w) * int(h)
+                        if best_area is None or int(area) < int(best_area):
+                            best_area = int(area)
+                            inside_key = (int(tx0), int(ty0), int(w), int(h))
+                    self._inside_building_key = inside_key
+
                     for b in getattr(pchunk, "buildings", []):
                         tx0, ty0, w, h = int(b[0]), int(b[1]), int(b[2]), int(b[3])
                         if not (int(tx0) <= int(ptx) < int(tx0) + int(w) and int(ty0) <= int(pty) < int(ty0) + int(h)):
@@ -21609,6 +21509,7 @@ class HardcoreSurvivalState(State):
             self._inside_highrise_draw_mask = None
             self._inside_highrise_floor_overlay = None
             self._inside_highrise_facade_slice = None
+            self._inside_building_key = None
 
         # High-rise upper floors: shift the camera up slightly so the elevated
         # interior/player doesn't leave the screen on very high floors.
