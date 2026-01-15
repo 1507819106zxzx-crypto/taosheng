@@ -17330,6 +17330,25 @@ class HardcoreSurvivalState(State):
                 w=self.player.w,
                 h=int(getattr(self.player, "collider_h", self.player.h)),
             )
+            # Anti-jitter: if we started from a non-penetrating position, never let
+            # collision resolution move the player *opposite* their intended axis
+            # direction (this can look like camera shake when pushing on walls).
+            try:
+                if not self._collide_rect_world(self.player.rect_at(prev_pos)):
+                    dx = float(new_pos.x) - float(prev_pos.x)
+                    dy = float(new_pos.y) - float(prev_pos.y)
+                    vx = float(getattr(self.player.vel, "x", 0.0))
+                    vy = float(getattr(self.player.vel, "y", 0.0))
+                    if vx > 1e-6 and dx < -1e-6:
+                        new_pos.x = float(prev_pos.x)
+                    elif vx < -1e-6 and dx > 1e-6:
+                        new_pos.x = float(prev_pos.x)
+                    if vy > 1e-6 and dy < -1e-6:
+                        new_pos.y = float(prev_pos.y)
+                    elif vy < -1e-6 and dy > 1e-6:
+                        new_pos.y = float(prev_pos.y)
+            except Exception:
+                pass
             # Safety net: if collision resolution ever produces a multi-tile jump,
             # keep the old position (prevents visible "闪现").
             max_ok = max(float(self.player.vel.length()) * float(dt) + 2.0, float(self.TILE_SIZE) * 0.95)
@@ -20445,22 +20464,44 @@ class HardcoreSurvivalState(State):
             hi = self._tint(col, add=(24, 24, 26))
             lo = self._tint(col, add=(-28, -28, -30))
 
+            # Furniture tiles should read as objects sitting on top of the floor,
+            # not as full-tile colored blocks.
+            if tile_id not in (self.T_DOOR, self.T_DOOR_HOME, self.T_DOOR_LOCKED, self.T_DOOR_HOME_LOCKED):
+                try:
+                    floor_col = self._tile_color(int(self.T_FLOOR))
+                    floor2 = self._tint(floor_col, add=(-6, -6, -8))
+                    surface.fill(floor_col, rect)
+                    if ((int(tx) + int(ty) + (int(h) & 3)) % 2) == 0:
+                        surface.fill(floor2, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, 1))
+                except Exception:
+                    pass
+
             if tile_id in (self.T_DOOR, self.T_DOOR_LOCKED):
-                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
-                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 2, rect.w - 4, 1))
-                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
-                surface.fill((30, 30, 34), pygame.Rect(rect.right - 3, rect.centery, 1, 1))
+                inner = pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2)
+                pygame.draw.rect(surface, outline, inner, 1)
+                panel = inner.inflate(-2, -2)
+                if panel.w > 0 and panel.h > 0:
+                    surface.fill(col, panel)
+                    surface.fill(hi, pygame.Rect(panel.x, panel.y, panel.w, 1))
+                    surface.fill(lo, pygame.Rect(panel.x, panel.bottom - 1, panel.w, 1))
+                    surface.fill(lo, pygame.Rect(panel.centerx, panel.y + 1, 1, max(1, panel.h - 2)))
+                surface.fill((30, 30, 34), pygame.Rect(inner.right - 2, inner.centery, 1, 1))
                 if tile_id == self.T_DOOR_LOCKED:
-                    lock = pygame.Rect(rect.centerx - 1, rect.centery - 1, 3, 3)
+                    lock = pygame.Rect(inner.centerx - 1, inner.centery - 1, 3, 3)
                     surface.fill((255, 220, 140), lock)
                     pygame.draw.rect(surface, outline, lock, 1)
             elif tile_id in (self.T_DOOR_HOME, self.T_DOOR_HOME_LOCKED):
-                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
-                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 2, rect.w - 4, 1))
-                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
-                surface.fill((30, 30, 34), pygame.Rect(rect.right - 3, rect.centery, 1, 1))
+                inner = pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2)
+                pygame.draw.rect(surface, outline, inner, 1)
+                panel = inner.inflate(-2, -2)
+                if panel.w > 0 and panel.h > 0:
+                    surface.fill(col, panel)
+                    surface.fill(hi, pygame.Rect(panel.x, panel.y, panel.w, 1))
+                    surface.fill(lo, pygame.Rect(panel.x, panel.bottom - 1, panel.w, 1))
+                    surface.fill(lo, pygame.Rect(panel.centerx, panel.y + 1, 1, max(1, panel.h - 2)))
+                surface.fill((30, 30, 34), pygame.Rect(inner.right - 2, inner.centery, 1, 1))
                 if tile_id == self.T_DOOR_HOME_LOCKED:
-                    lock = pygame.Rect(rect.centerx - 1, rect.centery - 1, 3, 3)
+                    lock = pygame.Rect(inner.centerx - 1, inner.centery - 1, 3, 3)
                     surface.fill((255, 220, 140), lock)
                     pygame.draw.rect(surface, outline, lock, 1)
             elif tile_id == self.T_PC:
@@ -20476,16 +20517,18 @@ class HardcoreSurvivalState(State):
                     part = "mid"
 
                 # Desk body (top + front face).
-                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 3, rect.w - 2, rect.h - 4), 1)
-                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 4, rect.w - 4, 1))
-                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
-                # Legs hint.
-                surface.fill(outline, pygame.Rect(rect.x + 2, rect.bottom - 4, 1, 2))
-                surface.fill(outline, pygame.Rect(rect.right - 3, rect.bottom - 4, 1, 2))
+                body = pygame.Rect(rect.x + 1, rect.y + 4, rect.w - 2, rect.h - 5)
+                pygame.draw.rect(surface, outline, body, 1)
+                surface.fill(hi, pygame.Rect(body.x + 1, body.y + 1, body.w - 2, 1))
+                surface.fill(lo, pygame.Rect(body.x + 1, body.bottom - 2, body.w - 2, 1))
+                # Legs.
+                leg_y0 = int(body.bottom - 3)
+                surface.fill(outline, pygame.Rect(body.x + 1, leg_y0, 1, 2))
+                surface.fill(outline, pygame.Rect(body.right - 2, leg_y0, 1, 2))
 
                 # Monitor (left side).
                 if part in ("left", "single", "mid"):
-                    mon = pygame.Rect(rect.x + 2, rect.y + 1, 5, 4)
+                    mon = pygame.Rect(rect.x + 2, rect.y + 2, 5, 4)
                     pygame.draw.rect(surface, (34, 34, 42), mon, border_radius=1)
                     pygame.draw.rect(surface, outline, mon, 1, border_radius=1)
                     scr = mon.inflate(-2, -2)
@@ -20496,64 +20539,101 @@ class HardcoreSurvivalState(State):
 
                 # Keyboard + tower (right side).
                 if part in ("right", "single", "mid"):
-                    kb = pygame.Rect(rect.x + 2, rect.y + 6, rect.w - 4, 2)
+                    kb = pygame.Rect(rect.x + 2, rect.y + 7, rect.w - 4, 2)
                     pygame.draw.rect(surface, (36, 36, 44), kb, border_radius=1)
                     pygame.draw.rect(surface, outline, kb, 1, border_radius=1)
                     if part in ("right", "single"):
-                        tower = pygame.Rect(rect.right - 4, rect.y + 1, 3, 6)
+                        tower = pygame.Rect(rect.right - 4, rect.y + 2, 3, 6)
                         pygame.draw.rect(surface, (26, 26, 32), tower, border_radius=1)
                         pygame.draw.rect(surface, outline, tower, 1, border_radius=1)
                         surface.fill((120, 200, 140), pygame.Rect(tower.x + 1, tower.y + 2, 1, 1))
             elif tile_id == self.T_FRIDGE:
-                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
-                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 2, rect.w - 4, 1))
-                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
-                surface.fill(outline, pygame.Rect(rect.x + 2, rect.y + 4, rect.w - 4, 1))
-                surface.fill(outline, pygame.Rect(rect.right - 3, rect.y + 3, 1, rect.h - 6))
+                box = pygame.Rect(rect.x + 2, rect.y + 1, rect.w - 4, rect.h - 2)
+                pygame.draw.rect(surface, col, box, border_radius=2)
+                pygame.draw.rect(surface, outline, box, 1, border_radius=2)
+                surface.fill(hi, pygame.Rect(box.x + 1, box.y + 1, box.w - 2, 1))
+                surface.fill(lo, pygame.Rect(box.x + 1, box.bottom - 2, box.w - 2, 1))
+                split_y = int(box.y + max(2, box.h // 3))
+                surface.fill(outline, pygame.Rect(box.x + 1, split_y, box.w - 2, 1))
+                # Handle.
+                surface.fill((210, 210, 220), pygame.Rect(box.right - 2, box.y + 2, 1, max(2, box.h - 5)))
             elif tile_id == self.T_TV:
-                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, rect.h - 3), 1)
-                surface.fill((12, 12, 16), pygame.Rect(rect.x + 2, rect.y + 3, rect.w - 4, rect.h - 5))
-                surface.fill((60, 110, 140), pygame.Rect(rect.x + 3, rect.y + 4, 2, 1))
-                surface.fill(outline, pygame.Rect(rect.centerx - 1, rect.bottom - 2, 2, 1))
+                frame_r = pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, rect.h - 4)
+                pygame.draw.rect(surface, (34, 34, 40), frame_r, border_radius=2)
+                pygame.draw.rect(surface, outline, frame_r, 1, border_radius=2)
+                screen = frame_r.inflate(-2, -3)
+                surface.fill((14, 14, 18), screen)
+                surface.fill((60, 110, 140), pygame.Rect(screen.x + 1, screen.y + 1, 2, 1))
+                stand = pygame.Rect(rect.centerx - 1, rect.bottom - 2, 2, 1)
+                surface.fill(outline, stand)
             elif tile_id == self.T_SOFA:
-                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, rect.h - 3), 1)
-                surface.fill(lo, pygame.Rect(rect.x + 2, rect.y + 3, rect.w - 4, 2))
-                surface.fill(hi, pygame.Rect(rect.x + 2, rect.bottom - 4, rect.w - 4, 1))
-                # Seam when this tile is part of a multi-tile sofa.
-                if int(self.world.peek_tile(int(tx - 1), int(ty))) == int(self.T_SOFA) and int(self.world.peek_tile(int(tx + 1), int(ty))) != int(self.T_SOFA):
-                    surface.fill(outline, pygame.Rect(rect.x + 1, rect.y + 2, 1, rect.h - 3))
-                if int(self.world.peek_tile(int(tx + 1), int(ty))) == int(self.T_SOFA) and int(self.world.peek_tile(int(tx - 1), int(ty))) != int(self.T_SOFA):
-                    surface.fill(outline, pygame.Rect(rect.right - 2, rect.y + 2, 1, rect.h - 3))
-                if int(self.world.peek_tile(int(tx - 1), int(ty))) == int(self.T_SOFA) and int(self.world.peek_tile(int(tx + 1), int(ty))) == int(self.T_SOFA):
-                    surface.fill(outline, pygame.Rect(rect.right - 1, rect.y + 2, 1, rect.h - 3))
+                left_sofa = int(self.world.peek_tile(int(tx - 1), int(ty))) == int(self.T_SOFA)
+                right_sofa = int(self.world.peek_tile(int(tx + 1), int(ty))) == int(self.T_SOFA)
+                edge_l = not left_sofa
+                edge_r = not right_sofa
+                inset_l = 2 if edge_l else 0
+                inset_r = 2 if edge_r else 0
+                back_w = int(max(1, int(rect.w) - int(inset_l) - int(inset_r)))
+                back = pygame.Rect(rect.x + int(inset_l), rect.y + 2, int(back_w), 3)
+                seat = pygame.Rect(back.x, rect.y + 5, back.w, 3)
+                pygame.draw.rect(surface, col, back, border_radius=2)
+                pygame.draw.rect(surface, outline, back, 1, border_radius=2)
+                pygame.draw.rect(surface, lo, seat, border_radius=2)
+                pygame.draw.rect(surface, outline, seat, 1, border_radius=2)
+                surface.fill(hi, pygame.Rect(seat.x + 1, seat.y + 1, max(1, seat.w - 2), 1))
+                if edge_l:
+                    surface.fill(outline, pygame.Rect(back.x, back.y + 1, 1, back.h + 4))
+                if edge_r:
+                    surface.fill(outline, pygame.Rect(back.right - 1, back.y + 1, 1, back.h + 4))
             elif tile_id == self.T_BED:
-                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
-                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 2, rect.w - 4, 1))
-                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
+                body = pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, rect.h - 3)
+                pygame.draw.rect(surface, col, body, border_radius=2)
+                pygame.draw.rect(surface, outline, body, 1, border_radius=2)
+                surface.fill(hi, pygame.Rect(body.x + 1, body.y + 1, max(1, body.w - 2), 1))
+                surface.fill(lo, pygame.Rect(body.x + 1, body.bottom - 2, max(1, body.w - 2), 1))
                 left_is_bed = int(self.world.peek_tile(int(tx - 1), int(ty))) == int(self.T_BED)
                 right_is_bed = int(self.world.peek_tile(int(tx + 1), int(ty))) == int(self.T_BED)
                 # Pillow on the head side (prefer the "outer" end of a 2-tile bed).
                 if right_is_bed and not left_is_bed:
-                    surface.fill((230, 230, 236), pygame.Rect(rect.x + 2, rect.y + 3, 3, 2))
+                    surface.fill((230, 230, 236), pygame.Rect(body.x + 1, body.y + 1, 3, 2))
                 elif left_is_bed and not right_is_bed:
-                    surface.fill((230, 230, 236), pygame.Rect(rect.right - 5, rect.y + 3, 3, 2))
+                    surface.fill((230, 230, 236), pygame.Rect(body.right - 4, body.y + 1, 3, 2))
                 else:
-                    surface.fill((230, 230, 236), pygame.Rect(rect.centerx - 1, rect.y + 3, 2, 2))
+                    surface.fill((230, 230, 236), pygame.Rect(body.centerx - 1, body.y + 1, 2, 2))
+                # Legs so the bed doesn't read as a flat block.
+                surface.fill(outline, pygame.Rect(body.x + 1, body.bottom, 1, 1))
+                surface.fill(outline, pygame.Rect(body.right - 2, body.bottom, 1, 1))
             elif tile_id == self.T_TABLE:
-                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, rect.h - 3), 1)
-                surface.fill(hi, pygame.Rect(rect.x + 2, rect.y + 3, rect.w - 4, 1))
-                surface.fill(lo, pygame.Rect(rect.x + 2, rect.bottom - 4, rect.w - 4, 1))
-                surface.fill(outline, pygame.Rect(rect.x + 3, rect.y + 5, 1, rect.h - 7))
-                surface.fill(outline, pygame.Rect(rect.right - 4, rect.y + 5, 1, rect.h - 7))
+                top = pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, 3)
+                pygame.draw.rect(surface, col, top, border_radius=2)
+                pygame.draw.rect(surface, outline, top, 1, border_radius=2)
+                surface.fill(hi, pygame.Rect(top.x + 1, top.y + 1, max(1, top.w - 2), 1))
+                surface.fill(lo, pygame.Rect(top.x + 1, top.bottom - 1, max(1, top.w - 2), 1))
+                leg_y0 = int(top.bottom)
+                leg_h = int(max(2, rect.bottom - 2 - leg_y0))
+                surface.fill(outline, pygame.Rect(rect.x + 2, leg_y0, 1, leg_h))
+                surface.fill(outline, pygame.Rect(rect.right - 3, leg_y0, 1, leg_h))
             elif tile_id == self.T_CHAIR:
-                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 2, rect.y + 3, rect.w - 4, rect.h - 4), 1)
-                surface.fill(hi, pygame.Rect(rect.x + 3, rect.y + 4, rect.w - 6, 1))
-                surface.fill(outline, pygame.Rect(rect.centerx, rect.y + 2, 1, 2))
+                back = pygame.Rect(rect.x + 2, rect.y + 2, rect.w - 4, 2)
+                seat = pygame.Rect(rect.x + 2, rect.y + 5, rect.w - 4, 3)
+                pygame.draw.rect(surface, lo, back, border_radius=2)
+                pygame.draw.rect(surface, outline, back, 1, border_radius=2)
+                pygame.draw.rect(surface, col, seat, border_radius=2)
+                pygame.draw.rect(surface, outline, seat, 1, border_radius=2)
+                surface.fill(hi, pygame.Rect(seat.x + 1, seat.y + 1, max(1, seat.w - 2), 1))
+                surface.fill(outline, pygame.Rect(seat.x + 1, rect.bottom - 2, 1, 1))
+                surface.fill(outline, pygame.Rect(seat.right - 2, rect.bottom - 2, 1, 1))
             else:  # shelf
-                pygame.draw.rect(surface, outline, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2), 1)
-                surface.fill(lo, pygame.Rect(rect.x + 2, rect.y + 3, rect.w - 4, 1))
-                surface.fill(lo, pygame.Rect(rect.x + 2, rect.y + 6, rect.w - 4, 1))
-                surface.fill(hi, pygame.Rect(rect.x + 2, rect.bottom - 3, rect.w - 4, 1))
+                box = pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2)
+                pygame.draw.rect(surface, col, box, border_radius=2)
+                pygame.draw.rect(surface, outline, box, 1, border_radius=2)
+                surface.fill(lo, pygame.Rect(box.x + 1, box.y + 3, max(1, box.w - 2), 1))
+                surface.fill(lo, pygame.Rect(box.x + 1, box.y + 6, max(1, box.w - 2), 1))
+                surface.fill(hi, pygame.Rect(box.x + 1, box.bottom - 2, max(1, box.w - 2), 1))
+                # Books hint.
+                if ((int(tx) + int(ty)) % 3) == 0:
+                    surface.fill((200, 120, 120), pygame.Rect(box.x + 2, box.y + 2, 1, 2))
+                    surface.fill((120, 200, 140), pygame.Rect(box.x + 4, box.y + 2, 1, 2))
 
         # Proximity outline for interactable world tiles (keyboard-friendly).
         try:
