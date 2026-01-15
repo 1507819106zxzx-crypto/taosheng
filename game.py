@@ -9650,6 +9650,8 @@ class HardcoreSurvivalState(State):
         # High-rise rooms (home + break-in apartments) share the same storage UI.
         self.hr_current_room = ""
         self.hr_room_storages: dict[str, tuple[HardcoreSurvivalState._Inventory, HardcoreSurvivalState._Inventory]] = {}
+        self.hr_room_floor_items: dict[str, list[HardcoreSurvivalState._WorldItem]] = {}
+        self.hr_floor_items: list[HardcoreSurvivalState._WorldItem] = []
         self.home_ui_open = False
         self.home_ui_focus: str = "storage"  # player | storage
         self.home_ui_storage_kind: str = "cabinet"  # cabinet | fridge   
@@ -9665,6 +9667,19 @@ class HardcoreSurvivalState(State):
         self.home_storage.add("key_moto", 1, self._ITEMS)
         self.fridge_storage.add("water", 2, self._ITEMS)
         self.fridge_storage.add("cola", 2, self._ITEMS)
+        # Some visible "snacks" so home doesn't feel empty.
+        for iid, qty in (
+            ("food_chips_bbq", 2),
+            ("food_candy_sweet", 2),
+            ("food_chocolate_plain", 2),
+            ("food_nuts_plain", 2),
+        ):
+            self.home_storage.add(iid, int(qty), self._ITEMS)
+        for iid, qty in (
+            ("drink_water_mineral_plain", 2),
+            ("drink_tea_lemon", 1),
+        ):
+            self.fridge_storage.add(iid, int(qty), self._ITEMS)
         # Simple pose / action state (sit / sleep) used in interiors.
         self.player_pose: str | None = None  # sit | sleep
         self.player_pose_space: str = ""  # hr | rv
@@ -11134,7 +11149,7 @@ class HardcoreSurvivalState(State):
 
     def _hr_int_solid_tile(self, ch: str) -> bool:
         ch = str(ch)[:1]
-        return ch not in (".", ",", "D", "E", "B")
+        return ch not in (".", ",", "D", "E")
 
     def _hr_int_move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
         # Match the collision/slide behavior of other interior scenes (house/school/RV).
@@ -11192,6 +11207,40 @@ class HardcoreSurvivalState(State):
         tx = int(math.floor(float(self.hr_int_pos.x) / tile))
         ty = int(math.floor(float(self.hr_int_pos.y) / tile))
         return tx, ty
+
+    def _hr_int_block_bounds(self, x: int, y: int, ch: str) -> tuple[int, int, int, int] | None:
+        ch = str(ch)[:1]
+        x = int(x)
+        y = int(y)
+        w = int(self._HR_INT_W)
+        h = int(self._HR_INT_H)
+        if not (0 <= x < w and 0 <= y < h):
+            return None
+        if str(self._hr_int_char_at(x, y))[:1] != ch:
+            return None
+        seen: set[tuple[int, int]] = set()
+        stack = [(x, y)]
+        cells: list[tuple[int, int]] = []
+        while stack:
+            cx, cy = stack.pop()
+            cx = int(cx)
+            cy = int(cy)
+            if (cx, cy) in seen:
+                continue
+            if not (0 <= cx < w and 0 <= cy < h):
+                continue
+            if str(self._hr_int_char_at(cx, cy))[:1] != ch:
+                continue
+            seen.add((cx, cy))
+            cells.append((cx, cy))
+            stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+        if not cells:
+            return None
+        min_x = min(int(p[0]) for p in cells)
+        max_x = max(int(p[0]) for p in cells)
+        min_y = min(int(p[1]) for p in cells)
+        max_y = max(int(p[1]) for p in cells)
+        return (int(min_x), int(min_y), int(max_x), int(max_y))
 
     def _hr_edit_rebuild_blocks(self) -> None:
         if not getattr(self, "hr_interior", False):
@@ -11870,6 +11919,96 @@ class HardcoreSurvivalState(State):
             self.home_storage, self.fridge_storage = pair
             self.hr_current_room = str(room_id)
 
+    def _hr_room_floor_items_bind(self, room_id: str, *, populate: bool) -> None:
+        room_id = str(room_id).strip()
+        if not room_id:
+            self.hr_floor_items = []
+            return
+        store = getattr(self, "hr_room_floor_items", None)
+        if not isinstance(store, dict):
+            store = {}
+            self.hr_room_floor_items = store
+        items = store.get(room_id)
+        if not isinstance(items, list):
+            items = []
+            store[room_id] = items
+            if populate:
+                self._hr_room_floor_items_populate(room_id, items=items)
+        self.hr_floor_items = items
+
+    def _hr_room_floor_items_populate(self, room_id: str, *, items: list["HardcoreSurvivalState._WorldItem"]) -> None:
+        # Deterministic per-room floor loot (visible snacks on the ground).
+        seed = self._hr_room_seed(str(room_id)) ^ (int(self.seed) & 0xFFFFFFFF) ^ 0x51F00D
+        rng = random.Random(int(seed))
+
+        cache = getattr(self, "_item_kind_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._item_kind_cache = cache
+
+        def pool(kind: str) -> list[str]:
+            key = str(kind)
+            got = cache.get(key)
+            if isinstance(got, list):
+                return got
+            out: list[str] = []
+            for iid, idef in self._ITEMS.items():
+                if idef is None:
+                    continue
+                if str(getattr(idef, "kind", "")) == key:
+                    out.append(str(iid))
+            cache[key] = out
+            return out
+
+        foods = pool("food")
+        drinks = pool("drink")
+        meds = pool("med")
+
+        snack_like = ("chips", "jerky", "candy", "chocolate", "nuts", "driedfruit", "seaweed", "crackers", "energybar")
+        snacks = [iid for iid in foods if any(str(iid).startswith(f"food_{b}_") for b in snack_like)]
+        if not snacks:
+            snacks = foods
+
+        # Prefer placing loot on clear floor tiles in the home layout.
+        # (If layout changes, we still validate walkability.)
+        candidates = [
+            (12, 5),
+            (11, 5),
+            (18, 5),
+            (19, 5),
+            (20, 5),
+            (18, 4),
+            (19, 4),
+        ]
+        floor_tiles: list[tuple[int, int]] = []
+        for tx, ty in candidates:
+            ch = self._hr_int_char_at(int(tx), int(ty))
+            if not self._hr_int_solid_tile(ch):
+                floor_tiles.append((int(tx), int(ty)))
+        if not floor_tiles:
+            return
+
+        picks: list[tuple[str, int]] = []
+        if snacks:
+            picks.append((rng.choice(snacks), int(rng.randint(1, 2))))
+        if snacks and rng.random() < 0.75:
+            picks.append((rng.choice(snacks), 1))
+        if drinks and rng.random() < 0.85:
+            picks.append((rng.choice(drinks), 1))
+        if meds and rng.random() < 0.25:
+            picks.append((rng.choice(meds), 1))
+
+        tile = int(self._HR_INT_TILE_SIZE)
+        rng.shuffle(floor_tiles)
+        for (iid, qty), (tx, ty) in zip(picks, floor_tiles):
+            items.append(
+                HardcoreSurvivalState._WorldItem(
+                    pos=pygame.Vector2((float(tx) + 0.5) * float(tile), (float(ty) + 0.5) * float(tile)),
+                    item_id=str(iid),
+                    qty=int(qty),
+                )
+            )
+
     def _hr_room_storages_populate(
         self,
         room_id: str,
@@ -11942,11 +12081,16 @@ class HardcoreSurvivalState(State):
         self.home_ui_open_block = None
         home_room = str(getattr(self, "home_highrise_room", "")).strip()
         if home_room:
-            # Home room was pre-filled in __init__.
-            self._hr_room_storages_bind(home_room, populate=False)
+            # Home room was pre-filled in on_enter(); still bind with populate=True so
+            # we can also initialize the visible floor loot once.
+            self._hr_room_storages_bind(home_room, populate=True)
         if not isinstance(getattr(self, "hr_home_layout", None), list):  
             self.hr_home_layout = [str(r) for r in self._HR_INT_HOME_LAYOUT]
         self._hr_int_set_layout(getattr(self, "hr_home_layout", self._HR_INT_HOME_LAYOUT))
+        if home_room:
+            self._hr_room_floor_items_bind(home_room, populate=True)
+        else:
+            self.hr_floor_items = []
 
         door = self._hr_int_find("D")
         tile = int(self._HR_INT_TILE_SIZE)
@@ -11972,6 +12116,7 @@ class HardcoreSurvivalState(State):
         self.home_ui_open = False
         self.home_ui_open_block = None
         self.hr_current_room = ""
+        self.hr_floor_items = []
         self._hr_int_set_layout(self._hr_make_hall_layout(floor))        
         saved = getattr(self, "hr_hall_pos_before_home", None)
         if isinstance(saved, pygame.Vector2):
@@ -12058,6 +12203,36 @@ class HardcoreSurvivalState(State):
         if not getattr(self, "hr_interior", False):
             return
         mode = str(getattr(self, "hr_mode", "lobby"))
+
+        # Visible floor loot in apartments (snacks / supplies).
+        if mode == "home":
+            items = getattr(self, "hr_floor_items", None)
+            if isinstance(items, list) and items:
+                focus = pygame.Vector2(self.hr_int_pos)
+                best_i: int | None = None
+                best_d2 = float("inf")
+                for i, it in enumerate(items):
+                    if not isinstance(it, HardcoreSurvivalState._WorldItem):
+                        continue
+                    d2 = float((pygame.Vector2(it.pos) - focus).length_squared())
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        best_i = int(i)
+                if best_i is not None and best_d2 <= (22.0 * 22.0):
+                    it = items[int(best_i)]
+                    want = int(getattr(it, "qty", 1) or 1)
+                    want = max(1, want)
+                    left = int(self.inventory.add(str(getattr(it, "item_id", "")), want, self._ITEMS))
+                    took = int(want - left)
+                    if took > 0:
+                        if left <= 0:
+                            items.pop(int(best_i))
+                        else:
+                            it.qty = int(left)
+                        idef = self._ITEMS.get(str(getattr(it, "item_id", "")))
+                        name = str(getattr(idef, "name", getattr(it, "item_id", "")))
+                        self._set_hint(f"+{took} {name}", seconds=0.9)
+                        return
         tx, ty = self._hr_int_player_tile()
         candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
         chosen: tuple[int, int, str] | None = None
@@ -12243,6 +12418,7 @@ class HardcoreSurvivalState(State):
             self.home_ui_open_block = None
             self._hr_room_storages_bind(room_id, populate=True)
             self._hr_int_set_layout([str(r) for r in self._HR_INT_HOME_LAYOUT])
+            self._hr_room_floor_items_bind(room_id, populate=True)
 
             door = self._hr_int_find("D")
             tile = int(self._HR_INT_TILE_SIZE)
@@ -13392,6 +13568,7 @@ class HardcoreSurvivalState(State):
             surface.blit(sh, shadow.topleft)
             rect = spr.get_rect(center=(sx, sy + 2))
             surface.blit(spr, rect)
+            self._last_player_screen_rect = pygame.Rect(rect)
         elif use_pose and pose == "sit":
             shadow = pygame.Rect(0, 0, 16, 7)
             shadow.center = (sx, sy + 6)
@@ -13400,6 +13577,7 @@ class HardcoreSurvivalState(State):
             surface.blit(sh, shadow.topleft)
             rect = spr.get_rect(center=(sx, sy + 4))
             surface.blit(spr, rect)
+            self._last_player_screen_rect = pygame.Rect(rect)
         else:
             shadow = pygame.Rect(0, 0, 14, 6)
             shadow.center = (sx, sy + 8)
@@ -13409,6 +13587,7 @@ class HardcoreSurvivalState(State):
             rect = spr.get_rect()
             rect.midbottom = (sx, sy + 12)
             surface.blit(spr, rect)
+            self._last_player_screen_rect = pygame.Rect(rect)
 
         # Hover: furniture details + outline.
         mouse = None
@@ -13741,6 +13920,8 @@ class HardcoreSurvivalState(State):
         rect = spr.get_rect()
         rect.midbottom = (sx, sy + 12)
         surface.blit(spr, rect)
+        self._last_player_screen_rect = pygame.Rect(rect)
+        self._last_player_screen_rect = pygame.Rect(rect)
 
     def _draw_house_interior_scene(self, surface: pygame.Surface) -> None:
         surface.fill((10, 10, 14))
@@ -15047,6 +15228,59 @@ class HardcoreSurvivalState(State):
                             pygame.draw.rect(surface, outline, leg, 1)
                     continue
 
+        # Apartment floor loot + proximity outlines.
+        if mode == "home":
+            items = getattr(self, "hr_floor_items", None)
+            near_i: int | None = None
+            near_d2 = float("inf")
+            if isinstance(items, list) and items:
+                focus = pygame.Vector2(self.hr_int_pos)
+                for i, it in enumerate(items):
+                    if not isinstance(it, HardcoreSurvivalState._WorldItem):
+                        continue
+                    d2 = float((pygame.Vector2(it.pos) - focus).length_squared())
+                    if d2 < near_d2:
+                        near_d2 = d2
+                        near_i = int(i)
+
+                for i, it in enumerate(items):
+                    if not isinstance(it, HardcoreSurvivalState._WorldItem):
+                        continue
+                    spr = self._ITEM_SPRITES_WORLD.get(it.item_id) or self._ITEM_SPRITES.get(it.item_id)
+                    if spr is None:
+                        continue
+                    ix = int(round(map_x + float(it.pos.x) - float(spr.get_width()) / 2.0))
+                    iy = int(round(map_y + float(it.pos.y) - float(spr.get_height()) / 2.0))
+                    surface.blit(spr, (ix, iy))
+                    if near_i is not None and int(i) == int(near_i) and near_d2 <= (22.0 * 22.0):
+                        pygame.draw.rect(
+                            surface,
+                            (0, 220, 80),
+                            pygame.Rect(ix - 2, iy - 2, spr.get_width() + 4, spr.get_height() + 4),
+                            2,
+                            border_radius=3,
+                        )
+
+            tx, ty = self._hr_int_player_tile()
+            candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+            interact = {"D", "B", "S", "F", "C"}
+            for cx, cy in candidates:
+                ch = self._hr_int_char_at(cx, cy)
+                if ch not in interact:
+                    continue
+                b = self._hr_int_block_bounds(cx, cy, ch)
+                if b is None:
+                    break
+                x0, y0, x1, y1 = b
+                rr = pygame.Rect(
+                    int(map_x + x0 * tile),
+                    int(map_y + y0 * tile),
+                    int((x1 - x0 + 1) * tile),
+                    int((y1 - y0 + 1) * tile),
+                )
+                pygame.draw.rect(surface, (0, 220, 80), rr, 2, border_radius=8)
+                break
+
         if str(getattr(self, "hr_mode", "lobby")) == "home" and bool(getattr(self, "hr_edit_mode", False)):
             blocks = getattr(self, "hr_edit_blocks", None)
             if isinstance(blocks, list) and blocks:
@@ -16324,6 +16558,7 @@ class HardcoreSurvivalState(State):
         nudge_max = int(clamp(int(self.TILE_SIZE) // 2, 1, 4))
 
         for _ in range(int(steps)):
+            step_prev = pygame.Vector2(p)
             if dx != 0.0:
                 prev = rect_at(float(p.x), float(p.y))
                 p.x += float(dx)
@@ -16371,12 +16606,12 @@ class HardcoreSurvivalState(State):
                                     break
                             if corrected:
                                 break
-                    if not corrected:
+                    if not corrected and abs(float(vel.y)) < 1e-6:
                         # If this collision can be fixed by a tiny vertical push (common when
                         # sliding along the top/bottom walls), prefer that so horizontal motion
                         # doesn't get cancelled at 1px corner overlaps.
                         rect2 = depenetrate_axis(rect, axis="y")
-                        if not self._collide_rect_world(rect2):
+                        if abs(int(rect2.y) - int(rect.y)) <= int(nudge_max) and not self._collide_rect_world(rect2):
                             rect = rect2
                             corrected = True
                             depen_fixed = True
@@ -16395,7 +16630,12 @@ class HardcoreSurvivalState(State):
                                 # which feels like getting stuck). Prefer a tiny Y depenetration;
                                 # if that can't fix it, cancel this X step.
                                 rect2 = depenetrate_axis(rect, axis="y")
-                                if rect2.topleft != rect.topleft and not self._collide_rect_world(rect2):
+                                if (
+                                    abs(float(vel.y)) < 1e-6
+                                    and abs(int(rect2.y) - int(rect.y)) <= int(nudge_max)
+                                    and rect2.topleft != rect.topleft
+                                    and not self._collide_rect_world(rect2)
+                                ):
                                     rect = rect2
                                     depen_fixed = True
                                 else:
@@ -16406,14 +16646,19 @@ class HardcoreSurvivalState(State):
                                 rect.left = int(max(blocks))
                             else:
                                 rect2 = depenetrate_axis(rect, axis="y")
-                                if rect2.topleft != rect.topleft and not self._collide_rect_world(rect2):
+                                if (
+                                    abs(float(vel.y)) < 1e-6
+                                    and abs(int(rect2.y) - int(rect.y)) <= int(nudge_max)
+                                    and rect2.topleft != rect.topleft
+                                    and not self._collide_rect_world(rect2)
+                                ):
                                     rect = rect2
                                     depen_fixed = True
                                 else:
                                     rect = pygame.Rect(prev)
                         if self._collide_rect_world(rect):
                             rect2 = depenetrate_axis(rect, axis="y")
-                            if rect2.topleft != rect.topleft:
+                            if abs(int(rect2.y) - int(rect.y)) <= int(nudge_max) and rect2.topleft != rect.topleft:
                                 rect = rect2
                                 depen_fixed = True
                         # Keep wall sliding stable: avoid large cross-axis corrections here.
@@ -16471,11 +16716,11 @@ class HardcoreSurvivalState(State):
                         p.x = float(rect.centerx)
                         p.y = float(rect.centery)
                         continue
-                    if not corrected:
+                    if not corrected and abs(float(vel.x)) < 1e-6:
                         # Mirror of the horizontal case: if we can clear the collision by
                         # nudging in X, do so to avoid 1px corner lockups.
                         rect2 = depenetrate_axis(rect, axis="x")
-                        if not self._collide_rect_world(rect2):
+                        if abs(int(rect2.x) - int(rect.x)) <= int(nudge_max) and not self._collide_rect_world(rect2):
                             rect = rect2
                             corrected = True
                             depen_fixed = True
@@ -16488,7 +16733,12 @@ class HardcoreSurvivalState(State):
                             rect.bottom = int(min(blocks))
                         else:
                             rect2 = depenetrate_axis(rect, axis="x")
-                            if rect2.topleft != rect.topleft and not self._collide_rect_world(rect2):
+                            if (
+                                abs(float(vel.x)) < 1e-6
+                                and abs(int(rect2.x) - int(rect.x)) <= int(nudge_max)
+                                and rect2.topleft != rect.topleft
+                                and not self._collide_rect_world(rect2)
+                            ):
                                 rect = rect2
                                 depen_fixed = True
                             else:
@@ -16499,14 +16749,19 @@ class HardcoreSurvivalState(State):
                             rect.top = int(max(blocks))
                         else:
                             rect2 = depenetrate_axis(rect, axis="x")
-                            if rect2.topleft != rect.topleft and not self._collide_rect_world(rect2):
+                            if (
+                                abs(float(vel.x)) < 1e-6
+                                and abs(int(rect2.x) - int(rect.x)) <= int(nudge_max)
+                                and rect2.topleft != rect.topleft
+                                and not self._collide_rect_world(rect2)
+                            ):
                                 rect = rect2
                                 depen_fixed = True
                             else:
                                 rect = pygame.Rect(prev)
                     if self._collide_rect_world(rect):
                         rect2 = depenetrate_axis(rect, axis="x")
-                        if rect2.topleft != rect.topleft:
+                        if abs(int(rect2.x) - int(rect.x)) <= int(nudge_max) and rect2.topleft != rect.topleft:
                             rect = rect2
                             depen_fixed = True
                     # Same idea as X: only clamp along Y to preserve wall sliding.
@@ -16517,22 +16772,32 @@ class HardcoreSurvivalState(State):
             # Final safety: never return a penetrated position (prevents "贴墙卡住").
             final = rect_at(float(p.x), float(p.y))
             if self._collide_rect_world(final):
-                # Prefer resolving along the orthogonal axis when sliding,
-                # otherwise the depenetration can cancel movement in one direction.
+                # Avoid large depenetration "snaps" at outside corners: only allow
+                # tiny corrective pushes. Otherwise, revert this sub-step.
+                max_fix = int(max(1, int(nudge_max)))
+                fixed: pygame.Rect | None = None
+
                 if abs(float(vel.y)) < 1e-6 and abs(float(vel.x)) > 1e-6:
-                    fixed = depenetrate_axis(final, axis="y")
-                    final = fixed if not self._collide_rect_world(fixed) else depenetrate(final, prefer_axis="y")
+                    cand = depenetrate_axis(final, axis="y")
+                    if abs(int(cand.y) - int(final.y)) <= max_fix and not self._collide_rect_world(cand):
+                        fixed = cand
                 elif abs(float(vel.x)) < 1e-6 and abs(float(vel.y)) > 1e-6:
-                    fixed = depenetrate_axis(final, axis="x")
-                    final = fixed if not self._collide_rect_world(fixed) else depenetrate(final, prefer_axis="x")
+                    cand = depenetrate_axis(final, axis="x")
+                    if abs(int(cand.x) - int(final.x)) <= max_fix and not self._collide_rect_world(cand):
+                        fixed = cand
                 else:
-                    pref = None
-                    try:
-                        pref = "y" if abs(float(vel.x)) >= abs(float(vel.y)) else "x"
-                    except Exception:
-                        pref = None
-                    final = depenetrate(final, prefer_axis=pref)
-                p.update(float(final.centerx), float(final.centery))
+                    cand = depenetrate_axis(final, axis="x")
+                    if abs(int(cand.x) - int(final.x)) <= max_fix and not self._collide_rect_world(cand):
+                        fixed = cand
+                    else:
+                        cand = depenetrate_axis(final, axis="y")
+                        if abs(int(cand.y) - int(final.y)) <= max_fix and not self._collide_rect_world(cand):
+                            fixed = cand
+
+                if fixed is not None:
+                    p.update(float(fixed.centerx), float(fixed.centery))
+                else:
+                    p.update(float(step_prev.x), float(step_prev.y))
 
         return p
 
@@ -17166,6 +17431,105 @@ class HardcoreSurvivalState(State):
         title = str(getattr(self, "dialog_title", "")).strip() or "提示"
         full = str(getattr(self, "dialog_text_full", ""))
         shown = full[: int(max(0.0, float(getattr(self, "dialog_reveal", 0.0))))]
+
+        # Speech bubble near the player (feels like it's "spoken" by the character).
+        try:
+            font = self.app.font_s
+            max_w = int(min(220, INTERNAL_W - 16))
+
+            lines: list[str] = []
+            for para in str(shown).split("\n"):
+                cur = ""
+                for ch in para:
+                    test = cur + ch
+                    if cur and font.size(test)[0] > max_w:
+                        lines.append(cur)
+                        cur = ch
+                    else:
+                        cur = test
+                lines.append(cur)
+            while len(lines) > 1 and not str(lines[-1]).strip():
+                lines.pop()
+
+            drawn = lines[:3]
+            if not drawn:
+                drawn = [""]
+
+            pad_x = 10
+            pad_y = 8
+            line_gap = 2
+            tail_h = 8
+            tail_w = 12
+            bubble_bg = (0, 0, 0, 180)
+            bubble_border = (220, 220, 235, 140)
+            bubble_hi = (240, 220, 140, 20)
+
+            content_w = max(1, max(int(font.size(str(ln))[0]) for ln in drawn))
+            bubble_w = int(clamp(int(content_w + pad_x * 2), 80, INTERNAL_W - 12))
+            bubble_h = int(clamp(int(len(drawn) * (font.get_height() + line_gap) + pad_y * 2), 36, 120))
+
+            anchor = getattr(self, "_last_player_screen_rect", None)
+            if not isinstance(anchor, pygame.Rect):
+                anchor = pygame.Rect(INTERNAL_W // 2 - 6, INTERNAL_H // 2 - 10, 12, 20)
+            mouth_x = int(anchor.centerx)
+            mouth_y = int(anchor.top + max(2, int(anchor.h) // 4))
+
+            # Tail tip position (screen).
+            tip_x = int(mouth_x)
+            tip_y = int(mouth_y - 2)
+
+            bubble_surf = pygame.Surface((bubble_w, bubble_h + tail_h), pygame.SRCALPHA)
+            panel = pygame.Surface((bubble_w, bubble_h), pygame.SRCALPHA)
+            panel.fill(bubble_bg)
+            pygame.draw.rect(panel, bubble_hi, panel.get_rect(), border_radius=10)
+            pygame.draw.rect(panel, bubble_border, panel.get_rect(), 2, border_radius=10)
+            bubble_surf.blit(panel, (0, 0))
+
+            out = bubble_surf.get_rect(centerx=tip_x, bottom=tip_y + 1)
+            if out.left < 4:
+                out.left = 4
+            if out.right > INTERNAL_W - 4:
+                out.right = INTERNAL_W - 4
+            if out.top < 4:
+                out.top = 4
+            if out.bottom > INTERNAL_H - 4:
+                out.bottom = INTERNAL_H - 4
+
+            tip_x_local = int(clamp(int(tip_x - out.left), 10, bubble_w - 11))
+            base_y = int(bubble_h - 1)
+            tip_y_local = int(bubble_h + tail_h - 1)
+            tail = [(tip_x_local - tail_w // 2, base_y), (tip_x_local + tail_w // 2, base_y), (tip_x_local, tip_y_local)]
+            pygame.draw.polygon(bubble_surf, bubble_bg, tail)
+            pygame.draw.polygon(bubble_surf, bubble_border, tail, 2)
+
+            tx = pad_x
+            ty = pad_y
+            for ln in drawn:
+                bubble_surf.blit(font.render(str(ln), False, pygame.Color(230, 230, 240)), (tx, ty))
+                ty += int(font.get_height() + line_gap)
+
+            if not self._dialog_finished() and (int(float(getattr(self, "dialog_blink", 0.0)) * 3.0) % 2 == 0):
+                last_ln = str(drawn[-1]) if drawn else ""
+                cx = tx + max(0, int(font.size(last_ln)[0]))
+                cy = ty - int(font.get_height() + line_gap)
+                bubble_surf.blit(font.render("|", False, pygame.Color(240, 220, 140)), (cx, cy))
+
+            if self._dialog_finished():
+                tip = "空格/Enter"
+                bubble_surf.blit(
+                    font.render(tip, False, pygame.Color(170, 170, 180)),
+                    (bubble_w - 6 - font.size(tip)[0], bubble_h - 6 - font.get_height()),
+                )
+
+            # Optional tiny title tag.
+            if title and title != "提示":
+                tag = font.render(str(title), False, pygame.Color(240, 220, 140))
+                bubble_surf.blit(tag, (pad_x, 2))
+
+            surface.blit(bubble_surf, out.topleft)
+            return
+        except Exception:
+            pass
 
         panel_h = 74
         pad_x = 12
@@ -21910,6 +22274,8 @@ class HardcoreSurvivalState(State):
 
     def draw(self, surface: pygame.Surface) -> None:
         surface.fill((0, 0, 0))
+        # Updated by player draw routines; used for speech-bubble dialogs.
+        self._last_player_screen_rect = None
         if getattr(self, "house_interior", False):
             self._hover_tooltip = None
             self._draw_house_interior_scene(surface)
@@ -22359,7 +22725,6 @@ class HardcoreSurvivalState(State):
         pf = pf_run if (is_run and isinstance(pf_run, dict)) else pf_walk
         frames = pf.get(d, pf["down"])
         moving = self.player.vel.length_squared() > 1.0
-        bob = 0
         walk_idx = 0
         idle_anim = True
         if not moving or len(frames) <= 1:
@@ -22371,12 +22736,10 @@ class HardcoreSurvivalState(State):
             idx = int(phase * len(walk)) % len(walk)
             walk_idx = int(idx)
             spr = walk[idx]
-            if is_run and idx in (1, 4):
-                bob = 1
         rect = spr.get_rect()
         rect.midbottom = (px, iround(float(p.y) + float(self.player.h) / 2.0))
-        rect.y += bob
         surface.blit(spr, rect)
+        self._last_player_screen_rect = pygame.Rect(rect)
 
         if self.gun is not None:
             aim = pygame.Vector2(self.aim_dir)
