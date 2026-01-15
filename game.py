@@ -16199,6 +16199,7 @@ class HardcoreSurvivalState(State):
         steps = int(max(1, math.ceil(max(abs(dx_total), abs(dy_total)) / max_step)))
         dx = float(dx_total) / float(steps)
         dy = float(dy_total) / float(steps)
+        nudge_max = int(clamp(int(self.TILE_SIZE) // 2, 1, 4))
 
         for _ in range(int(steps)):
             if dx != 0.0:
@@ -16207,21 +16208,50 @@ class HardcoreSurvivalState(State):
                 rect = rect_at(float(p.x), float(p.y))
                 hits = self._collide_rect_world(rect)
                 if hits:
+                    nudged = False
                     if dx > 0.0:
                         blocks = [int(r.left) for r in hits if int(prev.right) <= int(r.left)]
                         if blocks:
                             rect.right = int(min(blocks))
                         else:
-                            rect = pygame.Rect(prev)
+                            # Tight gaps: try a small corner-correction in Y so a
+                            # 1-tile corridor is still passable with keyboard input.
+                            base = pygame.Rect(rect)
+                            for n in range(1, int(nudge_max) + 1):
+                                for sy in (-n, n):
+                                    test = pygame.Rect(base)
+                                    test.y += int(sy)
+                                    if not self._collide_rect_world(test):
+                                        rect = test
+                                        nudged = True
+                                        break
+                                if nudged:
+                                    break
+                            if not nudged:
+                                rect = pygame.Rect(prev)
                     else:
                         blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
                         if blocks:
                             rect.left = int(max(blocks))
                         else:
-                            rect = pygame.Rect(prev)
+                            base = pygame.Rect(rect)
+                            for n in range(1, int(nudge_max) + 1):
+                                for sy in (-n, n):
+                                    test = pygame.Rect(base)
+                                    test.y += int(sy)
+                                    if not self._collide_rect_world(test):
+                                        rect = test
+                                        nudged = True
+                                        break
+                                if nudged:
+                                    break
+                            if not nudged:
+                                rect = pygame.Rect(prev)
                     # Important: do NOT depenetrate in Y here; otherwise you can
                     # get stuck when sliding along a wall while holding diagonal.
                     p.x = float(rect.centerx)
+                    if nudged:
+                        p.y = float(rect.centery)
 
             if dy != 0.0:
                 prev = rect_at(float(p.x), float(p.y))
@@ -16229,20 +16259,47 @@ class HardcoreSurvivalState(State):
                 rect = rect_at(float(p.x), float(p.y))
                 hits = self._collide_rect_world(rect)
                 if hits:
+                    nudged = False
                     if dy > 0.0:
                         blocks = [int(r.top) for r in hits if int(prev.bottom) <= int(r.top)]
                         if blocks:
                             rect.bottom = int(min(blocks))
                         else:
-                            rect = pygame.Rect(prev)
+                            base = pygame.Rect(rect)
+                            for n in range(1, int(nudge_max) + 1):
+                                for sx in (-n, n):
+                                    test = pygame.Rect(base)
+                                    test.x += int(sx)
+                                    if not self._collide_rect_world(test):
+                                        rect = test
+                                        nudged = True
+                                        break
+                                if nudged:
+                                    break
+                            if not nudged:
+                                rect = pygame.Rect(prev)
                     else:
                         blocks = [int(r.bottom) for r in hits if int(prev.top) >= int(r.bottom)]
                         if blocks:
                             rect.top = int(max(blocks))
                         else:
-                            rect = pygame.Rect(prev)
+                            base = pygame.Rect(rect)
+                            for n in range(1, int(nudge_max) + 1):
+                                for sx in (-n, n):
+                                    test = pygame.Rect(base)
+                                    test.x += int(sx)
+                                    if not self._collide_rect_world(test):
+                                        rect = test
+                                        nudged = True
+                                        break
+                                if nudged:
+                                    break
+                            if not nudged:
+                                rect = pygame.Rect(prev)
                     # Same idea as X: only clamp along Y to preserve wall sliding.
                     p.y = float(rect.centery)
+                    if nudged:
+                        p.x = float(rect.centerx)
 
         return p
 
@@ -20865,6 +20922,23 @@ class HardcoreSurvivalState(State):
         pty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
         p_tile = self.world.peek_tile(ptx, pty)
         can_be_inside = p_tile in (self.T_FLOOR, self.T_DOOR, self.T_ELEVATOR, self.T_STAIRS_UP, self.T_STAIRS_DOWN)
+        inside_key: tuple[int, int, int, int] | None = None
+        if can_be_inside:
+            try:
+                pchunk = self.world.peek_chunk(int(ptx) // int(self.CHUNK_SIZE), int(pty) // int(self.CHUNK_SIZE))
+                if pchunk is None:
+                    pchunk = self.world.get_chunk(int(ptx) // int(self.CHUNK_SIZE), int(pty) // int(self.CHUNK_SIZE))
+                best_area = None
+                for b in getattr(pchunk, "buildings", []):
+                    tx0, ty0, w, h = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                    if not (int(tx0) <= int(ptx) < int(tx0) + int(w) and int(ty0) <= int(pty) < int(ty0) + int(h)):
+                        continue
+                    area = int(w) * int(h)
+                    if best_area is None or int(area) < int(best_area):
+                        best_area = int(area)
+                        inside_key = (int(tx0), int(ty0), int(w), int(h))
+            except Exception:
+                inside_key = None
 
         start_cx = start_tx // self.CHUNK_SIZE
         end_cx = end_tx // self.CHUNK_SIZE
@@ -20887,8 +20961,7 @@ class HardcoreSurvivalState(State):
                             floors = int(max_floors)
                         floors = int(min(int(floors), int(max_floors)))
                     face_h = int(self._building_face_height_px(style=style, w=w, h=h, var=var, floors=floors))
-                    inside = bool(can_be_inside and (tx0 <= ptx < tx0 + w) and (ty0 <= pty < ty0 + h))
-                    if inside:
+                    if inside_key is not None and (int(tx0), int(ty0), int(w), int(h)) == inside_key:
                         # When the player is inside a building, hide that building's roof completely.
                         continue
                     alpha = 255
@@ -20914,7 +20987,7 @@ class HardcoreSurvivalState(State):
                         continue
                     if rx + roof_draw.get_width() < 0 or ry + roof_draw.get_height() < 0:
                         continue
-                    if not inside:
+                    if inside_key is None or (int(tx0), int(ty0), int(w), int(h)) != inside_key:
                         sh = pygame.Surface((roof_draw.get_width(), roof_draw.get_height()), pygame.SRCALPHA)
                         sh.fill((0, 0, 0, 70))
                         surface.blit(sh, (int(rx + 2), int(ry + 2)))
