@@ -1679,14 +1679,14 @@ class App:
         base_h = int(BASE_INTERNAL_H)
 
         # Prefer integer scaling to keep pixels perfect. When the window is
-        # wider than the base 16:9, extend the internal width to fill the
-        # extra space (more world shown, no stretching).
+        # larger than the base size, extend the internal resolution to fill
+        # the extra space (more world shown, no stretching).
         fit_scale = min(sw / max(1, base_w), sh / max(1, base_h))
         if fit_scale >= 1.0:
             scale_i = int(max(1, int(fit_scale)))
             scale = float(scale_i)
             internal_w = int(max(base_w, int(sw // scale_i)))
-            internal_h = int(base_h)
+            internal_h = int(max(base_h, int(sh // scale_i)))
         else:
             scale = float(fit_scale)
             internal_w = int(base_w)

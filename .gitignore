@@ -11,3 +11,4 @@ dist/
 build/
 .DS_Store
 __roof_floor_overlay.png
+__teleport.log
