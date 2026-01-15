@@ -13,8 +13,12 @@ from typing import Callable, Sequence
 
 import pygame
 
-INTERNAL_W = 480
-INTERNAL_H = 270
+BASE_INTERNAL_W = 480
+BASE_INTERNAL_H = 270
+
+# Internal render resolution (dynamically extended on ultrawide windows).
+INTERNAL_W = BASE_INTERNAL_W
+INTERNAL_H = BASE_INTERNAL_H
 FPS = 60
 GRID_MARKS = (10, 50, 100, 200, 300, 400)
 
@@ -1622,7 +1626,7 @@ class App:
         self.render = pygame.Surface((INTERNAL_W, INTERNAL_H))
         self._scaled: pygame.Surface | None = None
         self._grid_overlay: pygame.Surface | None = None
-        self._grid_overlay_key: tuple[int, int] | None = None
+        self._grid_overlay_key: tuple[int, int, int, int] | None = None
 
         pygame.display.set_caption("幸存者 Demo (pygame)")
         self._apply_display()
@@ -1642,12 +1646,12 @@ class App:
         if self.config.fullscreen:
             # 桌面全屏：窗口最大化（保留桌面环境/任务栏/边框），不使用独占全屏
             self.screen = pygame.display.set_mode(
-                (INTERNAL_W * self.config.scale, INTERNAL_H * self.config.scale),
+                (BASE_INTERNAL_W * self.config.scale, BASE_INTERNAL_H * self.config.scale),
                 pygame.RESIZABLE,
             )
             self._maximize_window()
         else:
-            self.screen = pygame.display.set_mode((INTERNAL_W * self.config.scale, INTERNAL_H * self.config.scale))
+            self.screen = pygame.display.set_mode((BASE_INTERNAL_W * self.config.scale, BASE_INTERNAL_H * self.config.scale))
         self._scaled = None
         self._update_view_transform()
 
@@ -1667,18 +1671,34 @@ class App:
             return
 
     def _update_view_transform(self) -> None:
+        global INTERNAL_W, INTERNAL_H
         sw, sh = self.screen.get_size()
         sw = max(1, int(sw))
         sh = max(1, int(sh))
-        # Keep a consistent INTERNAL_W x INTERNAL_H aspect ratio.
-        # Prefer integer scaling to keep pixel sizes consistent; fall back to
-        # fractional scaling only when the window is smaller than the internal
-        # resolution.
-        fit_scale = min(sw / max(1, INTERNAL_W), sh / max(1, INTERNAL_H))
+        base_w = int(BASE_INTERNAL_W)
+        base_h = int(BASE_INTERNAL_H)
+
+        # Prefer integer scaling to keep pixels perfect. When the window is
+        # wider than the base 16:9, extend the internal width to fill the
+        # extra space (more world shown, no stretching).
+        fit_scale = min(sw / max(1, base_w), sh / max(1, base_h))
         if fit_scale >= 1.0:
-            scale = float(max(1, int(fit_scale)))
+            scale_i = int(max(1, int(fit_scale)))
+            scale = float(scale_i)
+            internal_w = int(max(base_w, int(sw // scale_i)))
+            internal_h = int(base_h)
         else:
             scale = float(fit_scale)
+            internal_w = int(base_w)
+            internal_h = int(base_h)
+
+        if int(INTERNAL_W) != int(internal_w) or int(INTERNAL_H) != int(internal_h):
+            INTERNAL_W = int(internal_w)
+            INTERNAL_H = int(internal_h)
+            self.render = pygame.Surface((int(INTERNAL_W), int(INTERNAL_H)))
+            self._scaled = None
+            self._grid_overlay = None
+            self._grid_overlay_key = None
 
         dest_w = max(1, int(round(INTERNAL_W * scale)))
         dest_h = max(1, int(round(INTERNAL_H * scale)))
@@ -1698,7 +1718,7 @@ class App:
             self._grid_overlay_key = None
             return
 
-        if self._grid_overlay is not None and self._grid_overlay_key == (dest_size[0], dest_size[1]):
+        if self._grid_overlay is not None and self._grid_overlay_key == (dest_size[0], dest_size[1], int(INTERNAL_W), int(INTERNAL_H)):
             return
 
         overlay = pygame.Surface(dest_size, pygame.SRCALPHA)
@@ -1735,7 +1755,7 @@ class App:
                 pygame.draw.line(overlay, major, (0, y), (w - 1, y), major_w)
 
         self._grid_overlay = overlay
-        self._grid_overlay_key = (dest_size[0], dest_size[1])
+        self._grid_overlay_key = (dest_size[0], dest_size[1], int(INTERNAL_W), int(INTERNAL_H))
 
     def screen_to_internal(self, screen_pos: tuple[int, int]) -> tuple[int, int] | None:
         if not hasattr(self, "view_rect"):
@@ -11217,7 +11237,7 @@ class HardcoreSurvivalState(State):
 
     def _hr_int_solid_tile(self, ch: str) -> bool:
         ch = str(ch)[:1]
-        return ch not in (".", "D", "E", "A", "H", "B")
+        return ch not in (".", "D", "E", "B")
 
     def _hr_int_move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
         # Match the collision/slide behavior of other interior scenes (house/school/RV).
