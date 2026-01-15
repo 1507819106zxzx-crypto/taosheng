@@ -16008,6 +16008,7 @@ class HardcoreSurvivalState(State):
                     # Corner correction: when moving purely horizontally, a tiny Y nudge
                     # makes 1-tile corridors/doorways feel smooth instead of "pixel perfect".
                     corrected = False
+                    depen_fixed = False
                     if abs(float(vel.y)) < 1e-6:
                         prefer = 0
                         try:
@@ -16046,16 +16047,20 @@ class HardcoreSurvivalState(State):
                             if blocks:
                                 rect.right = int(min(blocks))
                             else:
-                                rect = pygame.Rect(prev)
+                                rect = depenetrate(rect)
+                                depen_fixed = True
                         else:
                             blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
                             if blocks:
                                 rect.left = int(max(blocks))
                             else:
-                                rect = pygame.Rect(prev)
+                                rect = depenetrate(rect)
+                                depen_fixed = True
                         # Important: do NOT depenetrate in Y here; otherwise you can
                         # get stuck when sliding along a wall while holding diagonal.
                         p.x = float(rect.centerx)
+                        if depen_fixed:
+                            p.y = float(rect.centery)
 
             if dy != 0.0:
                 prev = rect_at(float(p.x), float(p.y))
@@ -16064,6 +16069,7 @@ class HardcoreSurvivalState(State):
                 hits = self._collide_rect_world(rect)
                 if hits:
                     corrected = False
+                    depen_fixed = False
                     if abs(float(vel.x)) < 1e-6:
                         prefer = 0
                         try:
@@ -16101,15 +16107,19 @@ class HardcoreSurvivalState(State):
                         if blocks:
                             rect.bottom = int(min(blocks))
                         else:
-                            rect = pygame.Rect(prev)
+                            rect = depenetrate(rect)
+                            depen_fixed = True
                     else:
                         blocks = [int(r.bottom) for r in hits if int(prev.top) >= int(r.bottom)]
                         if blocks:
                             rect.top = int(max(blocks))
                         else:
-                            rect = pygame.Rect(prev)
+                            rect = depenetrate(rect)
+                            depen_fixed = True
                     # Same idea as X: only clamp along Y to preserve wall sliding.
                     p.y = float(rect.centery)
+                    if depen_fixed:
+                        p.x = float(rect.centerx)
 
         return p
 
