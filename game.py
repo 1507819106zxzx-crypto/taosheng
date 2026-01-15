@@ -11231,7 +11231,12 @@ class HardcoreSurvivalState(State):
         dy_total = float(vel.y) * dt
 
         def rect_at(px: float, py: float) -> pygame.Rect:
-            return pygame.Rect(int(round(px - w / 2)), int(round(py - h / 2)), int(w), int(h))
+            return pygame.Rect(
+                iround(float(px) - float(w) / 2.0),
+                iround(float(py) - float(h) / 2.0),
+                int(w),
+                int(h),
+            )
 
         def collide(r: pygame.Rect) -> list[pygame.Rect]:
             left = int(math.floor(r.left / tile))
@@ -11251,7 +11256,7 @@ class HardcoreSurvivalState(State):
 
         def depenetrate(r: pygame.Rect) -> pygame.Rect:
             r = pygame.Rect(r)
-            for _ in range(8):
+            for _ in range(10):
                 hits = collide(r)
                 if not hits:
                     break
@@ -11292,6 +11297,7 @@ class HardcoreSurvivalState(State):
         steps = int(max(1, math.ceil(max(abs(dx_total), abs(dy_total)) / max_step)))
         dx = float(dx_total) / float(steps)
         dy = float(dy_total) / float(steps)
+        nudge_max = int(clamp(int(tile) // 2, 1, 4))
         for _ in range(int(steps)):
             if dx != 0.0:
                 prev = rect_at(float(p.x), float(p.y))
@@ -11299,20 +11305,53 @@ class HardcoreSurvivalState(State):
                 rect = rect_at(float(p.x), float(p.y))
                 hits = collide(rect)
                 if hits:
-                    if dx > 0.0:
-                        blocks = [int(r.left) for r in hits if int(prev.right) <= int(r.left)]
-                        if blocks:
-                            rect.right = int(min(blocks))
-                        else:
-                            rect = pygame.Rect(prev)
+                    corrected = False
+                    if abs(float(vel.y)) < 1e-6:
+                        prefer = 0
+                        try:
+                            avg = sum(int(hh.centery) for hh in hits) / float(max(1, len(hits)))
+                            if float(avg) < float(rect.centery):
+                                prefer = 1  # obstacles above -> move down first
+                            elif float(avg) > float(rect.centery):
+                                prefer = -1  # obstacles below -> move up first
+                        except Exception:
+                            prefer = 0
+
+                        base = pygame.Rect(rect)
+                        for n in range(1, int(nudge_max) + 1):
+                            if prefer > 0:
+                                cands = (n, -n)
+                            elif prefer < 0:
+                                cands = (-n, n)
+                            else:
+                                cands = (-n, n)
+                            for sy in cands:
+                                test = pygame.Rect(base)
+                                test.y += int(sy)
+                                if not collide(test):
+                                    rect = test
+                                    corrected = True
+                                    break
+                            if corrected:
+                                break
+                    if corrected:
+                        p.x = float(rect.centerx)
+                        p.y = float(rect.centery)
                     else:
-                        blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
-                        if blocks:
-                            rect.left = int(max(blocks))
+                        if dx > 0.0:
+                            blocks = [int(r.left) for r in hits if int(prev.right) <= int(r.left)]
+                            if blocks:
+                                rect.right = int(min(blocks))
+                            else:
+                                rect = pygame.Rect(prev)
                         else:
-                            rect = pygame.Rect(prev)
-                    rect = depenetrate(rect)
-                    p.update(float(rect.centerx), float(rect.centery))
+                            blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
+                            if blocks:
+                                rect.left = int(max(blocks))
+                            else:
+                                rect = pygame.Rect(prev)
+                        # Only clamp along X so sliding along walls stays smooth.
+                        p.x = float(rect.centerx)
 
             if dy != 0.0:
                 prev = rect_at(float(p.x), float(p.y))
@@ -11320,6 +11359,39 @@ class HardcoreSurvivalState(State):
                 rect = rect_at(float(p.x), float(p.y))
                 hits = collide(rect)
                 if hits:
+                    corrected = False
+                    if abs(float(vel.x)) < 1e-6:
+                        prefer = 0
+                        try:
+                            avg = sum(int(hh.centerx) for hh in hits) / float(max(1, len(hits)))
+                            if float(avg) < float(rect.centerx):
+                                prefer = 1  # obstacles left -> move right first
+                            elif float(avg) > float(rect.centerx):
+                                prefer = -1  # obstacles right -> move left first
+                        except Exception:
+                            prefer = 0
+
+                        base = pygame.Rect(rect)
+                        for n in range(1, int(nudge_max) + 1):
+                            if prefer > 0:
+                                cands = (n, -n)
+                            elif prefer < 0:
+                                cands = (-n, n)
+                            else:
+                                cands = (-n, n)
+                            for sx in cands:
+                                test = pygame.Rect(base)
+                                test.x += int(sx)
+                                if not collide(test):
+                                    rect = test
+                                    corrected = True
+                                    break
+                            if corrected:
+                                break
+                    if corrected:
+                        p.x = float(rect.centerx)
+                        p.y = float(rect.centery)
+                        continue
                     if dy > 0.0:
                         blocks = [int(r.top) for r in hits if int(prev.bottom) <= int(r.top)]
                         if blocks:
@@ -11332,8 +11404,8 @@ class HardcoreSurvivalState(State):
                             rect.top = int(max(blocks))
                         else:
                             rect = pygame.Rect(prev)
-                    rect = depenetrate(rect)
-                    p.update(float(rect.centerx), float(rect.centery))
+                    # Only clamp along Y so sliding along walls stays smooth.
+                    p.y = float(rect.centery)
 
         pad = 3
         half_w = float(w) / 2.0
