@@ -15953,13 +15953,15 @@ class HardcoreSurvivalState(State):
                 int(h),
             )
 
-        def depenetrate(r: pygame.Rect) -> pygame.Rect:
+        def depenetrate(r: pygame.Rect, *, prefer_axis: str | None = None) -> pygame.Rect:
+            prefer_axis = None if prefer_axis is None else str(prefer_axis)
             r = pygame.Rect(r)
+            axis_penalty = int(clamp(int(self.TILE_SIZE) // 5, 1, 3))
             for _ in range(10):
                 hits = self._collide_rect_world(r)
                 if not hits:
                     break
-                best: tuple[int, int, int] | None = None
+                best: tuple[int, int, int, int, int] | None = None  # score, absd, prio, ox, oy
                 for hit in hits:
                     if not r.colliderect(hit):
                         continue
@@ -15975,11 +15977,14 @@ class HardcoreSurvivalState(State):
                     ):
                         if absd <= 0:
                             continue
-                        if best is None or absd < best[0]:
-                            best = (int(absd), int(ox), int(oy))
+                        axis = "x" if int(ox) != 0 else "y"
+                        prio = 0 if (prefer_axis is not None and axis == prefer_axis) else 1
+                        score = int(absd) + (0 if prefer_axis is None or axis == prefer_axis else int(axis_penalty))
+                        if best is None or (score, prio, int(absd)) < (best[0], best[2], best[1]):
+                            best = (int(score), int(absd), int(prio), int(ox), int(oy))
                 if best is None:
                     break
-                _absd, ox, oy = best
+                _score, _absd, _prio, ox, oy = best
                 r.move_ip(int(ox), int(oy))
             return r
 
@@ -16021,22 +16026,24 @@ class HardcoreSurvivalState(State):
 
         def filter_hits_axis(hits: list[pygame.Rect], r: pygame.Rect, *, axis: str) -> list[pygame.Rect]:
             axis = str(axis)
-            skin = int(clamp(int(self.TILE_SIZE) // 4, 1, 2))
+            # "Skin" lets the player slide along horizontal/vertical walls without
+            # getting caught on 1px corner overlaps (fixes right->left sticking).
+            skin = int(clamp(int(self.TILE_SIZE) // 6, 1, 2))
             kept: list[pygame.Rect] = []
             for h in hits:
                 if not r.colliderect(h):
                     continue
-                dx_l = int(h.left - r.right)
-                dx_r = int(h.right - r.left)
-                dy_u = int(h.top - r.bottom)
-                dy_d = int(h.bottom - r.top)
-                dx_pen = min(abs(dx_l), abs(dx_r))
-                dy_pen = min(abs(dy_u), abs(dy_d))
+                inter = r.clip(h)
+                if int(inter.w) <= 0 or int(inter.h) <= 0:
+                    continue
+                # For horizontal movement, only keep hits that are "mostly side walls"
+                # (penetration in X clearly smaller than in Y). Otherwise, treat the hit
+                # as a top/bottom scrape and resolve via a small Y depenetration.
                 if axis == "x":
-                    if int(dx_pen) <= int(dy_pen) + int(skin):
+                    if int(inter.w) + int(skin) < int(inter.h):
                         kept.append(h)
                 else:
-                    if int(dy_pen) <= int(dx_pen) + int(skin):
+                    if int(inter.h) + int(skin) < int(inter.w):
                         kept.append(h)
             return kept
 
@@ -16044,7 +16051,19 @@ class HardcoreSurvivalState(State):
         # in the shortest direction. This prevents large "snap" corrections later.
         cur = rect_at(float(p.x), float(p.y))
         if self._collide_rect_world(cur):
-            cur = depenetrate(cur)
+            pref = None
+            try:
+                if abs(float(vel.x)) >= abs(float(vel.y)) and abs(float(vel.x)) > 1e-6:
+                    pref = "y"
+                elif abs(float(vel.y)) > 1e-6:
+                    pref = "x"
+            except Exception:
+                pref = None
+            if pref in ("x", "y"):
+                cur2 = depenetrate_axis(cur, axis=str(pref))
+                cur = cur2 if not self._collide_rect_world(cur2) else depenetrate(cur, prefer_axis=pref)
+            else:
+                cur = depenetrate(cur, prefer_axis=pref)
             p.update(float(cur.centerx), float(cur.centery))
 
         # Prevent tunneling through thin walls/doorways on hitches by moving
@@ -16122,23 +16141,27 @@ class HardcoreSurvivalState(State):
                             if blocks:
                                 rect.right = int(min(blocks))
                             else:
-                                rect2 = depenetrate_axis(rect, axis="x")
-                                if rect2.topleft != rect.topleft:
+                                # If we can't find a proper blocking face, do NOT depenetrate in X
+                                # (that can push several pixels and trigger the teleport-guard,
+                                # which feels like getting stuck). Prefer a tiny Y depenetration;
+                                # if that can't fix it, cancel this X step.
+                                rect2 = depenetrate_axis(rect, axis="y")
+                                if rect2.topleft != rect.topleft and not self._collide_rect_world(rect2):
                                     rect = rect2
+                                    depen_fixed = True
                                 else:
-                                    rect = depenetrate(rect)
-                                depen_fixed = True
+                                    rect = pygame.Rect(prev)
                         else:
                             blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
                             if blocks:
                                 rect.left = int(max(blocks))
                             else:
-                                rect2 = depenetrate_axis(rect, axis="x")
-                                if rect2.topleft != rect.topleft:
+                                rect2 = depenetrate_axis(rect, axis="y")
+                                if rect2.topleft != rect.topleft and not self._collide_rect_world(rect2):
                                     rect = rect2
+                                    depen_fixed = True
                                 else:
-                                    rect = depenetrate(rect)
-                                depen_fixed = True
+                                    rect = pygame.Rect(prev)
                         if self._collide_rect_world(rect):
                             rect2 = depenetrate_axis(rect, axis="y")
                             if rect2.topleft != rect.topleft:
@@ -16215,23 +16238,23 @@ class HardcoreSurvivalState(State):
                         if blocks:
                             rect.bottom = int(min(blocks))
                         else:
-                            rect2 = depenetrate_axis(rect, axis="y")
-                            if rect2.topleft != rect.topleft:
+                            rect2 = depenetrate_axis(rect, axis="x")
+                            if rect2.topleft != rect.topleft and not self._collide_rect_world(rect2):
                                 rect = rect2
+                                depen_fixed = True
                             else:
-                                rect = depenetrate(rect)
-                            depen_fixed = True
+                                rect = pygame.Rect(prev)
                     else:
                         blocks = [int(r.bottom) for r in hits if int(prev.top) >= int(r.bottom)]
                         if blocks:
                             rect.top = int(max(blocks))
                         else:
-                            rect2 = depenetrate_axis(rect, axis="y")
-                            if rect2.topleft != rect.topleft:
+                            rect2 = depenetrate_axis(rect, axis="x")
+                            if rect2.topleft != rect.topleft and not self._collide_rect_world(rect2):
                                 rect = rect2
+                                depen_fixed = True
                             else:
-                                rect = depenetrate(rect)
-                            depen_fixed = True
+                                rect = pygame.Rect(prev)
                     if self._collide_rect_world(rect):
                         rect2 = depenetrate_axis(rect, axis="x")
                         if rect2.topleft != rect.topleft:
@@ -16249,12 +16272,17 @@ class HardcoreSurvivalState(State):
                 # otherwise the depenetration can cancel movement in one direction.
                 if abs(float(vel.y)) < 1e-6 and abs(float(vel.x)) > 1e-6:
                     fixed = depenetrate_axis(final, axis="y")
-                    final = fixed if not self._collide_rect_world(fixed) else depenetrate(final)
+                    final = fixed if not self._collide_rect_world(fixed) else depenetrate(final, prefer_axis="y")
                 elif abs(float(vel.x)) < 1e-6 and abs(float(vel.y)) > 1e-6:
                     fixed = depenetrate_axis(final, axis="x")
-                    final = fixed if not self._collide_rect_world(fixed) else depenetrate(final)
+                    final = fixed if not self._collide_rect_world(fixed) else depenetrate(final, prefer_axis="x")
                 else:
-                    final = depenetrate(final)
+                    pref = None
+                    try:
+                        pref = "y" if abs(float(vel.x)) >= abs(float(vel.y)) else "x"
+                    except Exception:
+                        pref = None
+                    final = depenetrate(final, prefer_axis=pref)
                 p.update(float(final.centerx), float(final.centery))
 
         return p
