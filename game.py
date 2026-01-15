@@ -5476,6 +5476,490 @@ class HardcoreSurvivalState(State):
         "pistol": _make_hand_pistol_sprite(),
     }
 
+    # Auto item sprites for the bulk item library.
+
+    @staticmethod
+    def _rgb_shift(col: tuple[int, int, int], dr: int = 0, dg: int = 0, db: int = 0) -> tuple[int, int, int]:
+        r, g, b = int(col[0]) + int(dr), int(col[1]) + int(dg), int(col[2]) + int(db)
+        return (int(clamp(r, 0, 255)), int(clamp(g, 0, 255)), int(clamp(b, 0, 255)))
+
+    @staticmethod
+    def _rgb_lerp(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+        t = float(clamp(float(t), 0.0, 1.0))
+        return (
+            int(clamp(int(round(float(a[0]) + (float(b[0]) - float(a[0])) * t)), 0, 255)),
+            int(clamp(int(round(float(a[1]) + (float(b[1]) - float(a[1])) * t)), 0, 255)),
+            int(clamp(int(round(float(a[2]) + (float(b[2]) - float(a[2])) * t)), 0, 255)),
+        )
+
+    @staticmethod
+    def _make_item_icon_from_sprite(spr: pygame.Surface) -> pygame.Surface:
+        bw, bh = int(spr.get_width()), int(spr.get_height())
+        scale = min(8.0 / max(1.0, float(bw)), 8.0 / max(1.0, float(bh)))
+        scale = float(min(1.0, float(scale)))
+        tw = int(max(1, round(float(bw) * float(scale))))
+        th = int(max(1, round(float(bh) * float(scale))))
+        thumb = pygame.transform.scale(spr, (int(tw), int(th))) if (tw != bw or th != bh) else spr
+        icon = pygame.Surface((8, 8), pygame.SRCALPHA)
+        icon.blit(thumb, (int((8 - tw) // 2), int((8 - th) // 2)))
+        return icon
+
+    @staticmethod
+    def _make_item_world_sprite(spr: pygame.Surface, *, max_px: int = 11) -> pygame.Surface:
+        max_px = int(max(2, int(max_px)))
+        sw, sh = int(spr.get_width()), int(spr.get_height())
+        biggest = max(1, max(int(sw), int(sh)))
+        scale = min(1.0, float(max_px) / float(biggest))
+        if scale >= 1.0:
+            return spr
+        nw = max(1, int(round(float(sw) * float(scale))))
+        nh = max(1, int(round(float(sh) * float(scale))))
+        return pygame.transform.scale(spr, (int(nw), int(nh)))
+
+    @staticmethod
+    def _make_item_sprite_auto(item_id: str, idef) -> pygame.Surface:
+        item_id = str(item_id or "")
+        seed = 0
+        for ch in item_id:
+            seed = (seed * 131 + ord(ch)) & 0xFFFFFFFF
+
+        base_col = (180, 180, 192)
+        kind = ""
+        if idef is not None:
+            try:
+                base_col = (int(idef.color[0]), int(idef.color[1]), int(idef.color[2]))
+                kind = str(getattr(idef, "kind", ""))
+            except Exception:
+                pass
+
+        outline = (10, 10, 12)
+
+        def seed_sign(shift: int) -> int:
+            return -1 if (((int(seed) >> int(shift)) & 1) == 1) else 1
+
+        accent = HardcoreSurvivalState._rgb_shift(
+            base_col,
+            45 * seed_sign(3),
+            30 * seed_sign(7),
+            35 * seed_sign(11),
+        )
+        accent2 = HardcoreSurvivalState._rgb_shift(accent, -35, -35, -35)
+
+        def make_can(*, label: tuple[int, int, int]) -> pygame.Surface:
+            surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+            can_body = HardcoreSurvivalState._rgb_lerp((210, 170, 90), base_col, 0.35)
+            can_shadow = HardcoreSurvivalState._rgb_shift(can_body, -35, -35, -35)
+            pygame.draw.rect(surf, can_body, pygame.Rect(3, 2, 8, 9), border_radius=2)
+            pygame.draw.rect(surf, outline, pygame.Rect(3, 2, 8, 9), 1, border_radius=2)
+            pygame.draw.line(surf, can_shadow, (4, 3), (9, 3), 1)
+            pygame.draw.rect(surf, label, pygame.Rect(4, 5, 6, 3), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(4, 5, 6, 3), 1, border_radius=1)
+            ink = HardcoreSurvivalState._rgb_shift(label, 55, 55, 55)
+            for xx in range(5, 9, 2):
+                surf.set_at((xx, 6), ink)
+            return surf
+
+        def make_bottle(*, cap: tuple[int, int, int], liquid: tuple[int, int, int], label: tuple[int, int, int]) -> pygame.Surface:
+            surf = pygame.Surface((12, 14), pygame.SRCALPHA)
+            liq2 = HardcoreSurvivalState._rgb_shift(liquid, -30, -30, -30)
+            cap2 = HardcoreSurvivalState._rgb_shift(cap, -25, -25, -25)
+            pygame.draw.rect(surf, cap, pygame.Rect(4, 1, 4, 2), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(4, 1, 4, 2), 1, border_radius=1)
+            pygame.draw.rect(surf, cap2, pygame.Rect(5, 3, 2, 2), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(5, 3, 2, 2), 1, border_radius=1)
+            body = pygame.Rect(3, 5, 6, 8)
+            pygame.draw.rect(surf, liquid, body, border_radius=3)
+            pygame.draw.rect(surf, outline, body, 1, border_radius=3)
+            band = pygame.Rect(3, 8, 6, 2)
+            pygame.draw.rect(surf, label, band, border_radius=1)
+            pygame.draw.rect(surf, outline, band, 1, border_radius=1)
+            pygame.draw.line(surf, liq2, (4, 6), (4, 12), 1)
+            pygame.draw.line(surf, cap, (8, 6), (8, 12), 1)
+            return surf
+
+        def make_carton(*, body: tuple[int, int, int], band: tuple[int, int, int]) -> pygame.Surface:
+            surf = pygame.Surface((12, 14), pygame.SRCALPHA)
+            b2 = HardcoreSurvivalState._rgb_shift(body, -30, -30, -30)
+            hi = HardcoreSurvivalState._rgb_shift(body, 25, 25, 25)
+            box = pygame.Rect(3, 2, 6, 11)
+            pygame.draw.rect(surf, body, box, border_radius=2)
+            pygame.draw.rect(surf, outline, box, 1, border_radius=2)
+            pygame.draw.polygon(surf, hi, [(3, 3), (6, 1), (9, 3)])
+            pygame.draw.polygon(surf, outline, [(3, 3), (6, 1), (9, 3)], 1)
+            pygame.draw.rect(surf, band, pygame.Rect(3, 8, 6, 2), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(3, 8, 6, 2), 1, border_radius=1)
+            surf.set_at((6, 9), (240, 240, 240))
+            pygame.draw.line(surf, b2, (8, 4), (8, 12), 1)
+            pygame.draw.line(surf, outline, (8, 6), (10, 4), 1)
+            return surf
+
+        def make_bag(*, body: tuple[int, int, int], band: tuple[int, int, int]) -> pygame.Surface:
+            surf = pygame.Surface((14, 14), pygame.SRCALPHA)
+            b2 = HardcoreSurvivalState._rgb_shift(body, -35, -35, -35)
+            hi = HardcoreSurvivalState._rgb_shift(body, 30, 30, 30)
+            pts = [(3, 2), (11, 2), (10, 12), (4, 12)]
+            pygame.draw.polygon(surf, body, pts)
+            pygame.draw.polygon(surf, outline, pts, 1)
+            pygame.draw.line(surf, hi, (4, 3), (10, 3), 1)
+            pygame.draw.rect(surf, band, pygame.Rect(4, 6, 6, 3), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(4, 6, 6, 3), 1, border_radius=1)
+            pygame.draw.line(surf, b2, (5, 11), (9, 11), 1)
+            return surf
+
+        def make_box(*, body: tuple[int, int, int], band: tuple[int, int, int]) -> pygame.Surface:
+            surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+            b2 = HardcoreSurvivalState._rgb_shift(body, -35, -35, -35)
+            hi = HardcoreSurvivalState._rgb_shift(body, 35, 35, 35)
+            box = pygame.Rect(2, 3, 10, 7)
+            pygame.draw.rect(surf, body, box, border_radius=2)
+            pygame.draw.rect(surf, outline, box, 1, border_radius=2)
+            pygame.draw.rect(surf, hi, pygame.Rect(3, 4, 8, 1))
+            pygame.draw.rect(surf, b2, pygame.Rect(3, 9, 8, 1))
+            pygame.draw.rect(surf, band, pygame.Rect(4, 6, 6, 2), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(4, 6, 6, 2), 1, border_radius=1)
+            return surf
+
+        def make_pills(*, body: tuple[int, int, int]) -> pygame.Surface:
+            surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+            cap = (230, 230, 240)
+            b2 = HardcoreSurvivalState._rgb_shift(body, -25, -25, -25)
+            bottle = pygame.Rect(4, 2, 6, 9)
+            pygame.draw.rect(surf, body, bottle, border_radius=3)
+            pygame.draw.rect(surf, outline, bottle, 1, border_radius=3)
+            pygame.draw.rect(surf, cap, pygame.Rect(5, 1, 4, 2), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(5, 1, 4, 2), 1, border_radius=1)
+            pygame.draw.line(surf, b2, (5, 8), (8, 8), 1)
+            red = (220, 80, 90)
+            pygame.draw.rect(surf, red, pygame.Rect(6, 5, 2, 4))
+            pygame.draw.rect(surf, red, pygame.Rect(5, 6, 4, 2))
+            return surf
+
+        def make_key(*, metal: tuple[int, int, int]) -> pygame.Surface:
+            surf = pygame.Surface((14, 10), pygame.SRCALPHA)
+            m2 = HardcoreSurvivalState._rgb_shift(metal, -30, -30, -30)
+            pygame.draw.circle(surf, metal, (4, 5), 3)
+            pygame.draw.circle(surf, outline, (4, 5), 3, 1)
+            pygame.draw.circle(surf, (0, 0, 0, 0), (4, 5), 1)
+            pygame.draw.rect(surf, metal, pygame.Rect(6, 4, 7, 2))
+            pygame.draw.rect(surf, outline, pygame.Rect(6, 4, 7, 2), 1)
+            pygame.draw.rect(surf, metal, pygame.Rect(11, 6, 2, 2))
+            pygame.draw.rect(surf, metal, pygame.Rect(9, 6, 1, 2))
+            pygame.draw.line(surf, m2, (6, 5), (12, 5), 1)
+            return surf
+
+        def make_gas_can(*, body: tuple[int, int, int]) -> pygame.Surface:
+            surf = pygame.Surface((14, 14), pygame.SRCALPHA)
+            b2 = HardcoreSurvivalState._rgb_shift(body, -35, -35, -35)
+            hi = HardcoreSurvivalState._rgb_shift(body, 30, 30, 30)
+            can = pygame.Rect(3, 3, 8, 9)
+            pygame.draw.rect(surf, body, can, border_radius=2)
+            pygame.draw.rect(surf, outline, can, 1, border_radius=2)
+            pygame.draw.rect(surf, hi, pygame.Rect(5, 2, 4, 2), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(5, 2, 4, 2), 1, border_radius=1)
+            pygame.draw.rect(surf, b2, pygame.Rect(9, 4, 3, 2), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(9, 4, 3, 2), 1, border_radius=1)
+            mark = (240, 240, 240)
+            pygame.draw.line(surf, mark, (5, 6), (9, 10), 1)
+            pygame.draw.line(surf, mark, (9, 6), (5, 10), 1)
+            return surf
+
+        def make_simple_tool(*, tool: str, body: tuple[int, int, int]) -> pygame.Surface:
+            surf = pygame.Surface((16, 12), pygame.SRCALPHA)
+            steel = (220, 220, 230)
+            handle = body
+            handle2 = HardcoreSurvivalState._rgb_shift(handle, -30, -30, -30)
+            if tool == "flashlight":
+                pygame.draw.rect(surf, handle, pygame.Rect(3, 5, 9, 4), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 5, 9, 4), 1, border_radius=2)
+                pygame.draw.rect(surf, steel, pygame.Rect(12, 5, 2, 4), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(12, 5, 2, 4), 1, border_radius=1)
+                pygame.draw.line(surf, handle2, (4, 8), (10, 8), 1)
+                return surf
+            if tool == "knife":
+                pygame.draw.rect(surf, steel, pygame.Rect(3, 6, 9, 2), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 6, 9, 2), 1, border_radius=1)
+                pygame.draw.rect(surf, handle, pygame.Rect(12, 5, 2, 4), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(12, 5, 2, 4), 1, border_radius=1)
+                return surf
+            if tool == "hammer":
+                pygame.draw.rect(surf, handle, pygame.Rect(7, 3, 2, 8), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(7, 3, 2, 8), 1, border_radius=1)
+                pygame.draw.rect(surf, steel, pygame.Rect(4, 3, 8, 3), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(4, 3, 8, 3), 1, border_radius=1)
+                pygame.draw.line(surf, handle2, (8, 5), (8, 10), 1)
+                return surf
+            if tool == "wrench":
+                pygame.draw.polygon(surf, steel, [(4, 4), (7, 4), (12, 9), (9, 9)])
+                pygame.draw.polygon(surf, outline, [(4, 4), (7, 4), (12, 9), (9, 9)], 1)
+                pygame.draw.circle(surf, steel, (4, 4), 2)
+                pygame.draw.circle(surf, outline, (4, 4), 2, 1)
+                return surf
+            if tool == "screwdriver":
+                pygame.draw.rect(surf, handle, pygame.Rect(3, 6, 6, 3), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 6, 6, 3), 1, border_radius=2)
+                pygame.draw.rect(surf, steel, pygame.Rect(9, 7, 5, 1))
+                pygame.draw.rect(surf, outline, pygame.Rect(9, 7, 5, 1), 1)
+                pygame.draw.line(surf, handle2, (4, 8), (7, 8), 1)
+                return surf
+            if tool == "crowbar":
+                pygame.draw.line(surf, steel, (4, 9), (12, 3), 2)
+                pygame.draw.line(surf, outline, (4, 9), (12, 3), 1)
+                pygame.draw.line(surf, steel, (12, 3), (13, 4), 1)
+                pygame.draw.line(surf, outline, (12, 3), (13, 4), 1)
+                return surf
+            if tool == "saw":
+                pygame.draw.rect(surf, handle, pygame.Rect(3, 7, 4, 4), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 7, 4, 4), 1, border_radius=2)
+                pygame.draw.rect(surf, steel, pygame.Rect(6, 4, 8, 4), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(6, 4, 8, 4), 1, border_radius=1)
+                for xx in range(7, 14, 2):
+                    surf.set_at((xx, 8), outline)
+                return surf
+            return make_box(body=body, band=HardcoreSurvivalState._rgb_shift(body, 45, 45, 45))
+
+        def make_furniture(*, fkind: str, variant: str) -> pygame.Surface:
+            surf = pygame.Surface((16, 16), pygame.SRCALPHA)
+            col = base_col
+            if variant == "old":
+                col = HardcoreSurvivalState._rgb_shift(col, -25, -25, -25)
+            elif variant == "new":
+                col = HardcoreSurvivalState._rgb_shift(col, 20, 20, 20)
+            elif variant == "broken":
+                col = HardcoreSurvivalState._rgb_shift(col, -10, -10, -10)
+            col2 = HardcoreSurvivalState._rgb_shift(col, -30, -30, -30)
+            hi = HardcoreSurvivalState._rgb_shift(col, 25, 25, 25)
+            steel = (220, 220, 230)
+            if fkind == "chair":
+                pygame.draw.rect(surf, col, pygame.Rect(5, 6, 6, 6), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(5, 6, 6, 6), 1, border_radius=2)
+                pygame.draw.rect(surf, col2, pygame.Rect(5, 4, 6, 3), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(5, 4, 6, 3), 1, border_radius=1)
+            elif fkind == "table":
+                pygame.draw.rect(surf, col, pygame.Rect(3, 5, 10, 4), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 5, 10, 4), 1, border_radius=2)
+                for xx in (5, 11):
+                    pygame.draw.line(surf, col2, (xx, 9), (xx, 14), 1)
+            elif fkind == "sofa":
+                pygame.draw.rect(surf, col, pygame.Rect(3, 7, 10, 6), border_radius=3)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 7, 10, 6), 1, border_radius=3)
+                pygame.draw.rect(surf, hi, pygame.Rect(4, 8, 8, 2), border_radius=1)
+            elif fkind == "bed":
+                pygame.draw.rect(surf, col, pygame.Rect(3, 6, 10, 7), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 6, 10, 7), 1, border_radius=2)
+                pygame.draw.rect(surf, (240, 240, 240), pygame.Rect(4, 7, 4, 2), border_radius=1)
+                pygame.draw.line(surf, col2, (4, 12), (12, 12), 1)
+            elif fkind in ("cabinet", "wardrobe", "fridge"):
+                pygame.draw.rect(surf, col, pygame.Rect(4, 3, 8, 11), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(4, 3, 8, 11), 1, border_radius=2)
+                pygame.draw.line(surf, col2, (8, 4), (8, 13), 1)
+                surf.set_at((7, 8), steel)
+                surf.set_at((9, 8), steel)
+            else:
+                pygame.draw.rect(surf, col, pygame.Rect(4, 4, 8, 10), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(4, 4, 8, 10), 1, border_radius=2)
+            pygame.draw.line(surf, hi, (5, 5), (10, 5), 1)
+            if variant == "broken":
+                pygame.draw.line(surf, outline, (5, 11), (11, 7), 1)
+            return surf
+
+        # choose by kind/id
+        if kind == "key":
+            return make_key(metal=HardcoreSurvivalState._rgb_lerp((220, 220, 240), base_col, 0.4))
+        if kind == "fuel":
+            return make_gas_can(body=HardcoreSurvivalState._rgb_lerp((220, 80, 70), base_col, 0.35))
+        if kind == "ammo":
+            box = HardcoreSurvivalState._rgb_lerp((120, 120, 132), base_col, 0.55)
+            brass = (230, 220, 140)
+            surf = pygame.Surface((16, 12), pygame.SRCALPHA)
+            pygame.draw.rect(surf, box, pygame.Rect(2, 4, 12, 6), border_radius=2)
+            pygame.draw.rect(surf, outline, pygame.Rect(2, 4, 12, 6), 1, border_radius=2)
+            pygame.draw.rect(surf, HardcoreSurvivalState._rgb_shift(box, -28, -28, -28), pygame.Rect(2, 8, 12, 2), border_radius=1)
+            for i in range(3):
+                xx = 4 + i * 3
+                pygame.draw.rect(surf, brass, pygame.Rect(xx, 2, 2, 4))
+                pygame.draw.rect(surf, outline, pygame.Rect(xx, 2, 2, 4), 1)
+            return surf
+        if kind == "gun":
+            # keep guns consistent with the existing pistol sprite style
+            return HardcoreSurvivalState._make_item_sprite_pistol()
+        if kind == "med":
+            iid = item_id
+            if "mask" in iid:
+                surf = pygame.Surface((14, 10), pygame.SRCALPHA)
+                cloth = (235, 235, 242)
+                cloth2 = (200, 200, 210)
+                pygame.draw.rect(surf, cloth, pygame.Rect(4, 3, 6, 4), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(4, 3, 6, 4), 1, border_radius=2)
+                pygame.draw.line(surf, cloth2, (2, 4), (4, 4), 1)
+                pygame.draw.line(surf, cloth2, (10, 4), (12, 4), 1)
+                pygame.draw.line(surf, cloth2, (2, 6), (4, 6), 1)
+                pygame.draw.line(surf, cloth2, (10, 6), (12, 6), 1)
+                return surf
+            if "gloves" in iid:
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                glove = (235, 235, 242)
+                glove2 = (200, 200, 210)
+                pygame.draw.rect(surf, glove, pygame.Rect(3, 4, 4, 6), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 4, 4, 6), 1, border_radius=2)
+                pygame.draw.rect(surf, glove, pygame.Rect(7, 3, 4, 7), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(7, 3, 4, 7), 1, border_radius=2)
+                pygame.draw.line(surf, glove2, (4, 9), (6, 9), 1)
+                pygame.draw.line(surf, glove2, (8, 9), (10, 9), 1)
+                return surf
+            if "syringe" in iid:
+                surf = pygame.Surface((16, 10), pygame.SRCALPHA)
+                steel = (230, 230, 236)
+                pygame.draw.rect(surf, steel, pygame.Rect(3, 4, 9, 2))
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 4, 9, 2), 1)
+                pygame.draw.line(surf, outline, (12, 5), (15, 5), 1)
+                pygame.draw.line(surf, steel, (2, 3), (2, 7), 1)
+                pygame.draw.line(surf, outline, (2, 3), (2, 7), 1)
+                return surf
+            return make_pills(body=HardcoreSurvivalState._rgb_lerp((230, 230, 240), base_col, 0.35))
+        if kind == "drink":
+            parts = item_id.split("_")
+            base = parts[1] if len(parts) >= 3 and parts[0] == "drink" else item_id
+            cap = (230, 230, 236)
+            if base in ("milk", "soymilk", "cocoa", "milk_choco"):
+                body = HardcoreSurvivalState._rgb_lerp((240, 240, 240), base_col, 0.35)
+                return make_carton(body=body, band=accent)
+            if base in ("beer", "wine"):
+                liquid = HardcoreSurvivalState._rgb_lerp(base_col, (110, 80, 60) if base == "beer" else (150, 70, 90), 0.35)
+                return make_bottle(cap=cap, liquid=liquid, label=accent)
+            if base in ("soda", "energy"):
+                return make_can(label=accent)
+            return make_bottle(cap=cap, liquid=base_col, label=accent)
+        if kind == "food":
+            parts = item_id.split("_")
+            base = parts[1] if len(parts) >= 3 and parts[0] == "food" else item_id
+            if base in ("tuna", "beans", "corn", "fruitcan", "soup") or "can" in base:
+                return make_can(label=accent)
+            if base in ("chips", "jerky", "candy", "chocolate", "nuts", "driedfruit", "seaweed"):
+                return make_bag(body=base_col, band=accent)
+            if base in ("cereal", "crackers", "mre", "mealbox", "biscuit"):
+                return make_box(body=base_col, band=accent)
+            if base in ("riceball",):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                rice = (240, 240, 240)
+                wrap = accent2
+                pygame.draw.polygon(surf, rice, [(7, 2), (12, 11), (2, 11)])
+                pygame.draw.polygon(surf, outline, [(7, 2), (12, 11), (2, 11)], 1)
+                pygame.draw.rect(surf, wrap, pygame.Rect(6, 7, 3, 3), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(6, 7, 3, 3), 1, border_radius=1)
+                return surf
+            if base in ("sausage",):
+                surf = pygame.Surface((14, 10), pygame.SRCALPHA)
+                meat = HardcoreSurvivalState._rgb_lerp((200, 120, 120), base_col, 0.45)
+                meat2 = HardcoreSurvivalState._rgb_shift(meat, -30, -30, -30)
+                pygame.draw.rect(surf, meat, pygame.Rect(2, 4, 10, 3), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(2, 4, 10, 3), 1, border_radius=2)
+                pygame.draw.line(surf, meat2, (3, 6), (10, 6), 1)
+                return surf
+            if base in ("noodle",):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                cup = HardcoreSurvivalState._rgb_lerp((240, 240, 240), base_col, 0.35)
+                cup2 = HardcoreSurvivalState._rgb_shift(cup, -30, -30, -30)
+                pygame.draw.polygon(surf, cup, [(4, 3), (10, 3), (11, 11), (3, 11)])
+                pygame.draw.polygon(surf, outline, [(4, 3), (10, 3), (11, 11), (3, 11)], 1)
+                pygame.draw.line(surf, cup2, (4, 10), (10, 10), 1)
+                pygame.draw.rect(surf, accent, pygame.Rect(5, 6, 5, 2), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(5, 6, 5, 2), 1, border_radius=1)
+                return surf
+            return make_box(body=base_col, band=accent)
+        if kind == "furniture":
+            parts = item_id.split("_")
+            fkind = parts[1] if len(parts) >= 3 and parts[0] == "furn" else "cabinet"
+            variant = parts[2] if len(parts) >= 3 and parts[0] == "furn" else "old"
+            return make_furniture(fkind=fkind, variant=variant)
+        if kind in ("mat", "tool"):
+            iid = item_id
+            if iid in ("plank",):
+                return HardcoreSurvivalState._make_item_sprite_wood()
+            if iid in ("sheet_metal", "scrap"):
+                return HardcoreSurvivalState._make_item_sprite_scrap()
+            if iid in ("flashlight", "knife", "hammer", "saw", "wrench", "screwdriver", "crowbar"):
+                return make_simple_tool(tool=iid if iid != "knife" else "knife", body=base_col)
+            if iid in ("rope", "wire"):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                coil = HardcoreSurvivalState._rgb_lerp((150, 110, 70), base_col, 0.35) if iid == "rope" else (180, 180, 192)
+                coil2 = HardcoreSurvivalState._rgb_shift(coil, -30, -30, -30)
+                for r in (4, 3, 2):
+                    pygame.draw.circle(surf, coil, (7, 6), r, 1)
+                pygame.draw.circle(surf, coil2, (7, 6), 4, 1)
+                return surf
+            if iid == "duct_tape":
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                tape = HardcoreSurvivalState._rgb_lerp((180, 180, 192), base_col, 0.35)
+                tape2 = HardcoreSurvivalState._rgb_shift(tape, -35, -35, -35)
+                pygame.draw.circle(surf, tape, (7, 6), 4)
+                pygame.draw.circle(surf, outline, (7, 6), 4, 1)
+                pygame.draw.circle(surf, tape2, (7, 6), 2)
+                pygame.draw.circle(surf, outline, (7, 6), 2, 1)
+                return surf
+            if iid in ("key_rv", "key_moto"):
+                return make_key(metal=(220, 220, 240))
+            if iid == "gas_can":
+                return make_gas_can(body=HardcoreSurvivalState._rgb_lerp((220, 80, 70), base_col, 0.35))
+            if iid == "battery":
+                surf = pygame.Surface((12, 12), pygame.SRCALPHA)
+                body = (90, 90, 104)
+                top = (230, 230, 236)
+                pygame.draw.rect(surf, body, pygame.Rect(3, 3, 6, 7), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 3, 6, 7), 1, border_radius=2)
+                pygame.draw.rect(surf, top, pygame.Rect(5, 2, 2, 2), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(5, 2, 2, 2), 1, border_radius=1)
+                return surf
+            if iid in ("paper", "book", "map"):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                page = (235, 235, 242)
+                page2 = (200, 200, 210)
+                pygame.draw.rect(surf, page, pygame.Rect(3, 3, 8, 7), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 3, 8, 7), 1, border_radius=1)
+                if iid == "book":
+                    cover = HardcoreSurvivalState._rgb_lerp((120, 110, 100), base_col, 0.45)
+                    pygame.draw.rect(surf, cover, pygame.Rect(2, 3, 4, 7), border_radius=1)
+                    pygame.draw.rect(surf, outline, pygame.Rect(2, 3, 4, 7), 1, border_radius=1)
+                elif iid == "map":
+                    pygame.draw.line(surf, page2, (4, 4), (10, 5), 1)
+                    pygame.draw.line(surf, page2, (4, 6), (10, 7), 1)
+                else:
+                    for yy in (5, 7, 9):
+                        pygame.draw.line(surf, page2, (4, yy), (10, yy), 1)
+                return surf
+            # fallback
+            return make_box(body=base_col, band=accent)
+        return make_box(body=base_col, band=accent)
+
+    def _ensure_item_visuals(self, item_id: str) -> None:
+        item_id = str(item_id or "")
+        if not item_id:
+            return
+        if item_id in self._ITEM_SPRITES and item_id in self._ITEM_SPRITES_WORLD and item_id in self._ITEM_ICONS:
+            return
+
+        spr = self._ITEM_SPRITES.get(item_id)
+        if spr is None:
+            idef = self._ITEMS.get(item_id)
+            try:
+                spr = self._make_item_sprite_auto(item_id, idef)
+            except Exception:
+                spr = pygame.Surface((12, 12), pygame.SRCALPHA)
+                pygame.draw.rect(spr, (60, 60, 72), pygame.Rect(2, 2, 8, 8), border_radius=2)
+                pygame.draw.rect(spr, (10, 10, 12), pygame.Rect(2, 2, 8, 8), 1, border_radius=2)
+            self._ITEM_SPRITES[item_id] = spr
+
+        if item_id not in self._ITEM_SPRITES_WORLD:
+            try:
+                self._ITEM_SPRITES_WORLD[item_id] = self._make_item_world_sprite(spr, max_px=11)
+            except Exception:
+                self._ITEM_SPRITES_WORLD[item_id] = spr
+
+        if item_id not in self._ITEM_ICONS:
+            try:
+                self._ITEM_ICONS[item_id] = self._make_item_icon_from_sprite(spr)
+            except Exception:
+                pass
+
     @dataclass
     class _ItemStack:
         item_id: str
@@ -18849,6 +19333,7 @@ class HardcoreSurvivalState(State):
                     sy = iround(float(it.pos.y) - float(cam_y))
                     if sx < -8 or sx > INTERNAL_W + 8 or sy < -8 or sy > INTERNAL_H + 8:
                         continue
+                    self._ensure_item_visuals(it.item_id)
                     spr = self._ITEM_SPRITES_WORLD.get(it.item_id) or self._ITEM_SPRITES.get(it.item_id)
                     if spr is not None:
                         rect = spr.get_rect()
@@ -19734,6 +20219,9 @@ class HardcoreSurvivalState(State):
         inside_mh: tuple[int, int, int, int] | None = None
         inside_mh_floor = 1
         inside_mh_floors = 1
+        inside_building: tuple[int, int, int, int] | None = None
+        inside_building_style = 0
+        inside_building_floors = 1
         try:
             ptx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
             pty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
@@ -19759,10 +20247,26 @@ class HardcoreSurvivalState(State):
                             inside_mh_floors = int(min(int(inside_mh_floors), int(max_floors)))
                             inside_mh_floor = int(clamp(int(getattr(mh, "cur_floor", 1)), 1, int(inside_mh_floors)))
                             break
+
+                    # Fallback for any other multi-floor building footprint (e.g., non-registered 2F houses).
+                    for b in getattr(pchunk, "buildings", []):
+                        btx0, bty0, bw, bh = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                        if int(btx0) <= int(ptx) < int(btx0) + int(bw) and int(bty0) <= int(pty) < int(bty0) + int(bh):
+                            roof_kind = int(b[4]) if len(b) > 4 else 0
+                            b_style, _bvar = self._building_roof_style_var(int(roof_kind))
+                            b_floors = int(b[5]) if len(b) > 5 else 1
+                            if int(b_style) in (1, 6) and int(b_floors) > 1:
+                                inside_building = (int(btx0), int(bty0), int(bw), int(bh))
+                                inside_building_style = int(b_style)
+                                inside_building_floors = int(min(int(b_floors), int(max_floors)))
+                            break
         except Exception:
             inside_mh = None
             inside_mh_floor = 1
             inside_mh_floors = 1
+            inside_building = None
+            inside_building_style = 0
+            inside_building_floors = 1
  
         for cy in range(start_cy, end_cy + 1):
             for cx in range(start_cx, end_cx + 1):
@@ -19814,6 +20318,11 @@ class HardcoreSurvivalState(State):
                         if (int(itx0), int(ity0), int(iw), int(ih)) == (int(tx0), int(ty0), int(w), int(h)):
                             slice_floor = int(inside_mh_floor)
                             slice_floors = int(inside_mh_floors)
+                    if slice_floor is None and inside_building is not None and int(style) in (1, 6) and int(inside_building_floors) > 1:
+                        btx0, bty0, bw, bh = inside_building
+                        if (int(btx0), int(bty0), int(bw), int(bh)) == (int(tx0), int(ty0), int(w), int(h)):
+                            slice_floor = 1
+                            slice_floors = int(inside_building_floors)
 
                     door_px: pygame.Rect | None = None
                     if door_tiles and door_side == "S":
@@ -19846,16 +20355,22 @@ class HardcoreSurvivalState(State):
                         floor_h = int(floor_slice_h)
                         floors_total = int(max(1, int(slice_floors)))
                         floor_i = int(clamp(int(slice_floor), 1, int(floors_total)))
-                        # Show this floor + all floors below it.
-                        south_h = int(max(1, int(floor_h) * int(floor_i)))
-                        south_y = int(ground_y - int(south_h))
+                        if int(style) == 1:
+                            # Multi-floor house: only show the current floor's facade strip.
+                            south_h = int(max(1, int(floor_h)))
+                            south_y = int(ground_y - int(floor_h) * int(floor_i))
+                        else:
+                            # High-rise: show this floor + all floors below it.
+                            south_h = int(max(1, int(floor_h) * int(floor_i)))
+                            south_y = int(ground_y - int(south_h))
                     south = pygame.Rect(int(bx), int(south_y), int(bw), int(south_h))
                     pygame.draw.rect(surface, front, south)
                     pygame.draw.rect(surface, outline, south, 1)
                     # Ground shadow under the facade.
                     shadow_h = int(clamp(2 + int(face_h) // 10, 2, 5))
-                    sh = pygame.Rect(int(south.x + 2), int(south.bottom), int(south.w - 2), int(shadow_h))
-                    pygame.draw.rect(surface, shadow, sh)
+                    if int(south.bottom) == int(ground_y):
+                        sh = pygame.Rect(int(south.x + 2), int(south.bottom), int(south.w - 2), int(shadow_h))
+                        pygame.draw.rect(surface, shadow, sh)
                     # Lower-half shade for depth (independent of "building height").
                     shade_h = int(max(2, int(south.h) // 2))
                     shade = self._tint(front, add=(-18, -18, -18))
@@ -19995,9 +20510,8 @@ class HardcoreSurvivalState(State):
                         # Residential/high-rise windows.
                         detail_floors = int(floors)
                         if int(style) == 1 and slice_floor is not None and int(slice_floors) > 1:
-                            # When inside a multi-floor house we slice the facade height.
-                            # Match the window pattern to the visible floors (this floor + below).
-                            detail_floors = int(max(1, int(slice_floor)))
+                            # When inside a multi-floor house we slice to a single floor strip.
+                            detail_floors = 1
                         win = self._tint(trim, add=(-40, -40, -46))
                         frame = outline
                         start_x = int(south.x + 6 + (var % 4))
@@ -20510,6 +21024,7 @@ class HardcoreSurvivalState(State):
             pygame.draw.rect(surface, border, r, 2, border_radius=6)
             if st is None:
                 continue
+            self._ensure_item_visuals(st.item_id)
             img: pygame.Surface | None = None
             spr = self._ITEM_SPRITES.get(st.item_id)
             if spr is not None:
@@ -20719,6 +21234,7 @@ class HardcoreSurvivalState(State):
                 pygame.draw.rect(surface, border, r, 2, border_radius=6)
                 if st is None:
                     continue
+                self._ensure_item_visuals(st.item_id)
                 img: pygame.Surface | None = None
                 spr = self._ITEM_SPRITES.get(st.item_id)
                 if spr is not None:
@@ -20844,6 +21360,7 @@ class HardcoreSurvivalState(State):
                 pygame.draw.rect(surface, border, r, 2, border_radius=6)
                 if st is None:
                     continue
+                self._ensure_item_visuals(st.item_id)
                 img: pygame.Surface | None = None
                 spr = self._ITEM_SPRITES.get(st.item_id)
                 if spr is not None:
