@@ -16019,6 +16019,27 @@ class HardcoreSurvivalState(State):
                     r.move_ip(0, int(o))
             return r
 
+        def filter_hits_axis(hits: list[pygame.Rect], r: pygame.Rect, *, axis: str) -> list[pygame.Rect]:
+            axis = str(axis)
+            skin = int(clamp(int(self.TILE_SIZE) // 4, 1, 2))
+            kept: list[pygame.Rect] = []
+            for h in hits:
+                if not r.colliderect(h):
+                    continue
+                dx_l = int(h.left - r.right)
+                dx_r = int(h.right - r.left)
+                dy_u = int(h.top - r.bottom)
+                dy_d = int(h.bottom - r.top)
+                dx_pen = min(abs(dx_l), abs(dx_r))
+                dy_pen = min(abs(dy_u), abs(dy_d))
+                if axis == "x":
+                    if int(dx_pen) <= int(dy_pen) + int(skin):
+                        kept.append(h)
+                else:
+                    if int(dy_pen) <= int(dx_pen) + int(skin):
+                        kept.append(h)
+            return kept
+
         # If we ever end up slightly inside a wall (rounding edge-case), push out
         # in the shortest direction. This prevents large "snap" corrections later.
         cur = rect_at(float(p.x), float(p.y))
@@ -16039,14 +16060,17 @@ class HardcoreSurvivalState(State):
                 prev = rect_at(float(p.x), float(p.y))
                 p.x += float(dx)
                 rect = rect_at(float(p.x), float(p.y))
-                # Shrink slightly in the orthogonal axis to avoid 1px corner catches
-                # when sliding along walls (prevents right->left "卡住").
-                probe = pygame.Rect(rect)
-                if int(probe.height) > 2:
-                    probe.y += 1
-                    probe.height -= 2
-                hits = self._collide_rect_world(probe)
+                hits = self._collide_rect_world(rect)
                 if hits:
+                    hits_block = filter_hits_axis(hits, rect, axis="x")
+                    if not hits_block:
+                        rect2 = depenetrate_axis(rect, axis="y")
+                        if not self._collide_rect_world(rect2):
+                            rect = rect2
+                            p.y = float(rect.centery)
+                        p.x = float(rect.centerx)
+                        continue
+                    hits = hits_block
                     # Corner correction: when moving purely horizontally, a tiny Y nudge
                     # makes 1-tile corridors/doorways feel smooth instead of "pixel perfect".
                     corrected = False
@@ -16130,12 +16154,17 @@ class HardcoreSurvivalState(State):
                 prev = rect_at(float(p.x), float(p.y))
                 p.y += float(dy)
                 rect = rect_at(float(p.x), float(p.y))
-                probe = pygame.Rect(rect)
-                if int(probe.width) > 2:
-                    probe.x += 1
-                    probe.width -= 2
-                hits = self._collide_rect_world(probe)
+                hits = self._collide_rect_world(rect)
                 if hits:
+                    hits_block = filter_hits_axis(hits, rect, axis="y")
+                    if not hits_block:
+                        rect2 = depenetrate_axis(rect, axis="x")
+                        if not self._collide_rect_world(rect2):
+                            rect = rect2
+                            p.x = float(rect.centerx)
+                        p.y = float(rect.centery)
+                        continue
+                    hits = hits_block
                     corrected = False
                     depen_fixed = False
                     if abs(float(vel.x)) < 1e-6:
