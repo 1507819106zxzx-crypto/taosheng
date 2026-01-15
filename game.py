@@ -15983,6 +15983,42 @@ class HardcoreSurvivalState(State):
                 r.move_ip(int(ox), int(oy))
             return r
 
+        def depenetrate_axis(r: pygame.Rect, *, axis: str) -> pygame.Rect:
+            axis = str(axis)
+            r = pygame.Rect(r)
+            for _ in range(10):
+                hits = self._collide_rect_world(r)
+                if not hits:
+                    break
+                best: tuple[int, int] | None = None
+                for hit in hits:
+                    if not r.colliderect(hit):
+                        continue
+                    if axis == "x":
+                        dx_l = int(hit.left - r.right)
+                        dx_r = int(hit.right - r.left)
+                        for absd, ox in ((abs(dx_l), dx_l), (abs(dx_r), dx_r)):
+                            if absd <= 0:
+                                continue
+                            if best is None or absd < best[0]:
+                                best = (int(absd), int(ox))
+                    else:
+                        dy_u = int(hit.top - r.bottom)
+                        dy_d = int(hit.bottom - r.top)
+                        for absd, oy in ((abs(dy_u), dy_u), (abs(dy_d), dy_d)):
+                            if absd <= 0:
+                                continue
+                            if best is None or absd < best[0]:
+                                best = (int(absd), int(oy))
+                if best is None:
+                    break
+                _absd, o = best
+                if axis == "x":
+                    r.move_ip(int(o), 0)
+                else:
+                    r.move_ip(0, int(o))
+            return r
+
         # If we ever end up slightly inside a wall (rounding edge-case), push out
         # in the shortest direction. This prevents large "snap" corrections later.
         cur = rect_at(float(p.x), float(p.y))
@@ -16056,6 +16092,11 @@ class HardcoreSurvivalState(State):
                             else:
                                 rect = depenetrate(rect)
                                 depen_fixed = True
+                        if abs(float(vel.y)) < 1e-6 and self._collide_rect_world(rect):
+                            rect2 = depenetrate_axis(rect, axis="y")
+                            if rect2.topleft != rect.topleft:
+                                rect = rect2
+                                depen_fixed = True
                         # Important: do NOT depenetrate in Y here; otherwise you can
                         # get stuck when sliding along a wall while holding diagonal.
                         p.x = float(rect.centerx)
@@ -16116,10 +16157,21 @@ class HardcoreSurvivalState(State):
                         else:
                             rect = depenetrate(rect)
                             depen_fixed = True
+                    if abs(float(vel.x)) < 1e-6 and self._collide_rect_world(rect):
+                        rect2 = depenetrate_axis(rect, axis="x")
+                        if rect2.topleft != rect.topleft:
+                            rect = rect2
+                            depen_fixed = True
                     # Same idea as X: only clamp along Y to preserve wall sliding.
                     p.y = float(rect.centery)
                     if depen_fixed:
                         p.x = float(rect.centerx)
+
+            # Final safety: never return a penetrated position (prevents "贴墙卡住").
+            final = rect_at(float(p.x), float(p.y))
+            if self._collide_rect_world(final):
+                final = depenetrate(final)
+                p.update(float(final.centerx), float(final.centery))
 
         return p
 
