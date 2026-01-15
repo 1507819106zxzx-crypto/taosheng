@@ -16208,9 +16208,9 @@ class HardcoreSurvivalState(State):
                 rect = rect_at(float(p.x), float(p.y))
                 hits = self._collide_rect_world(rect)
                 if hits:
-                    nudged = False
                     # Corner correction: when moving purely horizontally, a tiny Y nudge
                     # makes 1-tile corridors/doorways feel smooth instead of "pixel perfect".
+                    corrected = False
                     if abs(float(vel.y)) < 1e-6:
                         prefer = 0
                         try:
@@ -16235,29 +16235,30 @@ class HardcoreSurvivalState(State):
                                 test.y += int(sy)
                                 if not self._collide_rect_world(test):
                                     rect = test
-                                    nudged = True
+                                    corrected = True
                                     break
-                            if nudged:
+                            if corrected:
                                 break
-                    if dx > 0.0:
-                        blocks = [int(r.left) for r in hits if int(prev.right) <= int(r.left)]
-                        if blocks:
-                            rect.right = int(min(blocks))
-                        else:
-                            if not nudged:
-                                rect = pygame.Rect(prev)
-                    else:
-                        blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
-                        if blocks:
-                            rect.left = int(max(blocks))
-                        else:
-                            if not nudged:
-                                rect = pygame.Rect(prev)
-                    # Important: do NOT depenetrate in Y here; otherwise you can
-                    # get stuck when sliding along a wall while holding diagonal.
-                    p.x = float(rect.centerx)
-                    if nudged:
+                    if corrected:
+                        # Accept the corrected position and skip the blocking clamp for X.
+                        p.x = float(rect.centerx)
                         p.y = float(rect.centery)
+                    else:
+                        if dx > 0.0:
+                            blocks = [int(r.left) for r in hits if int(prev.right) <= int(r.left)]
+                            if blocks:
+                                rect.right = int(min(blocks))
+                            else:
+                                rect = pygame.Rect(prev)
+                        else:
+                            blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
+                            if blocks:
+                                rect.left = int(max(blocks))
+                            else:
+                                rect = pygame.Rect(prev)
+                        # Important: do NOT depenetrate in Y here; otherwise you can
+                        # get stuck when sliding along a wall while holding diagonal.
+                        p.x = float(rect.centerx)
 
             if dy != 0.0:
                 prev = rect_at(float(p.x), float(p.y))
@@ -16265,7 +16266,7 @@ class HardcoreSurvivalState(State):
                 rect = rect_at(float(p.x), float(p.y))
                 hits = self._collide_rect_world(rect)
                 if hits:
-                    nudged = False
+                    corrected = False
                     if abs(float(vel.x)) < 1e-6:
                         prefer = 0
                         try:
@@ -16290,28 +16291,28 @@ class HardcoreSurvivalState(State):
                                 test.x += int(sx)
                                 if not self._collide_rect_world(test):
                                     rect = test
-                                    nudged = True
+                                    corrected = True
                                     break
-                            if nudged:
+                            if corrected:
                                 break
+                    if corrected:
+                        p.x = float(rect.centerx)
+                        p.y = float(rect.centery)
+                        continue
                     if dy > 0.0:
                         blocks = [int(r.top) for r in hits if int(prev.bottom) <= int(r.top)]
                         if blocks:
                             rect.bottom = int(min(blocks))
                         else:
-                            if not nudged:
-                                rect = pygame.Rect(prev)
+                            rect = pygame.Rect(prev)
                     else:
                         blocks = [int(r.bottom) for r in hits if int(prev.top) >= int(r.bottom)]
                         if blocks:
                             rect.top = int(max(blocks))
                         else:
-                            if not nudged:
-                                rect = pygame.Rect(prev)
+                            rect = pygame.Rect(prev)
                     # Same idea as X: only clamp along Y to preserve wall sliding.
                     p.y = float(rect.centery)
-                    if nudged:
-                        p.x = float(rect.centerx)
 
         return p
 
