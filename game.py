@@ -4715,14 +4715,14 @@ class HardcoreSurvivalState(State):
     _HR_INT_HOME_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWW",
         "WVV.................VVW",
-        "W..BBBBBB.W....SS.....W",
-        "W..BBBBBB.W...........W",
-        "W.........W..TTTT.....W",
+        "W..BBBBBB.W....SS.PPP.W",
+        "W..BBBBBB.W......CPPP.W",
+        "W.........W..TTTT.XXXXW",
         "W..SS......KKKKKF.....D",
-        "W.........W.CCCC.TTTT.W",
-        "W..SS.....W...........W",
-        "W.........W....SS.....W",
-        "W.....................W",
+        "W.........W.CCCC.WWWWWW",
+        "W..SS.....W.....WU,,RRW",
+        "W.........W......,O,RRW",
+        "W...............W,,,,,W",
         "WWWWWWWWWWWWWWWWWWWWWWW",
     ]
     _HR_INT_W = 23
@@ -11106,7 +11106,7 @@ class HardcoreSurvivalState(State):
 
     def _hr_int_solid_tile(self, ch: str) -> bool:
         ch = str(ch)[:1]
-        return ch not in (".", "D", "E", "B")
+        return ch not in (".", ",", "D", "E", "B")
 
     def _hr_int_move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
         # Match the collision/slide behavior of other interior scenes (house/school/RV).
@@ -11177,7 +11177,7 @@ class HardcoreSurvivalState(State):
             self.hr_edit_blocks = []
             return
 
-        movable = {"B", "S", "F", "K", "T", "C"}
+        movable = {"B", "S", "F", "K", "T", "C", "P", "X"}
         w = int(self._HR_INT_W)
         h = int(self._HR_INT_H)
         seen: set[tuple[int, int]] = set()
@@ -11317,7 +11317,7 @@ class HardcoreSurvivalState(State):
         map_y = 38
         map_rect = pygame.Rect(map_x, map_y, map_w, map_h)
 
-        movable = {"B", "S", "F", "K", "T", "C"}
+        movable = {"B", "S", "F", "K", "T", "C", "P", "X"}
 
         if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, "button", 0) == 1:
             if not map_rect.collidepoint(internal):
@@ -11876,6 +11876,9 @@ class HardcoreSurvivalState(State):
         drinks = pool("drink")
         meds = pool("med")
         mats = pool("mat")
+        tools = pool("tool")
+        ammo = pool("ammo")
+        guns = pool("gun")
 
         if drinks:
             for _ in range(int(rng.randint(1, 3))):
@@ -11893,6 +11896,14 @@ class HardcoreSurvivalState(State):
         if mats and rng.random() < 0.55:
             for _ in range(int(rng.randint(0, 2))):
                 cab.add(rng.choice(mats), int(rng.randint(2, 6)), self._ITEMS)
+        if tools and rng.random() < 0.50:
+            for _ in range(int(rng.randint(0, 2))):
+                cab.add(rng.choice(tools), 1, self._ITEMS)
+        if ammo and rng.random() < 0.45:
+            for _ in range(int(rng.randint(0, 2))):
+                cab.add(rng.choice(ammo), int(rng.randint(10, 36)), self._ITEMS)
+        if guns and rng.random() < 0.12:
+            cab.add(rng.choice(guns), 1, self._ITEMS)
 
     def _hr_enter_home(self) -> None:
         self.hr_hall_pos_before_home = pygame.Vector2(self.hr_int_pos)
@@ -14157,6 +14168,9 @@ class HardcoreSurvivalState(State):
         k_done: set[tuple[int, int]] = set()
         t_done: set[tuple[int, int]] = set()
         c_done: set[tuple[int, int]] = set()
+        p_done: set[tuple[int, int]] = set()
+        x_done: set[tuple[int, int]] = set()
+        r_done: set[tuple[int, int]] = set()
 
         layout = getattr(self, "hr_layout", [])
         for y in range(int(self._HR_INT_H)):
@@ -14200,6 +14214,16 @@ class HardcoreSurvivalState(State):
                         if ch == "H":
                             pygame.draw.rect(surface, (120, 200, 140), pygame.Rect(dr.x + 2, dr.y + 2, dr.w - 4, 3), border_radius=1)
                     continue
+
+                if ch in (",", "O", "U", "R"):
+                    # Bathroom tile floor overlay (on top of the base floor texture).
+                    tile_a = (86, 88, 96)
+                    tile_b = (78, 80, 88)
+                    grout = (28, 28, 34)
+                    col = tile_a if ((int(x) + int(y)) % 2 == 0) else tile_b
+                    surface.fill(col, r)
+                    surface.fill(grout, pygame.Rect(r.x, r.y, r.w, 1))
+                    surface.fill(grout, pygame.Rect(r.x, r.y, 1, r.h))
 
                 # Objects over the floor texture.
                 if ch == "E":
@@ -14697,6 +14721,201 @@ class HardcoreSurvivalState(State):
                             pygame.draw.rect(surface, outline, leg, 1)
                     continue
 
+                if ch == "X":
+                    if (x, y) in x_done:
+                        continue
+                    bw = 1
+                    while self._hr_int_char_at(int(x) + int(bw), int(y)) == "X":
+                        bw += 1
+                    bh = 1
+                    while True:
+                        ny = int(y) + int(bh)
+                        if self._hr_int_char_at(int(x), int(ny)) != "X":
+                            break
+                        ok = True
+                        for dx in range(int(bw)):
+                            if self._hr_int_char_at(int(x) + int(dx), int(ny)) != "X":
+                                ok = False
+                                break
+                        if not ok:
+                            break
+                        bh += 1
+                    for dy in range(int(bh)):
+                        for dx in range(int(bw)):
+                            x_done.add((int(x) + int(dx), int(y) + int(dy)))
+                    br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
+                    obj = br.inflate(-6, -10)
+                    if obj.w <= 0 or obj.h <= 0:
+                        continue
+                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect(), border_radius=5)
+                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+
+                    stand_h = int(clamp(int(obj.h * 0.36), 6, 12))
+                    stand = pygame.Rect(int(obj.x + 2), int(obj.bottom - stand_h), int(obj.w - 4), int(stand_h))
+                    pygame.draw.rect(surface, wood2, stand, border_radius=4)
+                    pygame.draw.rect(surface, outline, stand, 1, border_radius=4)
+                    pygame.draw.rect(surface, self._tint(wood2, add=(18, 18, 18)), pygame.Rect(stand.x + 2, stand.y + 2, max(1, stand.w - 4), 3), border_radius=2)
+
+                    tv_w = int(clamp(int(obj.w * 0.72), 20, max(20, obj.w - 2)))
+                    tv_h = int(clamp(int(obj.h * 0.58), 12, 22))
+                    tv = pygame.Rect(0, 0, tv_w, tv_h)
+                    tv.midtop = (obj.centerx, obj.y + 1)
+                    frame = tv.inflate(4, 4)
+                    pygame.draw.rect(surface, (34, 36, 44), frame, border_radius=5)
+                    pygame.draw.rect(surface, outline, frame, 1, border_radius=5)
+                    screen = tv.inflate(-2, -2)
+                    pygame.draw.rect(surface, (14, 14, 18), screen, border_radius=4)
+                    pygame.draw.rect(surface, steel2, screen, 1, border_radius=4)
+                    glow = pygame.Rect(screen.x + 4, screen.y + 4, max(5, int(screen.w * 0.25)), max(4, int(screen.h * 0.22)))
+                    pygame.draw.rect(surface, (120, 200, 240), glow, border_radius=2)
+                    pygame.draw.line(surface, steel2, (screen.x + 2, screen.bottom - 3), (screen.right - 3, screen.bottom - 3), 1)
+                    # Game console / set-top box.
+                    box = pygame.Rect(int(stand.centerx - 10), int(stand.y + 3), 20, 6)
+                    pygame.draw.rect(surface, (26, 26, 32), box, border_radius=2)
+                    pygame.draw.rect(surface, outline, box, 1, border_radius=2)
+                    pygame.draw.circle(surface, (120, 200, 140), (box.right - 4, box.centery), 1)
+                    continue
+
+                if ch == "P":
+                    if (x, y) in p_done:
+                        continue
+                    bw = 1
+                    while self._hr_int_char_at(int(x) + int(bw), int(y)) == "P":
+                        bw += 1
+                    bh = 1
+                    while True:
+                        ny = int(y) + int(bh)
+                        if self._hr_int_char_at(int(x), int(ny)) != "P":
+                            break
+                        ok = True
+                        for dx in range(int(bw)):
+                            if self._hr_int_char_at(int(x) + int(dx), int(ny)) != "P":
+                                ok = False
+                                break
+                        if not ok:
+                            break
+                        bh += 1
+                    for dy in range(int(bh)):
+                        for dx in range(int(bw)):
+                            p_done.add((int(x) + int(dx), int(y) + int(dy)))
+                    br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
+                    obj = br.inflate(-6, -10)
+                    if obj.w <= 0 or obj.h <= 0:
+                        continue
+                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=5)
+                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+
+                    top_h = int(clamp(int(obj.h * 0.36), 10, 18))
+                    top = pygame.Rect(int(obj.x), int(obj.y), int(obj.w), int(top_h))
+                    front = pygame.Rect(int(obj.x), int(obj.y + top_h - 1), int(obj.w), int(obj.h - (top_h - 1)))
+                    desk_top = self._tint(wood, add=(10, 8, 6))
+                    desk_front = self._tint(wood2, add=(6, 4, 2))
+                    pygame.draw.rect(surface, desk_front, front, border_radius=6)
+                    pygame.draw.rect(surface, outline, front, 1, border_radius=6)
+                    pygame.draw.rect(surface, desk_top, top, border_radius=6)
+                    pygame.draw.rect(surface, outline, top, 1, border_radius=6)
+                    pygame.draw.line(surface, self._tint(desk_top, add=(26, 26, 26)), (top.x + 2, top.y + 1), (top.right - 3, top.y + 1), 1)
+
+                    # Monitor + keyboard.
+                    mon_w = int(clamp(int(top.w * 0.42), 14, 30))
+                    mon_h = int(clamp(int(top.h * 0.70), 10, 16))
+                    mon = pygame.Rect(0, 0, mon_w, mon_h)
+                    mon.center = (int(top.centerx - top.w * 0.12), int(top.centery + 1))
+                    pygame.draw.rect(surface, (32, 34, 40), mon, border_radius=3)
+                    pygame.draw.rect(surface, outline, mon, 1, border_radius=3)
+                    scr = mon.inflate(-3, -3)
+                    pygame.draw.rect(surface, (14, 14, 18), scr, border_radius=2)
+                    pygame.draw.rect(surface, (120, 200, 240), pygame.Rect(scr.x + 2, scr.y + 2, max(3, scr.w // 3), max(3, scr.h // 3)), border_radius=2)
+                    kb = pygame.Rect(int(mon.right + 3), int(top.bottom - 6), max(12, int(top.w * 0.30)), 4)
+                    pygame.draw.rect(surface, (36, 36, 44), kb, border_radius=2)
+                    pygame.draw.rect(surface, outline, kb, 1, border_radius=2)
+
+                    # PC tower.
+                    tower = pygame.Rect(int(top.right - 10), int(front.y + 4), 8, max(10, int(front.h - 8)))
+                    pygame.draw.rect(surface, (28, 28, 34), tower, border_radius=2)
+                    pygame.draw.rect(surface, outline, tower, 1, border_radius=2)
+                    pygame.draw.circle(surface, (120, 200, 140), (tower.centerx, tower.y + 5), 1)
+                    continue
+
+                if ch == "R":
+                    if (x, y) in r_done:
+                        continue
+                    bw = 1
+                    while self._hr_int_char_at(int(x) + int(bw), int(y)) == "R":
+                        bw += 1
+                    bh = 1
+                    while True:
+                        ny = int(y) + int(bh)
+                        if self._hr_int_char_at(int(x), int(ny)) != "R":
+                            break
+                        ok = True
+                        for dx in range(int(bw)):
+                            if self._hr_int_char_at(int(x) + int(dx), int(ny)) != "R":
+                                ok = False
+                                break
+                        if not ok:
+                            break
+                        bh += 1
+                    for dy in range(int(bh)):
+                        for dx in range(int(bw)):
+                            r_done.add((int(x) + int(dx), int(y) + int(dy)))
+                    br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
+                    obj = br.inflate(-6, -10)
+                    if obj.w <= 0 or obj.h <= 0:
+                        continue
+                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect(), border_radius=6)
+                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+
+                    tray = obj.inflate(-2, -2)
+                    tray_col = (214, 216, 222)
+                    tray_hi = (232, 232, 238)
+                    pygame.draw.rect(surface, tray_col, tray, border_radius=6)
+                    pygame.draw.rect(surface, outline, tray, 1, border_radius=6)
+                    pygame.draw.rect(surface, tray_hi, pygame.Rect(tray.x + 2, tray.y + 2, tray.w - 4, 3), border_radius=3)
+                    drain = pygame.Rect(tray.centerx + 4, tray.centery + 3, 4, 4)
+                    pygame.draw.ellipse(surface, (40, 40, 48), drain)
+                    pygame.draw.ellipse(surface, outline, drain, 1)
+
+                    glass = tray.inflate(-6, -10)
+                    if glass.w > 6 and glass.h > 6:
+                        gs = pygame.Surface((glass.w, glass.h), pygame.SRCALPHA)
+                        gs.fill((90, 140, 190, 55))
+                        pygame.draw.rect(gs, (210, 220, 235, 80), gs.get_rect(), 1, border_radius=4)
+                        surface.blit(gs, glass.topleft)
+                        pygame.draw.line(surface, outline, (glass.centerx, glass.y + 2), (glass.centerx, glass.bottom - 3), 1)
+                    # Showerhead hint.
+                    pygame.draw.line(surface, steel2, (tray.x + 6, tray.y + 4), (tray.x + 12, tray.y + 4), 1)
+                    pygame.draw.circle(surface, steel2, (tray.x + 12, tray.y + 4), 2, 1)
+                    continue
+
+                if ch == "U":
+                    base = r.inflate(-6, -8)
+                    if base.w > 0 and base.h > 0:
+                        cab = pygame.Rect(base.x, base.y + 4, base.w, max(6, base.h - 4))
+                        pygame.draw.rect(surface, wood2, cab, border_radius=4)
+                        pygame.draw.rect(surface, outline, cab, 1, border_radius=4)
+                        basin = pygame.Rect(base.x + 2, base.y + 1, base.w - 4, 6)
+                        pygame.draw.rect(surface, (238, 238, 244), basin, border_radius=3)
+                        pygame.draw.rect(surface, outline, basin, 1, border_radius=3)
+                        pygame.draw.circle(surface, steel2, (basin.right - 4, basin.y + 2), 1)
+                        pygame.draw.line(surface, steel2, (basin.right - 4, basin.y + 2), (basin.right - 4, basin.y + 5), 1)
+                    continue
+
+                if ch == "O":
+                    bowl = pygame.Rect(r.x + 6, r.y + 9, r.w - 12, r.h - 10)
+                    tank = pygame.Rect(r.centerx - 5, r.y + 5, 10, 6)
+                    pygame.draw.ellipse(surface, (238, 238, 244), bowl)
+                    pygame.draw.ellipse(surface, outline, bowl, 1)
+                    pygame.draw.rect(surface, (238, 238, 244), tank, border_radius=2)
+                    pygame.draw.rect(surface, outline, tank, 1, border_radius=2)
+                    seat = bowl.inflate(-4, -4)
+                    pygame.draw.ellipse(surface, (210, 210, 218), seat)
+                    pygame.draw.ellipse(surface, outline, seat, 1)
+                    continue
+
                 if ch == "C":
                     if (x, y) in c_done:
                         continue
@@ -14901,7 +15120,7 @@ class HardcoreSurvivalState(State):
                     ix = int((mx - int(map_x)) // int(tile))
                     iy = int((my - int(map_y)) // int(tile))
                     ch = str(self._hr_int_char_at(ix, iy))[:1]
-                    movable = {"B", "S", "F", "K", "T", "C"}
+                    movable = {"B", "S", "F", "K", "T", "C", "P", "X"}
                     if ch in movable:
                         w = int(self._HR_INT_W)
                         h = int(self._HR_INT_H)
@@ -19394,6 +19613,13 @@ class HardcoreSurvivalState(State):
         if not self.inv_open and not bool(getattr(self, "rv_ui_open", False)) and not bool(getattr(self, "world_map_open", False)):
             mouse = self.app.screen_to_internal(pygame.mouse.get_pos())
 
+        # Proximity highlight: nearest pickup (keyboard-friendly).
+        near_item: HardcoreSurvivalState._WorldItem | None = None
+        near_spr: pygame.Surface | None = None
+        near_rect: pygame.Rect | None = None
+        if mouse is not None:
+            _nchunk, near_item = self._find_nearest_item(radius_px=20.0)
+
         start_cx = start_tx // self.CHUNK_SIZE
         end_cx = end_tx // self.CHUNK_SIZE
         start_cy = start_ty // self.CHUNK_SIZE
@@ -19433,12 +19659,26 @@ class HardcoreSurvivalState(State):
                             rect = icon.get_rect(center=(sx, sy))
                             surface.blit(icon, rect)
 
+                    if near_item is not None and it is near_item and rect is not None:
+                        near_spr = spr if spr is not None else None
+                        near_rect = rect.copy()
+
                     if mouse is not None and rect is not None:
                         mx, my = int(mouse[0]), int(mouse[1])
                         if rect.collidepoint(mx, my):
                             d2 = float((mx - sx) * (mx - sx) + (my - sy) * (my - sy))
                             if hovered is None or d2 < float(hovered[0]):
                                 hovered = (d2, it, spr if spr is not None else None, rect.copy(), int(sx), int(sy))
+
+        if near_item is not None and near_rect is not None:
+            hi_near = (120, 200, 140)
+            hovered_item = hovered[1] if hovered is not None else None
+            if hovered_item is not near_item:
+                if near_spr is not None:
+                    self._blit_sprite_outline(surface, near_spr, near_rect, color=hi_near)
+                else:
+                    pygame.draw.rect(surface, (0, 0, 0), near_rect.inflate(6, 6), 1)
+                    pygame.draw.rect(surface, hi_near, near_rect.inflate(4, 4), 1)
 
         if hovered is None or mouse is None:
             return
