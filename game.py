@@ -2199,6 +2199,7 @@ class HardcoreSurvivalState(State):
     T_STAIRS_UP = 21
     T_STAIRS_DOWN = 22
     T_ELEVATOR = 23
+    T_BARRICADE = 24
 
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
@@ -2248,9 +2249,10 @@ class HardcoreSurvivalState(State):
         T_SAND: _TileDef("sand", (192, 176, 112), solid=False, slow=0.92),
         T_BOARDWALK: _TileDef("boardwalk", (156, 116, 68), solid=False),
         T_MARSH: _TileDef("marsh", (56, 92, 62), solid=False, slow=0.78),
-        T_STAIRS_UP: _TileDef("stairs_up", (84, 76, 62), solid=False),
+        T_STAIRS_UP: _TileDef("stairs_up", (84, 76, 62), solid=False),   
         T_STAIRS_DOWN: _TileDef("stairs_down", (84, 76, 62), solid=False),
-        T_ELEVATOR: _TileDef("elevator", (82, 82, 96), solid=False),
+        T_ELEVATOR: _TileDef("elevator", (82, 82, 96), solid=False),     
+        T_BARRICADE: _TileDef("barricade", (96, 78, 52), solid=True),
     }
 
     _PLAYER_PAL = {
@@ -4679,27 +4681,27 @@ class HardcoreSurvivalState(State):
     ]
     _HR_INT_HALL_BASE: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWW",
+        "WWWWWWWWWWWAWWWWWWWWWWW",
         "WWWWWWWW.......WWWWWWWW",
         "WWWWWWWA.......AWWWWWWW",
         "WWWWWWWW.......WWWWWWWW",
-        "WWWWWWWA.......AWWWWWWW",
-        "WWWWWWWW.EE....WWWWWWWW",
-        "WWWWWWWA.EE....AWWWWWWW",
+        "WWWWWWWW...EE..WWWWWWWW",
+        "WWWWWWWW...EE..WWWWWWWW",
         "WWWWWWWW.......WWWWWWWW",
-        "WWWWWWWA.......AWWWWWWW",
+        "WWWWWWWW.......WWWWWWWW",
         "WWWWWWWW.......WWWWWWWW",
         "WWWWWWWWWWWWWWWWWWWWWWW",
     ]
     _HR_INT_HOME_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWW",
         "WVV.................VVW",
-        "W..BBBBBB....SS.......W",
-        "W..BBBBBB....SS...CCC.W",
-        "W...........TTTT..CCC.W",
-        "W..KKKKKF...TTTT......D",
-        "W..KKKKKF.......SS....W",
-        "W......CCCC.....SS....W",
-        "W....SS.........TTTT..W",
+        "W..BBBBBB.W....SS.....W",
+        "W..BBBBBB.W...........W",
+        "W.........W..TTTT.....W",
+        "W..SS......KKKKKF.....D",
+        "W.........W.CCCC.TTTT.W",
+        "W..SS.....W...........W",
+        "W.........W....SS.....W",
         "W.....................W",
         "WWWWWWWWWWWWWWWWWWWWWWW",
     ]
@@ -4708,8 +4710,13 @@ class HardcoreSurvivalState(State):
     _HR_INT_TILE_SIZE = 20
     _HR_INT_SPRITE_SCALE = 2
     HIGHRISE_MAX_FLOORS = 10
+    # Minimum playable interior height (in world tiles, excluding border walls)
+    # for high-rises so the lobby + apartments don't collapse into "only elevator".
+    HIGHRISE_MIN_FLOOR_TILES = 9
     _HR_INT_MAX_FLOORS_DEFAULT = HIGHRISE_MAX_FLOORS
-    _HR_INT_APT_DOORS: list[tuple[int, int]] = [(7, 2), (15, 2), (7, 4), (15, 4), (7, 6), (15, 6), (7, 8), (15, 8)]
+    _HR_INT_APT_DOORS: list[tuple[int, int]] = [(7, 3), (15, 3), (11, 1)]
+
+    GAS_CAN_REFUEL = 45.0
 
     # School (multi-floor) interior.
     _SCH_INT_LOBBY_LAYOUT: list[str] = [
@@ -4796,6 +4803,274 @@ class HardcoreSurvivalState(State):
         "scrap": _ItemDef("scrap", "废铁", stack=20, color=(150, 150, 160), kind="mat"),
         "wood": _ItemDef("wood", "木材", stack=20, color=(150, 110, 70), kind="mat"),
     }
+
+    # Procedurally-generated bulk item library (300+). Keep it compact by composing
+    # base types + variants, but still deterministic and readable.
+    def _bulk_item_seed(s: str) -> int:
+        n = 0
+        for ch in str(s):
+            n = (n * 131 + ord(ch)) & 0xFFFFFFFF
+        return int(n)
+
+    def _bulk_item_color(base: tuple[int, int, int], seed: int, *, spread: int = 22) -> tuple[int, int, int]:
+        seed = int(seed) & 0xFFFFFFFF
+        dv = int((seed >> 8) % 11) - 5  # -5..+5
+        dv2 = int((seed >> 16) % 9) - 4
+        s = int(max(6, int(spread)))
+        r = int(clamp(int(base[0]) + dv * (s // 6), 0, 255))
+        g = int(clamp(int(base[1]) + dv2 * (s // 7), 0, 255))
+        b = int(clamp(int(base[2]) + dv * (s // 8), 0, 255))
+        return (r, g, b)
+
+    _BULK_ITEMS: dict[str, _ItemDef] = {}
+
+    _FOOD_BASES: list[tuple[str, str]] = [
+        ("bread", "面包"),
+        ("biscuit", "饼干"),
+        ("chips", "薯片"),
+        ("jerky", "肉干"),
+        ("noodle", "泡面"),
+        ("riceball", "饭团"),
+        ("candy", "糖果"),
+        ("chocolate", "巧克力"),
+        ("nuts", "坚果"),
+        ("sausage", "香肠"),
+        ("cereal", "麦片"),
+        ("crackers", "苏打饼干"),
+        ("tuna", "金枪鱼"),
+        ("beans", "豆子"),
+        ("corn", "玉米"),
+        ("fruitcan", "水果罐头"),
+        ("soup", "汤罐头"),
+        ("mre", "军粮"),
+        ("driedfruit", "果干"),
+        ("pickles", "腌黄瓜"),
+        ("seaweed", "海苔"),
+        ("cheese", "奶酪"),
+        ("energybar", "能量棒"),
+        ("mealbox", "便当"),
+    ]
+    _FOOD_FLAVORS: list[tuple[str, str]] = [
+        ("plain", "原味"),
+        ("spicy", "香辣"),
+        ("tomato", "番茄"),
+        ("curry", "咖喱"),
+        ("garlic", "蒜香"),
+        ("bbq", "烧烤"),
+        ("pepper", "椒盐"),
+        ("sweet", "甜味"),
+    ]
+    for _bid, _bname in _FOOD_BASES:
+        for _fid, _fname in _FOOD_FLAVORS:
+            _iid = f"food_{_bid}_{_fid}"
+            if _iid in _ITEMS or _iid in _BULK_ITEMS:
+                continue
+            _seed = _bulk_item_seed(_iid)
+            _BULK_ITEMS[_iid] = _ItemDef(
+                _iid,
+                f"{_fname}{_bname}",
+                stack=6,
+                color=_bulk_item_color((210, 170, 90), _seed),
+                kind="food",
+            )
+
+    _DRINK_BASES: list[tuple[str, str]] = [
+        ("soda", "汽水"),
+        ("energy", "能量饮料"),
+        ("juice", "果汁"),
+        ("tea", "茶饮"),
+        ("coffee", "咖啡"),
+        ("milk", "牛奶"),
+        ("soymilk", "豆奶"),
+        ("beer", "啤酒"),
+        ("wine", "葡萄酒"),
+        ("sports", "运动饮料"),
+        ("sparkling", "苏打水"),
+        ("cocoa", "可可"),
+        ("lemonade", "柠檬水"),
+        ("water_mineral", "矿泉水"),
+        ("milk_choco", "巧克力奶"),
+    ]
+    _DRINK_FLAVORS: list[tuple[str, str]] = [
+        ("plain", "原味"),
+        ("lemon", "柠檬"),
+        ("orange", "橙"),
+        ("grape", "葡萄"),
+        ("peach", "桃"),
+        ("sugarfree", "无糖"),
+    ]
+    for _bid, _bname in _DRINK_BASES:
+        for _fid, _fname in _DRINK_FLAVORS:
+            _iid = f"drink_{_bid}_{_fid}"
+            if _iid in _ITEMS or _iid in _BULK_ITEMS:
+                continue
+            _seed = _bulk_item_seed(_iid)
+            _BULK_ITEMS[_iid] = _ItemDef(
+                _iid,
+                f"{_fname}{_bname}",
+                stack=3,
+                color=_bulk_item_color((120, 170, 230), _seed),
+                kind="drink",
+            )
+
+    _MEDS: list[tuple[str, str]] = [
+        ("med_painkillers", "止痛药"),
+        ("med_antibiotic", "抗生素"),
+        ("med_vitamin", "维生素"),
+        ("med_alcoholwipe", "酒精棉片"),
+        ("med_iodine", "碘伏"),
+        ("med_saline", "生理盐水"),
+        ("med_glucose", "葡萄糖"),
+        ("med_cough", "止咳药"),
+        ("med_allergy", "抗过敏药"),
+        ("med_burncream", "烫伤膏"),
+        ("med_antiseptic", "消毒水"),
+        ("med_sleep", "安眠药"),
+        ("med_bandage_roll", "纱布卷"),
+        ("med_splint", "夹板"),
+        ("med_ointment", "药膏"),
+        ("med_eye", "眼药水"),
+        ("med_mask", "口罩"),
+        ("med_gloves", "医用手套"),
+        ("med_syringe", "注射器"),
+        ("med_adrenaline", "肾上腺素"),
+        ("med_charcoal", "活性炭片"),
+        ("med_disinfect_wipes", "消毒湿巾"),
+        ("med_thermometer", "体温计"),
+        ("med_pain_patch", "止痛贴"),
+        ("med_antifungal", "抗真菌药"),
+        ("med_antidiarrheal", "止泻药"),
+        ("med_antacid", "胃药"),
+        ("med_suture", "缝合包"),
+        ("med_salt", "盐丸"),
+        ("med_medicinal_tea", "药草茶"),
+    ]
+    for _iid, _name in _MEDS:
+        if _iid in _ITEMS or _iid in _BULK_ITEMS:
+            continue
+        _seed = _bulk_item_seed(_iid)
+        _BULK_ITEMS[_iid] = _ItemDef(_iid, _name, stack=6, color=_bulk_item_color((230, 230, 240), _seed), kind="med")
+
+    _MATS: list[tuple[str, str]] = [
+        ("nails", "钉子"),
+        ("screws", "螺丝"),
+        ("duct_tape", "胶带"),
+        ("rope", "绳子"),
+        ("cloth", "布料"),
+        ("plastic", "塑料"),
+        ("glass", "玻璃"),
+        ("wire", "电线"),
+        ("battery", "电池"),
+        ("charcoal", "木炭"),
+        ("matches", "火柴"),
+        ("lighter", "打火机"),
+        ("soap", "肥皂"),
+        ("salt", "食盐"),
+        ("sugar", "白糖"),
+        ("spices", "香料"),
+        ("paper", "纸张"),
+        ("book", "书"),
+        ("map", "地图"),
+        ("flashlight", "手电筒"),
+        ("knife", "小刀"),
+        ("hammer", "锤子"),
+        ("saw", "锯子"),
+        ("wrench", "扳手"),
+        ("screwdriver", "螺丝刀"),
+        ("crowbar", "撬棍"),
+        ("backpack", "背包"),
+        ("phone", "手机"),
+        ("radio", "收音机"),
+        ("binoculars", "望远镜"),
+        ("can_opener", "开罐器"),
+        ("cigarettes", "香烟"),
+        ("lighter_fluid", "打火机油"),
+        ("bottle_empty", "空瓶"),
+        ("plank", "木板"),
+        ("sheet_metal", "铁皮"),
+        ("oil_filter", "机油滤芯"),
+        ("spark_plug", "火花塞"),
+        ("repair_kit", "修理包"),
+    ]
+    for _iid, _name in _MATS:
+        if _iid in _ITEMS or _iid in _BULK_ITEMS:
+            continue
+        _seed = _bulk_item_seed(_iid)
+        stack = (
+            1
+            if _iid
+            in (
+                "flashlight",
+                "knife",
+                "hammer",
+                "saw",
+                "wrench",
+                "screwdriver",
+                "crowbar",
+                "backpack",
+                "phone",
+                "radio",
+                "binoculars",
+                "can_opener",
+                "repair_kit",
+            )
+            else 20
+        )
+        kind = "tool" if stack == 1 else "mat"
+        _BULK_ITEMS[_iid] = _ItemDef(_iid, _name, stack=int(stack), color=_bulk_item_color((150, 150, 160), _seed), kind=kind)
+
+    _FURN_BASES: list[tuple[str, str]] = [
+        ("chair", "椅子"),
+        ("stool", "凳子"),
+        ("table", "桌子"),
+        ("sofa", "沙发"),
+        ("bed", "床"),
+        ("cabinet", "柜子"),
+        ("wardrobe", "衣柜"),
+        ("shelf", "书架"),
+        ("tv", "电视"),
+        ("lamp", "台灯"),
+        ("fan", "风扇"),
+        ("microwave", "微波炉"),
+        ("fridge", "冰箱"),
+        ("washer", "洗衣机"),
+        ("heater", "取暖器"),
+    ]
+    _FURN_VARIANTS: list[tuple[str, str]] = [
+        ("old", "旧"),
+        ("new", "新"),
+        ("broken", "破损"),
+        ("heavy", "加固"),
+    ]
+    for _bid, _bname in _FURN_BASES:
+        for _vid, _vname in _FURN_VARIANTS:
+            _iid = f"furn_{_bid}_{_vid}"
+            if _iid in _ITEMS or _iid in _BULK_ITEMS:
+                continue
+            _seed = _bulk_item_seed(_iid)
+            _BULK_ITEMS[_iid] = _ItemDef(
+                _iid,
+                f"{_vname}{_bname}",
+                stack=1,
+                color=_bulk_item_color((120, 110, 100), _seed),
+                kind="furniture",
+            )
+
+    # Keys / fuel (used by vehicle systems).
+    _EXTRA_CORE: list[tuple[str, str, str, tuple[int, int, int], int]] = [
+        ("key_rv", "房车钥匙", "key", (220, 220, 240), 1),
+        ("key_moto", "摩托钥匙", "key", (220, 220, 240), 1),
+        ("gas_can", "汽油桶", "fuel", (210, 170, 90), 1),
+    ]
+    for _iid, _name, _kind, _base_col, _stack in _EXTRA_CORE:
+        if _iid in _ITEMS or _iid in _BULK_ITEMS:
+            continue
+        _seed = _bulk_item_seed(_iid)
+        _BULK_ITEMS[_iid] = _ItemDef(_iid, _name, stack=int(_stack), color=_bulk_item_color(_base_col, _seed), kind=str(_kind))
+
+    for _iid, _idef in _BULK_ITEMS.items():
+        if _iid not in _ITEMS:
+            _ITEMS[_iid] = _idef
 
     _ICON_PAL = {
         "K": (18, 18, 22),
@@ -5696,6 +5971,15 @@ class HardcoreSurvivalState(State):
     _PUNCH_STAGGER_S = 0.18
     _PUNCH_STAGGER_SPEED = 95.0
 
+    _BODY_PART_NAMES: dict[str, str] = {
+        "head": "头部",
+        "torso": "躯干",
+        "left_arm": "左臂",
+        "right_arm": "右臂",
+        "left_leg": "左腿",
+        "right_leg": "右腿",
+    }
+
     @dataclass
     class _Zombie:
         pos: pygame.Vector2
@@ -5995,7 +6279,7 @@ class HardcoreSurvivalState(State):
                 return {}
 
             # One tower per inner chunk (7-8 total); keep the perimeter for the podium/skirt building.
-            tower_w = 12
+            tower_w = 13
             tower_h = 22
             inner_cx0 = int(cx0) + 1
             inner_cx1 = int(cx1) - 1
@@ -6024,7 +6308,7 @@ class HardcoreSurvivalState(State):
             plan: dict[tuple[int, int], list[tuple[int, int, int, int, int, int]]] = {}
             for cx, cy in picked:
                 # Alternate left/right so we don't overwrite the internal road stripe at x=14..17.
-                x0 = 2 if ((int(cx) + int(cy)) % 2 == 0) else 18
+                x0 = 1 if ((int(cx) + int(cy)) % 2 == 0) else 18
                 y0 = 2
                 base_tx = int(cx) * int(self.state.CHUNK_SIZE)
                 base_ty = int(cy) * int(self.state.CHUNK_SIZE)
@@ -6381,8 +6665,11 @@ class HardcoreSurvivalState(State):
             floors = int(max(2, min(int(floors), int(max_f))))
 
             cut_px = int(self.state._roof_cut_px(style=6, w=int(w), h=int(h), var=int(roof_var), floors=int(floors)))
-            cut_tiles = int(cut_px) // int(max(1, int(self.state.TILE_SIZE)))
+            ts = int(max(1, int(self.state.TILE_SIZE)))
+            cut_tiles = int(cut_px) // ts
             core_h = int(max(2, int(h) - 2 - int(cut_tiles)))
+            min_core_h = int(max(6, int(getattr(self.state, "HIGHRISE_MIN_FLOOR_TILES", 9))))
+            core_h = int(min(int(max(int(core_h), int(min_core_h))), int(max(2, int(h) - 2))))
             top_cut = int(max(0, (int(h) - 2) - int(core_h)))
             floor_y0 = int(y0 + 1 + int(top_cut))
 
@@ -6420,8 +6707,7 @@ class HardcoreSurvivalState(State):
             except Exception:
                 pass
 
-            # 1F interior: two-room residential layout (living + bedroom) with basic furniture.
-            # Keep a small empty "public space" around the elevator.
+            # 1F interior: elevator lobby + 2/3 apartments (never single-unit).
             try:
                 in_left = int(x0 + 1)
                 in_right = int(x0 + w - 2)
@@ -6430,69 +6716,149 @@ class HardcoreSurvivalState(State):
                 usable_h = int(in_bottom - in_top + 1)
                 usable_w = int(in_right - in_left + 1)
 
-                lobby_area: set[tuple[int, int]] = set()
-                ex = None
-                ey = None
-                for yy in range(int(in_top), int(in_bottom) + 1):
-                    for xx in range(int(in_left), int(in_right) + 1):
-                        if int(tiles[idx(int(xx), int(yy))]) == int(self.state.T_ELEVATOR):
-                            ex = int(xx)
-                            ey = int(yy)
+                if int(usable_h) >= 6 and int(usable_w) >= 7:
+                    # Find (or force) elevator position in the bottom lobby.
+                    ex = None
+                    ey = None
+                    for yy in range(int(in_top), int(in_bottom) + 1):
+                        for xx in range(int(in_left), int(in_right) + 1):
+                            if int(tiles[idx(int(xx), int(yy))]) == int(self.state.T_ELEVATOR):
+                                ex = int(xx)
+                                ey = int(yy)
+                                break
+                        if ex is not None:
                             break
-                    if ex is not None:
-                        break
-                if ex is not None and ey is not None:
+
+                    # Keep the lobby compact so 2-unit apartments don't feel cramped.
+                    lobby_h = int(clamp(int(round(float(usable_h) * 0.25)), 2, 4))
+                    min_apt_h = 4
+                    lobby_h = int(clamp(int(lobby_h), 2, max(2, int(usable_h) - int(min_apt_h))))
+                    sep_y = int(in_bottom - int(lobby_h))
+                    sep_y = int(clamp(int(sep_y), int(in_top + min_apt_h - 1), int(in_bottom - 2)))
+
+                    if ex is None or ey is None or int(ey) <= int(sep_y):
+                        # Clear any old elevator tiles and place one in the lobby.
+                        for yy in range(int(in_top), int(in_bottom) + 1):
+                            for xx in range(int(in_left), int(in_right) + 1):
+                                if int(tiles[idx(int(xx), int(yy))]) == int(self.state.T_ELEVATOR):
+                                    tiles[idx(int(xx), int(yy))] = int(self.state.T_FLOOR)
+                        ex = int(clamp(int(door_x0), int(in_left + 1), int(in_right - 1)))
+                        ey = int(clamp(int(sep_y + 1), int(sep_y + 1), int(in_bottom - 1)))
+                        if int(tiles[idx(int(ex), int(ey))]) != int(self.state.T_WALL):
+                            tiles[idx(int(ex), int(ey))] = int(self.state.T_ELEVATOR)
+
+                    lobby_area: set[tuple[int, int]] = set()
                     for dy in (-1, 0, 1):
                         for dx in (-1, 0, 1):
                             lobby_area.add((int(ex + dx), int(ey + dy)))
 
-                if int(usable_h) >= 6 and int(usable_w) >= 6:
-                    split_y = int(in_top + (int(usable_h) // 2))
-                    split_y = int(clamp(int(split_y), int(in_top + 2), int(in_bottom - 2)))
-
-                    pass_x0 = int(clamp(int(door_x0), int(in_left + 1), int(in_right - 2)))
-                    pass_xs = (int(pass_x0), int(pass_x0 + 1))
-
+                    # Horizontal separator: lobby (south) vs apartments (north).
                     for xx in range(int(in_left), int(in_right) + 1):
-                        if int(xx) in pass_xs:
-                            tiles[idx(int(xx), int(split_y))] = int(self.state.T_DOOR)
+                        if int(tiles[idx(int(xx), int(sep_y))]) == int(self.state.T_ELEVATOR):
                             continue
-                        if int(tiles[idx(int(xx), int(split_y))]) == int(self.state.T_ELEVATOR):
+                        tiles[idx(int(xx), int(sep_y))] = int(self.state.T_WALL)
+
+                    # Decide 2 vs 3 units by available width (never 1).
+                    # Only allow 3 units when each can still be reasonably wide.
+                    units = 3 if int(usable_w) >= 17 else 2
+                    min_unit_w = 5 if int(usable_w) >= 11 else 3
+                    if int(units) == 3:
+                        min_unit_w = 5
+                    unit_ranges: list[tuple[int, int]] = []
+                    split_xs: list[int] = []
+                    if int(units) == 2:
+                        split_x = int(clamp(int(ex), int(in_left + min_unit_w), int(in_right - min_unit_w)))
+                        split_xs = [int(split_x)]
+                        unit_ranges = [(int(in_left), int(split_x - 1)), (int(split_x + 1), int(in_right))]
+                    else:
+                        x1 = int(in_left + (int(usable_w) // 3))
+                        x2 = int(in_left + (int(usable_w) * 2) // 3)
+                        x1 = int(clamp(int(x1), int(in_left + min_unit_w), int(in_right - 2 * min_unit_w - 1)))
+                        x2 = int(clamp(int(x2), int(x1 + min_unit_w + 1), int(in_right - min_unit_w)))
+                        split_xs = [int(x1), int(x2)]
+                        unit_ranges = [
+                            (int(in_left), int(x1 - 1)),
+                            (int(x1 + 1), int(x2 - 1)),
+                            (int(x2 + 1), int(in_right)),
+                        ]
+
+                    # Vertical separators between units (only above the lobby line).
+                    for sx in split_xs:
+                        for yy in range(int(in_top), int(sep_y)):
+                            tiles[idx(int(sx), int(yy))] = int(self.state.T_WALL)
+
+                    reserved: set[tuple[int, int]] = set(lobby_area)
+                    apt_doors: list[tuple[int, int]] = []
+                    for ux0, ux1 in unit_ranges:
+                        if int(ux1 - ux0 + 1) < 3:
                             continue
-                        tiles[idx(int(xx), int(split_y))] = int(self.state.T_WALL)
+                        dx = int(clamp(int((ux0 + ux1) // 2), int(ux0 + 1), int(ux1 - 1)))
+                        tiles[idx(int(dx), int(sep_y))] = int(self.state.T_DOOR)
+                        apt_doors.append((int(dx), int(sep_y)))
+                        for dy in (-1, 0, 1):
+                            for dx2 in (-1, 0, 1):
+                                reserved.add((int(dx + dx2), int(sep_y + dy)))
 
                     def place_if_floor(tx: int, ty: int, tile_id: int) -> None:
                         tx = int(tx)
                         ty = int(ty)
                         if not (int(in_left) <= int(tx) <= int(in_right) and int(in_top) <= int(ty) <= int(in_bottom)):
                             return
-                        if (int(tx), int(ty)) in lobby_area:
+                        if (int(tx), int(ty)) in reserved:
                             return
                         if int(tiles[idx(int(tx), int(ty))]) != int(self.state.T_FLOOR):
                             return
-                        if int(tx) in pass_xs and int(ty) >= int(split_y) - 1:
-                            return
                         tiles[idx(int(tx), int(ty))] = int(tile_id)
 
-                    # Bedroom (top room): a bed + a shelf.
-                    bed_y = int(clamp(int(in_top + 1), int(in_top), int(split_y - 2)))
-                    bed_x = int(clamp(int(in_left + 1), int(in_left), int(in_right - 2)))
-                    if (
-                        int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
-                        and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
-                    ):
-                        tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
-                        tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
-                    shelf_y = int(clamp(int(bed_y + 2), int(in_top + 1), int(split_y - 2)))
-                    place_if_floor(int(in_right - 1), int(shelf_y), int(self.state.T_SHELF))
+                    # Furnish each unit with a small 2-room split when possible.
+                    uy0 = int(in_top)
+                    uy1 = int(sep_y - 1)
+                    for ux0, ux1 in unit_ranges:
+                        uw = int(ux1 - ux0 + 1)
+                        uh = int(uy1 - uy0 + 1)
+                        if uw <= 0 or uh <= 0:
+                            continue
 
-                    # Living (bottom room): a table + a shelf.
-                    table_y = int(clamp(int(split_y + 2), int(split_y + 1), int(in_bottom - 1)))
-                    place_if_floor(int(in_left + 2), int(table_y), int(self.state.T_TABLE))
-                    place_if_floor(int(in_right - 1), int(table_y), int(self.state.T_SHELF))
+                        if int(uw) >= 6 and int(uh) >= 6:
+                            split_y = int(uy0 + (uh // 2))
+                            split_y = int(clamp(int(split_y), int(uy0 + 2), int(uy1 - 2)))
+                            inner_door_x = int(clamp(int((ux0 + ux1) // 2), int(ux0 + 1), int(ux1 - 1)))
+                            for xx in range(int(ux0), int(ux1) + 1):
+                                if int(xx) == int(inner_door_x):
+                                    if (int(xx), int(split_y)) not in reserved and int(tiles[idx(int(xx), int(split_y))]) != int(self.state.T_ELEVATOR):
+                                        tiles[idx(int(xx), int(split_y))] = int(self.state.T_DOOR)
+                                else:
+                                    if int(tiles[idx(int(xx), int(split_y))]) != int(self.state.T_ELEVATOR):
+                                        tiles[idx(int(xx), int(split_y))] = int(self.state.T_WALL)
+                            bed_y = int(clamp(int(uy0 + 1), int(uy0), int(split_y - 2)))
+                        else:
+                            split_y = None
+                            bed_y = int(clamp(int(uy0 + 1), int(uy0), int(uy1 - 1)))
 
-                if lobby_area:
-                    for xx, yy in tuple(lobby_area):
+                        bed_x = int(clamp(int(ux0 + 1), int(ux0), int(ux1 - 2)))
+                        if (
+                            int(ux1 - ux0 + 1) >= 2
+                            and int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
+                            and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
+                            and (int(bed_x), int(bed_y)) not in reserved
+                            and (int(bed_x + 1), int(bed_y)) not in reserved
+                        ):
+                            tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
+                            tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
+
+                        # Shelf in the bedroom area, table + shelf in living area.
+                        shelf_y = int(clamp(int(bed_y + 2), int(uy0 + 1), int(uy1 - 1)))
+                        place_if_floor(int(ux1 - 1), int(shelf_y), int(self.state.T_SHELF))
+
+                        if split_y is not None:
+                            table_y = int(clamp(int(split_y + 2), int(split_y + 1), int(uy1 - 1)))
+                        else:
+                            table_y = int(clamp(int((uy0 + uy1) // 2), int(uy0 + 1), int(uy1 - 1)))
+                        place_if_floor(int(ux0 + 2), int(table_y), int(self.state.T_TABLE))
+                        place_if_floor(int(ux1 - 1), int(table_y), int(self.state.T_SHELF))
+
+                    # Ensure the elevator lobby stays empty (floor only).
+                    for xx, yy in tuple(reserved):
                         if not (int(in_left) <= int(xx) <= int(in_right) and int(in_top) <= int(yy) <= int(in_bottom)):
                             continue
                         tid = int(tiles[idx(int(xx), int(yy))])
@@ -7385,7 +7751,7 @@ class HardcoreSurvivalState(State):
             placed = 0
             want = 1
             mh_out: list[HardcoreSurvivalState._MultiHouse] | None = getattr(self, "_multi_houses_out", None)
-            max_tries = 120 if town_kind in ("大型超市", "大型监狱", "高层住宅大") else 60
+            max_tries = 120 if town_kind in ("大型超市", "大型监狱", "高层住宅", "高层住宅大") else 60
 
             def idx(x: int, y: int) -> int:
                 return y * self.state.CHUNK_SIZE + x
@@ -7419,8 +7785,9 @@ class HardcoreSurvivalState(State):
                     w = rng.randint(16, 24)
                     h = rng.randint(16, 24)
                 elif town_kind == "高层住宅":
-                    w = rng.randint(10, 15)
-                    h = rng.randint(10, 16)
+                    # Keep 2-unit apartments roomy (avoid narrow units).
+                    w = rng.randint(15, 18)
+                    h = rng.randint(15, 20)
                 elif town_kind == "大型监狱":
                     w = rng.randint(22, 28)
                     h = rng.randint(20, 28)
@@ -7488,6 +7855,8 @@ class HardcoreSurvivalState(State):
                     cut_px = int(self.state._roof_cut_px(style=6, w=int(w), h=int(h), var=int(roof_var_hint), floors=int(building_floors)))
                     cut_tiles = int(cut_px) // int(max(1, int(self.state.TILE_SIZE)))
                     core_h = int(max(2, int(h) - 2 - int(cut_tiles)))
+                    min_core_h = int(max(6, int(getattr(self.state, "HIGHRISE_MIN_FLOOR_TILES", 9))))
+                    core_h = int(min(int(max(int(core_h), int(min_core_h))), int(max(2, int(h) - 2))))
 
                 # Always use south-facing entrances so the single "front facade"
                 # (bottom/S) matches the actual doorway + collision.
@@ -8230,8 +8599,7 @@ class HardcoreSurvivalState(State):
                     except Exception:
                         pass
 
-                    # 1F interior: two-room residential layout (living + bedroom) with basic furniture.
-                    # Keep a small empty "public space" around the elevator.
+                    # Interior: elevator lobby + 2/3 apartments (never single-unit).
                     try:
                         top_cut = int(max(0, (int(h) - 2) - int(core_h)))
                         floor_y0 = int(y0 + 1 + int(top_cut))
@@ -8242,132 +8610,77 @@ class HardcoreSurvivalState(State):
                         usable_h = int(in_bottom - in_top + 1)
                         usable_w = int(in_right - in_left + 1)
 
-                        lobby_area: set[tuple[int, int]] = set()
-                        ex = None
-                        ey = None
-                        for yy in range(int(in_top), int(in_bottom) + 1):
-                            for xx in range(int(in_left), int(in_right) + 1):
-                                if int(tiles[idx(int(xx), int(yy))]) == int(self.state.T_ELEVATOR):
-                                    ex = int(xx)
-                                    ey = int(yy)
-                                    break
-                            if ex is not None:
-                                break
-                        if ex is not None and ey is not None:
-                            for dy in (-1, 0, 1):
-                                for dx in (-1, 0, 1):
-                                    lobby_area.add((int(ex + dx), int(ey + dy)))
-
-                        if False and int(usable_h) >= 6 and int(usable_w) >= 7 and door_tiles:
+                        if int(usable_h) >= 6 and int(usable_w) >= 7 and door_tiles:
                             door_xs = [int(p[0]) for p in door_tiles]
-                            door_y = int(max(int(p[1]) for p in door_tiles))
                             door_cx_i = int(round(sum(int(x) for x in door_xs) / max(1, len(door_xs))))
 
-                            lobby_h = int(clamp(int(round(float(usable_h) * 0.33)), 2, 5))
+                            # Lobby takes the bottom slice; apartments sit above it.
+                            # Keep the lobby compact so 2-unit apartments don't feel cramped.
+                            lobby_h = int(clamp(int(round(float(usable_h) * 0.25)), 2, 4))
+                            min_apt_h = 4
+                            lobby_h = int(clamp(int(lobby_h), 2, max(2, int(usable_h) - int(min_apt_h))))
                             sep_y = int(in_bottom - int(lobby_h))
+                            sep_y = int(clamp(int(sep_y), int(in_top + min_apt_h - 1), int(in_bottom - 2)))
+
+                            # Keep a single elevator tile inside the lobby.
+                            for yy in range(int(in_top), int(in_bottom) + 1):
+                                for xx in range(int(in_left), int(in_right) + 1):
+                                    if int(tiles[idx(int(xx), int(yy))]) == int(self.state.T_ELEVATOR):
+                                        tiles[idx(int(xx), int(yy))] = int(self.state.T_FLOOR)
 
                             elev_x = int(clamp(int(door_cx_i), int(in_left + 1), int(in_right - 1)))
-                            split_x = int(clamp(int(elev_x), int(in_left + 3), int(in_right - 3)))
-                            left_w = int(split_x - in_left)
-                            right_w = int(in_right - split_x)
+                            elev_y = int(clamp(int(sep_y + 1), int(sep_y + 1), int(in_bottom - 1)))
+                            if int(tiles[idx(int(elev_x), int(elev_y))]) != int(self.state.T_WALL):
+                                tiles[idx(int(elev_x), int(elev_y))] = int(self.state.T_ELEVATOR)
 
-                            if int(sep_y) >= int(in_top + 3) and int(left_w) >= 3 and int(right_w) >= 3:
-                                # Clear any pre-placed elevator tiles so we keep a single public lobby spot.
-                                for yy in range(int(in_top), int(in_bottom) + 1):
-                                    for xx in range(int(in_left), int(in_right) + 1):
-                                        if int(tiles[idx(int(xx), int(yy))]) == int(self.state.T_ELEVATOR):
-                                            tiles[idx(int(xx), int(yy))] = int(self.state.T_FLOOR)
-
-                                # Horizontal separator: lobby (south) vs apartments (north).
-                                for xx in range(int(in_left), int(in_right) + 1):
-                                    tiles[idx(int(xx), int(sep_y))] = int(self.state.T_WALL)
-
-                                # Vertical separator between the two units (only above the lobby line).
-                                for yy in range(int(in_top), int(sep_y)):
-                                    tiles[idx(int(split_x), int(yy))] = int(self.state.T_WALL)
-
-                                # Two apartment doors next to the lobby/elevator.
-                                door_lx = int(clamp(int(split_x - 2), int(in_left + 1), int(split_x - 1)))
-                                door_rx = int(clamp(int(split_x + 2), int(split_x + 1), int(in_right - 1)))
-                                tiles[idx(int(door_lx), int(sep_y))] = int(self.state.T_DOOR)
-                                tiles[idx(int(door_rx), int(sep_y))] = int(self.state.T_DOOR)
-
-                                # Elevator inside the public lobby.
-                                elev_y = int(clamp(int(sep_y + 1), int(sep_y + 1), int(in_bottom - 1)))
-                                if int(tiles[idx(int(elev_x), int(elev_y))]) != int(self.state.T_WALL):
-                                    tiles[idx(int(elev_x), int(elev_y))] = int(self.state.T_ELEVATOR)
-
-                                reserved: set[tuple[int, int]] = set()
+                            lobby_area: set[tuple[int, int]] = set()
+                            for dy in (-1, 0, 1):
                                 for dx in (-1, 0, 1):
-                                    for dy in (-1, 0, 1):
-                                        reserved.add((int(door_lx + dx), int(sep_y + dy)))
-                                        reserved.add((int(door_rx + dx), int(sep_y + dy)))
-                                        reserved.add((int(elev_x + dx), int(elev_y + dy)))
+                                    lobby_area.add((int(elev_x + dx), int(elev_y + dy)))
 
-                                def place_if_floor(tx: int, ty: int, tile_id: int) -> None:
-                                    tx = int(tx)
-                                    ty = int(ty)
-                                    if not (int(in_left) <= int(tx) <= int(in_right) and int(in_top) <= int(ty) <= int(in_bottom)):
-                                        return
-                                    if near_door(int(tx), int(ty)):
-                                        return
-                                    if (int(tx), int(ty)) in corridor:
-                                        return
-                                    if (int(tx), int(ty)) in reserved:
-                                        return
-                                    if int(tiles[idx(int(tx), int(ty))]) != int(self.state.T_FLOOR):
-                                        return
-                                    tiles[idx(int(tx), int(ty))] = int(tile_id)
-
-                                # Left unit: bed + table + shelf.
-                                l_x0 = int(in_left)
-                                l_x1 = int(split_x - 1)
-                                a_y0 = int(in_top)
-                                a_y1 = int(sep_y - 1)
-                                bed_y = int(clamp(int(a_y0 + 1), int(a_y0), int(a_y1 - 1)))
-                                bed_x = int(clamp(int(l_x0 + 1), int(l_x0), int(l_x1 - 2)))
-                                if (
-                                    int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
-                                    and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
-                                ):
-                                    tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
-                                    tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
-                                place_if_floor(int((l_x0 + l_x1) // 2), int((a_y0 + a_y1) // 2), int(self.state.T_TABLE))
-                                place_if_floor(int(l_x0 + 1), int(bed_y + 2), int(self.state.T_SHELF))
-
-                                # Right unit: bed + table + shelf.
-                                r_x0 = int(split_x + 1)
-                                r_x1 = int(in_right)
-                                bed_y2 = int(clamp(int(a_y0 + 1), int(a_y0), int(a_y1 - 1)))
-                                bed_x2 = int(clamp(int(r_x1 - 2), int(r_x0), int(r_x1 - 2)))
-                                if (
-                                    int(tiles[idx(int(bed_x2), int(bed_y2))]) == int(self.state.T_FLOOR)
-                                    and int(tiles[idx(int(bed_x2 + 1), int(bed_y2))]) == int(self.state.T_FLOOR)
-                                ):
-                                    tiles[idx(int(bed_x2), int(bed_y2))] = int(self.state.T_BED)
-                                    tiles[idx(int(bed_x2 + 1), int(bed_y2))] = int(self.state.T_BED)
-                                place_if_floor(int((r_x0 + r_x1) // 2), int((a_y0 + a_y1) // 2), int(self.state.T_TABLE))
-                                place_if_floor(int(r_x1 - 1), int(bed_y2 + 2), int(self.state.T_SHELF))
-                        if int(usable_h) >= 6 and int(usable_w) >= 6 and door_tiles:
-                            door_xs = [int(p[0]) for p in door_tiles]
-                            door_cx_i = int(round(sum(int(x) for x in door_xs) / max(1, len(door_xs))))
-                            split_y = int(in_top + (int(usable_h) // 2))
-                            split_y = int(clamp(int(split_y), int(in_top + 2), int(in_bottom - 2)))
-
-                            pass_x0 = int(clamp(int(door_cx_i - 1), int(in_left + 1), int(in_right - 2)))
-                            pass_xs = (int(pass_x0), int(pass_x0 + 1))
-
+                            # Horizontal separator: lobby (south) vs apartments (north).
                             for xx in range(int(in_left), int(in_right) + 1):
-                                if int(xx) in pass_xs:
-                                    if int(tiles[idx(int(xx), int(split_y))]) == int(self.state.T_ELEVATOR):
-                                        continue
-                                    tiles[idx(int(xx), int(split_y))] = int(self.state.T_DOOR)
+                                tiles[idx(int(xx), int(sep_y))] = int(self.state.T_WALL)
+
+                            # Decide 2 vs 3 units by width (never 1).
+                            # Only allow 3 units when each can still be reasonably wide.
+                            units = 3 if int(usable_w) >= 17 else 2
+                            min_unit_w = 5 if int(usable_w) >= 11 else 3
+                            if int(units) == 3:
+                                min_unit_w = 5
+                            unit_ranges: list[tuple[int, int]] = []
+                            split_xs: list[int] = []
+                            if int(units) == 2:
+                                split_x = int(clamp(int(elev_x), int(in_left + min_unit_w), int(in_right - min_unit_w)))
+                                split_xs = [int(split_x)]
+                                unit_ranges = [(int(in_left), int(split_x - 1)), (int(split_x + 1), int(in_right))]
+                            else:
+                                x1 = int(in_left + (int(usable_w) // 3))
+                                x2 = int(in_left + (int(usable_w) * 2) // 3)
+                                x1 = int(clamp(int(x1), int(in_left + min_unit_w), int(in_right - 2 * min_unit_w - 1)))
+                                x2 = int(clamp(int(x2), int(x1 + min_unit_w + 1), int(in_right - min_unit_w)))
+                                split_xs = [int(x1), int(x2)]
+                                unit_ranges = [
+                                    (int(in_left), int(x1 - 1)),
+                                    (int(x1 + 1), int(x2 - 1)),
+                                    (int(x2 + 1), int(in_right)),
+                                ]
+
+                            # Vertical separators between units (only above the lobby line).
+                            for sx in split_xs:
+                                for yy in range(int(in_top), int(sep_y)):
+                                    tiles[idx(int(sx), int(yy))] = int(self.state.T_WALL)
+
+                            reserved: set[tuple[int, int]] = set(lobby_area)
+                            # Apartment doors on the separator line.
+                            for ux0, ux1 in unit_ranges:
+                                if int(ux1 - ux0 + 1) < 3:
                                     continue
-                                if (int(xx), int(split_y)) in corridor:
-                                    continue
-                                if int(tiles[idx(int(xx), int(split_y))]) == int(self.state.T_ELEVATOR):
-                                    continue
-                                tiles[idx(int(xx), int(split_y))] = int(self.state.T_WALL)
+                                dx = int(clamp(int((ux0 + ux1) // 2), int(ux0 + 1), int(ux1 - 1)))
+                                tiles[idx(int(dx), int(sep_y))] = int(self.state.T_DOOR)
+                                for ddy in (-1, 0, 1):
+                                    for ddx in (-1, 0, 1):
+                                        reserved.add((int(dx + ddx), int(sep_y + ddy)))
 
                             def place_if_floor(tx: int, ty: int, tile_id: int) -> None:
                                 tx = int(tx)
@@ -8378,31 +8691,56 @@ class HardcoreSurvivalState(State):
                                     return
                                 if (int(tx), int(ty)) in corridor:
                                     return
-                                if (int(tx), int(ty)) in lobby_area:
+                                if (int(tx), int(ty)) in reserved:
                                     return
                                 if int(tiles[idx(int(tx), int(ty))]) != int(self.state.T_FLOOR):
                                     return
                                 tiles[idx(int(tx), int(ty))] = int(tile_id)
 
-                            # Bedroom (top room): bed + shelf.
-                            bed_y = int(clamp(int(in_top + 1), int(in_top), int(split_y - 2)))
-                            bed_x = int(clamp(int(in_left + 1), int(in_left), int(in_right - 2)))
-                            if (
-                                int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
-                                and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
-                            ):
-                                tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
-                                tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
-                            shelf_y = int(clamp(int(bed_y + 2), int(in_top + 1), int(split_y - 2)))
-                            place_if_floor(int(in_right - 1), int(shelf_y), int(self.state.T_SHELF))
+                            # Furnish each unit with a small 2-room split when possible.
+                            uy0 = int(in_top)
+                            uy1 = int(sep_y - 1)
+                            for ux0, ux1 in unit_ranges:
+                                uw = int(ux1 - ux0 + 1)
+                                uh = int(uy1 - uy0 + 1)
+                                if uw <= 0 or uh <= 0:
+                                    continue
 
-                            # Living (bottom room): table + shelf.
-                            table_y = int(clamp(int(split_y + 2), int(split_y + 1), int(in_bottom - 1)))
-                            place_if_floor(int(in_left + 2), int(table_y), int(self.state.T_TABLE))
-                            place_if_floor(int(in_right - 1), int(table_y), int(self.state.T_SHELF))
+                                if int(uw) >= 6 and int(uh) >= 6:
+                                    split_y = int(uy0 + (uh // 2))
+                                    split_y = int(clamp(int(split_y), int(uy0 + 2), int(uy1 - 2)))
+                                    inner_door_x = int(clamp(int((ux0 + ux1) // 2), int(ux0 + 1), int(ux1 - 1)))
+                                    for xx in range(int(ux0), int(ux1) + 1):
+                                        if int(xx) == int(inner_door_x):
+                                            if (int(xx), int(split_y)) not in reserved:
+                                                tiles[idx(int(xx), int(split_y))] = int(self.state.T_DOOR)
+                                        else:
+                                            if (int(xx), int(split_y)) not in reserved:
+                                                tiles[idx(int(xx), int(split_y))] = int(self.state.T_WALL)
+                                    bed_y = int(clamp(int(uy0 + 1), int(uy0), int(split_y - 2)))
+                                    table_y = int(clamp(int(split_y + 2), int(split_y + 1), int(uy1 - 1)))
+                                else:
+                                    bed_y = int(clamp(int(uy0 + 1), int(uy0), int(uy1 - 1)))
+                                    table_y = int(clamp(int((uy0 + uy1) // 2), int(uy0 + 1), int(uy1 - 1)))
 
-                        if lobby_area:
-                            for xx, yy in tuple(lobby_area):
+                                bed_x = int(clamp(int(ux0 + 1), int(ux0), int(ux1 - 2)))
+                                if (
+                                    int(ux1 - ux0 + 1) >= 2
+                                    and int(tiles[idx(int(bed_x), int(bed_y))]) == int(self.state.T_FLOOR)
+                                    and int(tiles[idx(int(bed_x + 1), int(bed_y))]) == int(self.state.T_FLOOR)
+                                    and (int(bed_x), int(bed_y)) not in reserved
+                                    and (int(bed_x + 1), int(bed_y)) not in reserved
+                                ):
+                                    tiles[idx(int(bed_x), int(bed_y))] = int(self.state.T_BED)
+                                    tiles[idx(int(bed_x + 1), int(bed_y))] = int(self.state.T_BED)
+
+                                shelf_y = int(clamp(int(bed_y + 2), int(uy0 + 1), int(uy1 - 1)))
+                                place_if_floor(int(ux1 - 1), int(shelf_y), int(self.state.T_SHELF))
+                                place_if_floor(int(ux0 + 2), int(table_y), int(self.state.T_TABLE))
+                                place_if_floor(int(ux1 - 1), int(table_y), int(self.state.T_SHELF))
+
+                            # Ensure the lobby area stays empty (floor only).
+                            for xx, yy in tuple(reserved):
                                 if not (int(in_left) <= int(xx) <= int(in_right) and int(in_top) <= int(yy) <= int(in_bottom)):
                                     continue
                                 tid = int(tiles[idx(int(xx), int(yy))])
@@ -8663,21 +9001,64 @@ class HardcoreSurvivalState(State):
                             if n_pass < 2:
                                 tiles[idx(px, py)] = self.state.T_WALL
 
+                def pick_kind(kind: str, *, prefix: str | None = None, k: int = 10) -> list[str]:
+                    kind = str(kind)
+                    pool: list[str] = []
+                    for iid, idef in self.state._ITEMS.items():
+                        if idef is None:
+                            continue
+                        if str(getattr(idef, "kind", "")) != kind:
+                            continue
+                        if prefix is not None and not str(iid).startswith(str(prefix)):
+                            continue
+                        pool.append(str(iid))
+                    if not pool:
+                        return []
+                    rng.shuffle(pool)
+                    k = int(clamp(int(k), 0, len(pool)))
+                    return pool[:k]
+
+                foods = pick_kind("food", prefix="food_", k=18)
+                drinks = pick_kind("drink", prefix="drink_", k=12)       
+                meds = pick_kind("med", prefix="med_", k=12)
+                mats = pick_kind("mat", k=8)
+                tools = pick_kind("tool", k=6)
+                fuels = pick_kind("fuel", k=2)
+                keys = pick_kind("key", k=2)
+
                 loot_choices: list[str]
                 if town_kind == "医院":
-                    loot_choices = ["bandage", "medkit", "water"]
+                    loot_choices = ["bandage", "medkit", "water"] + meds
+                elif town_kind in ("超市", "大型超市"):
+                    loot_choices = ["food_can", "water", "cola", "bandage", "medkit"] + foods + drinks + mats + tools
                 elif town_kind == "新华书店":
-                    loot_choices = ["food_can", "water", "cola", "cola", "bandage", "scrap", "wood"]
+                    loot_choices = ["book", "paper", "map", "water", "cola", "bandage"] + foods + drinks
                 elif town_kind == "枪械店":
-                    loot_choices = ["pistol", "ammo_9mm", "ammo_9mm", "ammo_9mm", "scrap", "bandage"]
-                elif town_kind == "监狱":
-                    loot_choices = ["pistol", "ammo_9mm", "ammo_9mm", "scrap", "bandage"]
+                    loot_choices = ["pistol", "ammo_9mm", "ammo_9mm", "scrap", "bandage", "knife", "crowbar"] + mats + tools
+                elif town_kind in ("监狱", "大型监狱"):
+                    loot_choices = ["pistol", "ammo_9mm", "ammo_9mm", "scrap", "bandage"] + mats
                 elif town_kind == "学校":
-                    loot_choices = ["food_can", "water", "cola", "cola", "bandage", "scrap", "wood"]
-                elif town_kind == "高层住宅":
-                    loot_choices = ["food_can", "water", "cola", "bandage", "scrap", "ammo_9mm"]
+                    loot_choices = ["food_can", "water", "cola", "bandage", "book", "paper"] + foods + drinks
+                elif town_kind in ("高层住宅", "高层住宅大"):
+                    loot_choices = ["food_can", "water", "cola", "bandage", "scrap", "ammo_9mm"] + foods + drinks + mats
                 else:
-                    loot_choices = ["food_can", "water", "cola", "cola", "ammo_9mm", "scrap", "wood"]
+                    loot_choices = ["food_can", "water", "cola", "bandage"] + foods[:8] + drinks[:6] + mats
+
+                # Vehicle keys / fuel are rare, but exist in the world so the hardcore loop works.
+                key_ch = 0.08
+                fuel_ch = 0.10
+                if town_kind in ("高层住宅", "高层住宅大", "住宅"):
+                    key_ch = 0.35
+                    fuel_ch = 0.16
+                elif town_kind in ("超市", "大型超市"):
+                    key_ch = 0.12
+                    fuel_ch = 0.28
+                if keys and rng.random() < float(key_ch):
+                    loot_choices += keys
+                if fuels and rng.random() < float(fuel_ch):
+                    loot_choices += fuels
+                if not loot_choices:
+                    loot_choices = ["food_can", "water"]
 
                 loot_n = rng.randint(2, 4) if town_kind in ("超市", "大型超市", "新华书店", "医院", "枪械店") else rng.randint(2, 3)
 
@@ -8815,6 +9196,8 @@ class HardcoreSurvivalState(State):
         facing: pygame.Vector2
         w: int = 8
         h: int = 12
+        body_h: int = 12
+        collider_h: int = 12
         hp: int = 100
         hunger: float = 100.0
         thirst: float = 100.0
@@ -8826,11 +9209,12 @@ class HardcoreSurvivalState(State):
 
         def rect_at(self, pos: pygame.Vector2 | None = None) -> pygame.Rect:
             p = self.pos if pos is None else pos
+            h = int(getattr(self, "collider_h", self.h))
             return pygame.Rect(
                 iround(float(p.x) - float(self.w) / 2.0),
-                iround(float(p.y) - float(self.h) / 2.0),
+                iround(float(p.y) - float(h) / 2.0),
                 int(self.w),
-                int(self.h),
+                int(h),
             )
 
     def on_enter(self) -> None:
@@ -8870,7 +9254,10 @@ class HardcoreSurvivalState(State):
         gender = int(self.avatar.gender) % len(SURVIVAL_GENDER_OPTIONS)
         height = int(self.avatar.height) % len(SURVIVAL_HEIGHT_OPTIONS)
         self.player.w = 8 if gender == 0 else 7
-        self.player.h = (11, 12, 13)[height]
+        body_h = int((11, 12, 13)[height])
+        self.player.body_h = int(body_h)
+        self.player.h = int(body_h)
+        self.player.collider_h = int(clamp(int(body_h) - 3, 8, int(self.TILE_SIZE) - 1))
         self.rv_int_player_w = (10 if gender == 0 else 9)
         self.rv_int_player_h = int(self._RV_INT_PLAYER_H) + (height - 1)
         self.inventory = HardcoreSurvivalState._Inventory(slots=[None] * 16)
@@ -8887,9 +9274,12 @@ class HardcoreSurvivalState(State):
         # Apartment home storage (openable cabinets).
         self.home_storage = HardcoreSurvivalState._Inventory(slots=[None] * 30, cols=6)
         self.fridge_storage = HardcoreSurvivalState._Inventory(slots=[None] * 12, cols=4)
+        # High-rise rooms (home + break-in apartments) share the same storage UI.
+        self.hr_current_room = ""
+        self.hr_room_storages: dict[str, tuple[HardcoreSurvivalState._Inventory, HardcoreSurvivalState._Inventory]] = {}
         self.home_ui_open = False
         self.home_ui_focus: str = "storage"  # player | storage
-        self.home_ui_storage_kind: str = "cabinet"  # cabinet | fridge
+        self.home_ui_storage_kind: str = "cabinet"  # cabinet | fridge   
         self.home_ui_player_index = 0
         self.home_ui_storage_index = 0
         self.home_ui_status = ""
@@ -8898,6 +9288,8 @@ class HardcoreSurvivalState(State):
         # Some starter supplies at home.
         self.home_storage.add("food_can", 4, self._ITEMS)
         self.home_storage.add("bandage", 6, self._ITEMS)
+        self.home_storage.add("key_rv", 1, self._ITEMS)
+        self.home_storage.add("key_moto", 1, self._ITEMS)
         self.fridge_storage.add("water", 2, self._ITEMS)
         self.fridge_storage.add("cola", 2, self._ITEMS)
         # Simple pose / action state (sit / sleep) used in interiors.
@@ -8916,12 +9308,16 @@ class HardcoreSurvivalState(State):
         self.zombie_frozen = False
         self.dead_left = 0.0
         self.starve_accum = 0.0
+        # Bleeding / wounds (simple hardcore layer).
+        # Stored as: body_part -> HP/sec bleed rate.
+        self.bleed_accum = 0.0
+        self.bleed_wounds: dict[str, float] = {}
         self.mount: str | None = None
         self.rv = HardcoreSurvivalState._RV(
-            pos=pygame.Vector2(self.player.pos) + pygame.Vector2(34, 0),
+            pos=pygame.Vector2(self.player.pos) + pygame.Vector2(34, 0),  
             vel=pygame.Vector2(0, 0),
             model_id="rv",
-            fuel=100.0,
+            fuel=15.0,
         )
         self._apply_rv_model()
         self.rv_dir = "right"
@@ -9038,14 +9434,19 @@ class HardcoreSurvivalState(State):
             # Fallback: still show a marker instead of having "no home".
             self.home_highrise_door = (int(spawn_tx), int(spawn_ty))
 
-        # Fixed "Chinese community" home for now: 6F room 604.
+        # Fixed "Chinese community" home for now: 6F room 602.
         self.home_highrise_floor = int(clamp(6, 2, int(floors)))
         # Unit numbering follows the door list order: 01..N
-        self.home_highrise_unit = 4
+        self.home_highrise_unit = 2
         door_count = int(max(1, len(self._HR_INT_APT_DOORS)))
         self.home_highrise_unit = int(clamp(int(self.home_highrise_unit), 1, door_count))
         self.home_highrise_door_index = int(self.home_highrise_unit - 1)
         self.home_highrise_room = f"{int(self.home_highrise_floor)}{int(self.home_highrise_unit):02d}"
+        try:
+            if str(self.home_highrise_room).strip():
+                self.hr_room_storages[str(self.home_highrise_room)] = (self.home_storage, self.fridge_storage)
+        except Exception:
+            pass
         self._set_hint(f"你的家：{self.home_highrise_room}", seconds=2.0)
 
         # Ensure the starter vehicles don't spawn "inside" a building.
@@ -9237,7 +9638,7 @@ class HardcoreSurvivalState(State):
                 if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):
                     self._house_interior_interact()
                     return
-                if event.key in (pygame.K_f, pygame.K_v, pygame.K_h):
+                if event.key in (pygame.K_f, pygame.K_v, pygame.K_h, pygame.K_b):
                     return
             if getattr(self, "sch_interior", False):
                 if event.key in (pygame.K_ESCAPE,):
@@ -9246,11 +9647,11 @@ class HardcoreSurvivalState(State):
                 if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):
                     self._sch_interior_interact()
                     return
-                if event.key in (pygame.K_f, pygame.K_v, pygame.K_h):   
+                if event.key in (pygame.K_f, pygame.K_v, pygame.K_h, pygame.K_b):
                     return
             if getattr(self, "hr_interior", False):
                 if event.key in (pygame.K_ESCAPE,):
-                    if str(getattr(self, "hr_mode", "lobby")) == "home":        
+                    if str(getattr(self, "hr_mode", "lobby")) == "home":
                         self._hr_leave_home()
                     else:
                         self._hr_interior_exit()
@@ -9276,10 +9677,10 @@ class HardcoreSurvivalState(State):
                         return
                     if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):
                         return
-                if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):  
+                if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):
                     self._hr_interior_interact()
                     return
-                if event.key in (pygame.K_f, pygame.K_v, pygame.K_h):
+                if event.key in (pygame.K_f, pygame.K_v, pygame.K_h, pygame.K_b):
                     return
             if getattr(self, "rv_interior", False):
                 if event.key in (pygame.K_ESCAPE, pygame.K_h):
@@ -9304,10 +9705,10 @@ class HardcoreSurvivalState(State):
                     if event.key in (pygame.K_DOWN, pygame.K_s):
                         self._rv_edit_move(0, 1)
                         return
-                if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):  
+                if event.key in (pygame.K_e, pygame.K_RETURN, pygame.K_SPACE):
                     self._rv_interior_interact()
                     return
-                if event.key in (pygame.K_f, pygame.K_v):
+                if event.key in (pygame.K_f, pygame.K_v, pygame.K_b):
                     return
             if event.key in (pygame.K_ESCAPE,):
                 if self.inv_open:
@@ -9325,6 +9726,9 @@ class HardcoreSurvivalState(State):
                 return
             if event.key in (pygame.K_e,):
                 self._interact_primary()
+                return
+            if not self.inv_open and event.key in (pygame.K_b,):
+                self._toggle_barricade()
                 return
             if not self.inv_open and event.key in (pygame.K_h,):
                 self._rv_interior_toggle()
@@ -9730,11 +10134,12 @@ class HardcoreSurvivalState(State):
         placed = False
         for off in candidates:
             pos = base + off
+            ch = int(getattr(self.player, "collider_h", self.player.h))
             rect = pygame.Rect(
                 iround(float(pos.x) - float(self.player.w) / 2.0),
-                iround(float(pos.y) - float(self.player.h) / 2.0),
+                iround(float(pos.y) - float(ch) / 2.0),
                 int(self.player.w),
-                int(self.player.h),
+                int(ch),
             )
             if self._collide_rect_world(rect):
                 continue
@@ -10332,9 +10737,17 @@ class HardcoreSurvivalState(State):
 
     def _hr_int_move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
         tile = int(self._HR_INT_TILE_SIZE)
-        rect = pygame.Rect(int(round(pos.x - w / 2)), int(round(pos.y - h / 2)), int(w), int(h))
-        dx = float(vel.x * dt)
-        dy = float(vel.y * dt)
+        w = int(w)
+        h = int(h)
+        p = pygame.Vector2(pos)
+        dt = float(dt)
+        if dt > 0.25:
+            dt = 0.25
+        dx_total = float(vel.x) * dt
+        dy_total = float(vel.y) * dt
+
+        def rect_at(px: float, py: float) -> pygame.Rect:
+            return pygame.Rect(int(round(px - w / 2)), int(round(py - h / 2)), int(w), int(h))
 
         def collide(r: pygame.Rect) -> list[pygame.Rect]:
             left = int(math.floor(r.left / tile))
@@ -10352,21 +10765,91 @@ class HardcoreSurvivalState(State):
                         hits.append(tr)
             return hits
 
-        if dx != 0.0:
-            rect.x += int(round(dx))
-            for hit in collide(rect):
-                if dx > 0:
-                    rect.right = hit.left
-                else:
-                    rect.left = hit.right
+        def depenetrate(r: pygame.Rect) -> pygame.Rect:
+            r = pygame.Rect(r)
+            for _ in range(8):
+                hits = collide(r)
+                if not hits:
+                    break
+                best: tuple[int, int, int] | None = None
+                for hit in hits:
+                    if not r.colliderect(hit):
+                        continue
+                    dx_l = int(hit.left - r.right)
+                    dx_r = int(hit.right - r.left)
+                    dy_u = int(hit.top - r.bottom)
+                    dy_d = int(hit.bottom - r.top)
+                    for absd, ox, oy in (
+                        (abs(dx_l), dx_l, 0),
+                        (abs(dx_r), dx_r, 0),
+                        (abs(dy_u), 0, dy_u),
+                        (abs(dy_d), 0, dy_d),
+                    ):
+                        if absd <= 0:
+                            continue
+                        if best is None or absd < best[0]:
+                            best = (int(absd), int(ox), int(oy))
+                if best is None:
+                    break
+                _absd, ox, oy = best
+                r.move_ip(int(ox), int(oy))
+            return r
 
-        if dy != 0.0:
-            rect.y += int(round(dy))
-            for hit in collide(rect):
-                if dy > 0:
-                    rect.bottom = hit.top
-                else:
-                    rect.top = hit.bottom
+        # Safety: if we ever start inside a wall (rounding edge-case), push out gently.
+        cur = rect_at(float(p.x), float(p.y))
+        if collide(cur):
+            cur = depenetrate(cur)
+            p.update(float(cur.centerx), float(cur.centery))
+        start_p = pygame.Vector2(p)
+
+        # Move in small sub-steps to avoid tunneling across 1-tile gaps on hitches.
+        # Use pixel-ish steps in interiors to prevent any corner jitter/teleport.
+        max_step = 1.0
+        steps = int(max(1, math.ceil(max(abs(dx_total), abs(dy_total)) / max_step)))
+        dx = float(dx_total) / float(steps)
+        dy = float(dy_total) / float(steps)
+        for _ in range(int(steps)):
+            if dx != 0.0:
+                prev = rect_at(float(p.x), float(p.y))
+                p.x += float(dx)
+                rect = rect_at(float(p.x), float(p.y))
+                hits = collide(rect)
+                if hits:
+                    if dx > 0.0:
+                        blocks = [int(r.left) for r in hits if int(prev.right) <= int(r.left)]
+                        if blocks:
+                            rect.right = int(min(blocks))
+                        else:
+                            rect = pygame.Rect(prev)
+                    else:
+                        blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
+                        if blocks:
+                            rect.left = int(max(blocks))
+                        else:
+                            rect = pygame.Rect(prev)
+                    rect = depenetrate(rect)
+                    p.update(float(rect.centerx), float(rect.centery))
+
+            if dy != 0.0:
+                prev = rect_at(float(p.x), float(p.y))
+                p.y += float(dy)
+                rect = rect_at(float(p.x), float(p.y))
+                hits = collide(rect)
+                if hits:
+                    if dy > 0.0:
+                        blocks = [int(r.top) for r in hits if int(prev.bottom) <= int(r.top)]
+                        if blocks:
+                            rect.bottom = int(min(blocks))
+                        else:
+                            rect = pygame.Rect(prev)
+                    else:
+                        blocks = [int(r.bottom) for r in hits if int(prev.top) >= int(r.bottom)]
+                        if blocks:
+                            rect.top = int(max(blocks))
+                        else:
+                            rect = pygame.Rect(prev)
+                    rect = depenetrate(rect)
+                    p.update(float(rect.centerx), float(rect.centery))
 
         pad = 3
         half_w = float(w) / 2.0
@@ -10375,10 +10858,25 @@ class HardcoreSurvivalState(State):
         min_y = tile + half_h + pad
         max_x = int(self._HR_INT_W) * tile - tile - half_w - pad
         max_y = int(self._HR_INT_H) * tile - tile - half_h - pad
+        rect = rect_at(float(p.x), float(p.y))
         rect.centerx = int(clamp(rect.centerx, min_x, max_x))
         rect.centery = int(clamp(rect.centery, min_y, max_y))
+        out = pygame.Vector2(rect.centerx, rect.centery)
 
-        return pygame.Vector2(rect.centerx, rect.centery)
+        # Hard guard: never allow multi-tile jumps from movement (reported as "闪现").
+        # If something goes wrong, keep position stable instead of teleporting.
+        max_ok = max(float(vel.length()) * float(dt) + 2.0, float(tile) * 0.95)
+        if float((out - start_p).length_squared()) > float(max_ok * max_ok):
+            try:
+                with open("__hr_int_teleport.log", "a", encoding="utf-8") as f:
+                    f.write(
+                        f"tp_guard start=({start_p.x:.2f},{start_p.y:.2f}) out=({out.x:.2f},{out.y:.2f}) "
+                        f"vel=({float(vel.x):.2f},{float(vel.y):.2f}) dt={float(dt):.4f}\\n"
+                    )
+            except Exception:
+                pass
+            return pygame.Vector2(int(round(float(start_p.x))), int(round(float(start_p.y))))
+        return out
 
     def _hr_int_player_tile(self) -> tuple[int, int]:
         tile = int(self._HR_INT_TILE_SIZE)
@@ -10443,6 +10941,11 @@ class HardcoreSurvivalState(State):
         if not getattr(self, "hr_interior", False):
             return
         if str(getattr(self, "hr_mode", "lobby")) != "home":
+            return
+        home_room = str(getattr(self, "home_highrise_room", "")).strip()
+        cur_room = str(getattr(self, "hr_current_room", "")).strip()
+        if home_room and cur_room and cur_room != home_room:
+            self._set_hint("只有自己家能摆放", seconds=1.1)
             return
         self.hr_edit_mode = not bool(getattr(self, "hr_edit_mode", False))
         self.hr_edit_dragging = False
@@ -11027,6 +11530,89 @@ class HardcoreSurvivalState(State):
             self.world_elevator_sel = int((sel + cols) % n)
         self.world_elevator_input = ""
 
+    def _hr_room_seed(self, room_id: str) -> int:
+        seed = 0
+        for ch in str(room_id):
+            seed = (seed * 131 + ord(ch)) & 0xFFFFFFFF
+        return int(seed)
+
+    def _hr_room_storages_bind(self, room_id: str, *, populate: bool) -> None:
+        room_id = str(room_id).strip()
+        if not room_id:
+            return
+        store = getattr(self, "hr_room_storages", None)
+        if not isinstance(store, dict):
+            store = {}
+            self.hr_room_storages = store
+        pair = store.get(room_id)
+        if (
+            not isinstance(pair, tuple)
+            or len(pair) != 2
+            or not isinstance(pair[0], HardcoreSurvivalState._Inventory)
+            or not isinstance(pair[1], HardcoreSurvivalState._Inventory)
+        ):
+            cab = HardcoreSurvivalState._Inventory(slots=[None] * 30, cols=6)
+            fr = HardcoreSurvivalState._Inventory(slots=[None] * 12, cols=4)
+            store[room_id] = (cab, fr)
+            if populate:
+                self._hr_room_storages_populate(room_id, cab=cab, fridge=fr)
+            pair = store.get(room_id)
+        if isinstance(pair, tuple) and len(pair) == 2:
+            self.home_storage, self.fridge_storage = pair
+            self.hr_current_room = str(room_id)
+
+    def _hr_room_storages_populate(
+        self,
+        room_id: str,
+        *,
+        cab: "HardcoreSurvivalState._Inventory",
+        fridge: "HardcoreSurvivalState._Inventory",
+    ) -> None:
+        # Deterministic per-room loot (so it doesn't change every visit).
+        seed = self._hr_room_seed(str(room_id)) ^ (int(self.seed) & 0xFFFFFFFF) ^ 0xC8A19D2B
+        rng = random.Random(int(seed))
+
+        cache = getattr(self, "_item_kind_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._item_kind_cache = cache
+
+        def pool(kind: str) -> list[str]:
+            key = str(kind)
+            got = cache.get(key)
+            if isinstance(got, list):
+                return got
+            out: list[str] = []
+            for iid, idef in self._ITEMS.items():
+                if idef is None:
+                    continue
+                if str(getattr(idef, "kind", "")) == key:
+                    out.append(str(iid))
+            cache[key] = out
+            return out
+
+        foods = pool("food")
+        drinks = pool("drink")
+        meds = pool("med")
+        mats = pool("mat")
+
+        if drinks:
+            for _ in range(int(rng.randint(1, 3))):
+                fridge.add(rng.choice(drinks), 1, self._ITEMS)
+        if foods and rng.random() < 0.75:
+            for _ in range(int(rng.randint(0, 2))):
+                fridge.add(rng.choice(foods), 1, self._ITEMS)
+
+        if foods:
+            for _ in range(int(rng.randint(1, 4))):
+                cab.add(rng.choice(foods), 1, self._ITEMS)
+        if meds and rng.random() < 0.70:
+            for _ in range(int(rng.randint(0, 2))):
+                cab.add(rng.choice(meds), 1, self._ITEMS)
+        if mats and rng.random() < 0.55:
+            for _ in range(int(rng.randint(0, 2))):
+                cab.add(rng.choice(mats), int(rng.randint(2, 6)), self._ITEMS)
+
     def _hr_enter_home(self) -> None:
         self.hr_hall_pos_before_home = pygame.Vector2(self.hr_int_pos)
         self.hr_mode = "home"
@@ -11034,7 +11620,11 @@ class HardcoreSurvivalState(State):
         self.hr_edit_dragging = False
         self.home_ui_open = False
         self.home_ui_open_block = None
-        if not isinstance(getattr(self, "hr_home_layout", None), list):
+        home_room = str(getattr(self, "home_highrise_room", "")).strip()
+        if home_room:
+            # Home room was pre-filled in __init__.
+            self._hr_room_storages_bind(home_room, populate=False)
+        if not isinstance(getattr(self, "hr_home_layout", None), list):  
             self.hr_home_layout = [str(r) for r in self._HR_INT_HOME_LAYOUT]
         self._hr_int_set_layout(getattr(self, "hr_home_layout", self._HR_INT_HOME_LAYOUT))
 
@@ -11048,10 +11638,10 @@ class HardcoreSurvivalState(State):
             sx, sy = spawn
             if self._hr_int_solid_tile(self._hr_int_char_at(sx, sy)):
                 sx, sy = int(dx), int(dy)
-            self.hr_int_pos = pygame.Vector2((sx + 0.5) * tile, (sy + 0.5) * tile)
+        self.hr_int_pos = pygame.Vector2((sx + 0.5) * tile, (sy + 0.5) * tile)
         self.hr_int_vel = pygame.Vector2(0, 0)
         self.hr_int_walk_phase = 0.0
-        self._set_hint("进入你的家：E互动床恢复体力/心态", seconds=1.6)
+        self._set_hint("进入房间：E互动", seconds=1.1)
 
     def _hr_leave_home(self) -> None:
         floor = int(getattr(self, "hr_floor", 1))
@@ -11061,7 +11651,8 @@ class HardcoreSurvivalState(State):
         self.hr_edit_dragging = False
         self.home_ui_open = False
         self.home_ui_open_block = None
-        self._hr_int_set_layout(self._hr_make_hall_layout(floor))
+        self.hr_current_room = ""
+        self._hr_int_set_layout(self._hr_make_hall_layout(floor))        
         saved = getattr(self, "hr_hall_pos_before_home", None)
         if isinstance(saved, pygame.Vector2):
             self.hr_int_pos = pygame.Vector2(saved)
@@ -11136,6 +11727,7 @@ class HardcoreSurvivalState(State):
         self.hr_edit_dragging = False
         self.home_ui_open = False
         self.home_ui_open_block = None
+        self.hr_current_room = ""
         self.hr_building = None
         self.hr_mode = "lobby"
         self._hr_int_set_layout(self._HR_INT_LOBBY_LAYOUT)
@@ -11305,7 +11897,47 @@ class HardcoreSurvivalState(State):
             self._set_hint("这不是你的家", seconds=1.2)
             return
         if ch == "A":
-            self._set_hint("门锁住了", seconds=1.1)
+            if int(self.inventory.count("crowbar")) <= 0:
+                self._set_hint("门锁住了(需要撬棍)", seconds=1.2)
+                return
+
+            doors = list(getattr(self, "_HR_INT_APT_DOORS", []))
+            unit = 0
+            for i, (dx, dy) in enumerate(doors):
+                if int(dx) == int(_cx) and int(dy) == int(_cy):
+                    unit = int(i) + 1
+                    break
+            floor = int(getattr(self, "hr_floor", 1))
+            room_id = f"{int(floor)}{int(unit):02d}" if unit > 0 else f"{int(floor)}??"
+            home_room = str(getattr(self, "home_highrise_room", "")).strip()
+            if home_room and room_id == home_room:
+                self._hr_enter_home()
+                return
+
+            # Break-in room: use the default apartment layout + per-room storage.
+            self.hr_hall_pos_before_home = pygame.Vector2(self.hr_int_pos)
+            self.hr_mode = "home"
+            self.hr_edit_mode = False
+            self.hr_edit_dragging = False
+            self.home_ui_open = False
+            self.home_ui_open_block = None
+            self._hr_room_storages_bind(room_id, populate=True)
+            self._hr_int_set_layout([str(r) for r in self._HR_INT_HOME_LAYOUT])
+
+            door = self._hr_int_find("D")
+            tile = int(self._HR_INT_TILE_SIZE)
+            if door is None:
+                self.hr_int_pos = pygame.Vector2((self._HR_INT_W / 2.0) * tile, (self._HR_INT_H / 2.0) * tile)
+            else:
+                dx, dy = door
+                spawn = (dx - 1, dy) if dx >= int(self._HR_INT_W) - 1 else (dx + 1, dy)
+                sx, sy = spawn
+                if self._hr_int_solid_tile(self._hr_int_char_at(sx, sy)):
+                    sx, sy = int(dx), int(dy)
+                self.hr_int_pos = pygame.Vector2((sx + 0.5) * tile, (sy + 0.5) * tile)
+            self.hr_int_vel = pygame.Vector2(0, 0)
+            self.hr_int_walk_phase = 0.0
+            self._set_hint(f"进入{room_id}", seconds=1.0)
             return
         self._set_hint("这里没有可互动", seconds=1.0)
 
@@ -13119,9 +13751,13 @@ class HardcoreSurvivalState(State):
 
         title = "高层住宅"
         home_room = str(getattr(self, "home_highrise_room", "")).strip()
+        cur_room = str(getattr(self, "hr_current_room", "")).strip()
         home_floor = int(getattr(self, "hr_home_floor", -1))
         if mode == "home":
-            subtitle = f"你的家 {home_room}" if home_room else "你的家"
+            if cur_room and home_room and cur_room != home_room:
+                subtitle = f"房间 {cur_room}"
+            else:
+                subtitle = f"你的家 {home_room}" if home_room else "你的家"
         elif floor <= 1:
             subtitle = "大厅"
         else:
@@ -15022,38 +15658,107 @@ class HardcoreSurvivalState(State):
         w = int(w)
         h = int(h)
         p = pygame.Vector2(pos)
-        dx = float(vel.x) * float(dt)
-        dy = float(vel.y) * float(dt)
+        dt = float(dt)
+        if dt > 0.25:
+            dt = 0.25
+        dx_total = float(vel.x) * dt
+        dy_total = float(vel.y) * dt
 
-        if dx != 0.0:
-            p.x += float(dx)
-            rect = pygame.Rect(
-                iround(float(p.x) - float(w) / 2.0),
-                iround(float(p.y) - float(h) / 2.0),
+        def rect_at(px: float, py: float) -> pygame.Rect:
+            return pygame.Rect(
+                iround(float(px) - float(w) / 2.0),
+                iround(float(py) - float(h) / 2.0),
                 int(w),
                 int(h),
             )
-            for hit in self._collide_rect_world(rect):
-                if dx > 0.0:
-                    rect.right = hit.left
-                else:
-                    rect.left = hit.right
-                p.x = float(rect.centerx)
 
-        if dy != 0.0:
-            p.y += float(dy)
-            rect = pygame.Rect(
-                iround(float(p.x) - float(w) / 2.0),
-                iround(float(p.y) - float(h) / 2.0),
-                int(w),
-                int(h),
-            )
-            for hit in self._collide_rect_world(rect):
-                if dy > 0.0:
-                    rect.bottom = hit.top
-                else:
-                    rect.top = hit.bottom
-                p.y = float(rect.centery)
+        def depenetrate(r: pygame.Rect) -> pygame.Rect:
+            r = pygame.Rect(r)
+            for _ in range(10):
+                hits = self._collide_rect_world(r)
+                if not hits:
+                    break
+                best: tuple[int, int, int] | None = None
+                for hit in hits:
+                    if not r.colliderect(hit):
+                        continue
+                    dx_l = int(hit.left - r.right)
+                    dx_r = int(hit.right - r.left)
+                    dy_u = int(hit.top - r.bottom)
+                    dy_d = int(hit.bottom - r.top)
+                    for absd, ox, oy in (
+                        (abs(dx_l), dx_l, 0),
+                        (abs(dx_r), dx_r, 0),
+                        (abs(dy_u), 0, dy_u),
+                        (abs(dy_d), 0, dy_d),
+                    ):
+                        if absd <= 0:
+                            continue
+                        if best is None or absd < best[0]:
+                            best = (int(absd), int(ox), int(oy))
+                if best is None:
+                    break
+                _absd, ox, oy = best
+                r.move_ip(int(ox), int(oy))
+            return r
+
+        # If we ever end up slightly inside a wall (rounding edge-case), push out
+        # in the shortest direction. This prevents large "snap" corrections later.
+        cur = rect_at(float(p.x), float(p.y))
+        if self._collide_rect_world(cur):
+            cur = depenetrate(cur)
+            p.update(float(cur.centerx), float(cur.centery))
+
+        # Prevent tunneling through thin walls/doorways on hitches by moving
+        # in small sub-steps (still using a crisp int rect for collisions).
+        max_step = max(1.0, float(self.TILE_SIZE) / 2.0)
+        steps = int(max(1, math.ceil(max(abs(dx_total), abs(dy_total)) / max_step)))
+        dx = float(dx_total) / float(steps)
+        dy = float(dy_total) / float(steps)
+
+        for _ in range(int(steps)):
+            if dx != 0.0:
+                prev = rect_at(float(p.x), float(p.y))
+                p.x += float(dx)
+                rect = rect_at(float(p.x), float(p.y))
+                hits = self._collide_rect_world(rect)
+                if hits:
+                    if dx > 0.0:
+                        blocks = [int(r.left) for r in hits if int(prev.right) <= int(r.left)]
+                        if blocks:
+                            rect.right = int(min(blocks))
+                        else:
+                            rect = pygame.Rect(prev)
+                    else:
+                        blocks = [int(r.right) for r in hits if int(prev.left) >= int(r.right)]
+                        if blocks:
+                            rect.left = int(max(blocks))
+                        else:
+                            rect = pygame.Rect(prev)
+                    # Important: do NOT depenetrate in Y here; otherwise you can
+                    # get stuck when sliding along a wall while holding diagonal.
+                    p.x = float(rect.centerx)
+
+            if dy != 0.0:
+                prev = rect_at(float(p.x), float(p.y))
+                p.y += float(dy)
+                rect = rect_at(float(p.x), float(p.y))
+                hits = self._collide_rect_world(rect)
+                if hits:
+                    if dy > 0.0:
+                        blocks = [int(r.top) for r in hits if int(prev.bottom) <= int(r.top)]
+                        if blocks:
+                            rect.bottom = int(min(blocks))
+                        else:
+                            rect = pygame.Rect(prev)
+                    else:
+                        blocks = [int(r.bottom) for r in hits if int(prev.top) >= int(r.bottom)]
+                        if blocks:
+                            rect.top = int(max(blocks))
+                        else:
+                            rect = pygame.Rect(prev)
+                    # Same idea as X: only clamp along Y to preserve wall sliding.
+                    p.y = float(rect.centery)
 
         return p
 
@@ -15175,7 +15880,10 @@ class HardcoreSurvivalState(State):
             self.starve_accum += dmg_rate * dt
             while self.starve_accum >= 1.0:
                 self.starve_accum -= 1.0
-                self.player.hp = max(0, int(self.player.hp) - 1)
+                self.player.hp = max(0, int(self.player.hp) - 1)        
+
+        # Bleeding damage (from zombie scratches/bites).
+        self._apply_bleed(dt)
 
         keys = pygame.key.get_pressed()
         move = pygame.Vector2(0, 0)
@@ -15356,16 +16064,25 @@ class HardcoreSurvivalState(State):
             if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
                 steer_in += 1.0
 
-            tx = int(math.floor(self.rv.pos.x / self.TILE_SIZE))
-            ty = int(math.floor(self.rv.pos.y / self.TILE_SIZE))
+            tx = int(math.floor(self.rv.pos.x / self.TILE_SIZE))        
+            ty = int(math.floor(self.rv.pos.y / self.TILE_SIZE))        
             tile_under = self.world.get_tile(tx, ty)
             traction = float(self._tile_slow(tile_under))
 
+            fuel = float(getattr(self.rv, "fuel", 0.0))
+            fuel_empty = fuel <= 0.01
             boost = 1.15 if (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]) else 1.0
-            fuel_mod = 0.55 if float(self.rv.fuel) <= 0.0 else 1.0
-            max_fwd = float(model.max_fwd) * traction * fuel_mod * boost
-            max_rev = float(model.max_rev) * traction * fuel_mod
-            accel = float(model.accel) * traction * fuel_mod * boost
+            if fuel_empty:
+                boost = 1.0
+                if abs(float(throttle)) > 0.1 and not bool(getattr(self, "_rv_no_fuel_warned", False)):
+                    self._set_hint("房车没油了", seconds=1.0)
+                    self._rv_no_fuel_warned = True
+            else:
+                self._rv_no_fuel_warned = False
+
+            max_fwd = float(model.max_fwd) * traction * boost
+            max_rev = float(model.max_rev) * traction
+            accel = float(model.accel) * traction * (0.0 if fuel_empty else boost)
             brake = float(model.brake) * traction
             drag = 1.8 + (1.0 - traction) * 2.2
 
@@ -15527,7 +16244,30 @@ class HardcoreSurvivalState(State):
             if self._try_walk_into_special_door(move, dt):
                 return
 
-            self.player.pos = self._move_box(self.player.pos, self.player.vel, dt, w=self.player.w, h=self.player.h)
+            prev_pos = pygame.Vector2(self.player.pos)
+            new_pos = self._move_box(
+                self.player.pos,
+                self.player.vel,
+                dt,
+                w=self.player.w,
+                h=int(getattr(self.player, "collider_h", self.player.h)),
+            )
+            # Safety net: if collision resolution ever produces a multi-tile jump,
+            # keep the old position (prevents visible "闪现").
+            max_ok = max(float(self.player.vel.length()) * float(dt) + 2.0, float(self.TILE_SIZE) * 0.95)
+            if float((new_pos - prev_pos).length_squared()) > float(max_ok * max_ok):
+                try:
+                    with open("__teleport.log", "a", encoding="utf-8") as f:
+                        f.write(
+                            f"world_tp_guard pos=({prev_pos.x:.2f},{prev_pos.y:.2f}) new=({float(new_pos.x):.2f},{float(new_pos.y):.2f}) "
+                            f"vel=({float(self.player.vel.x):.2f},{float(self.player.vel.y):.2f}) dt={float(dt):.4f} "
+                            f"hr_interior={int(bool(getattr(self,'hr_interior',False)))} house_interior={int(bool(getattr(self,'house_interior',False)))}\\n"
+                        )
+                except Exception:
+                    pass
+                self.player.pos.update(prev_pos)
+            else:
+                self.player.pos.update(new_pos)
 
         focus = pygame.Vector2(self.player.pos)
         target_cam_x = float(focus.x - INTERNAL_W / 2)
@@ -15559,13 +16299,82 @@ class HardcoreSurvivalState(State):
         self._update_bullets(dt)
         self._update_hit_fx(dt)
 
-    def _set_hint(self, text: str, *, seconds: float = 1.2) -> None:
+    def _set_hint(self, text: str, *, seconds: float = 1.2) -> None:    
         self.hint_text = str(text)
         self.hint_left = float(seconds)
 
+    def _bleed_total_rate(self) -> float:
+        wounds = getattr(self, "bleed_wounds", None)
+        if not isinstance(wounds, dict) or not wounds:
+            return 0.0
+        total = 0.0
+        for v in wounds.values():
+            try:
+                total += max(0.0, float(v))
+            except Exception:
+                continue
+        return float(total)
+
+    def _apply_bleed(self, dt: float) -> None:
+        rate = float(self._bleed_total_rate())
+        if rate <= 0.0:
+            self.bleed_accum = 0.0
+            return
+        self.bleed_accum = float(getattr(self, "bleed_accum", 0.0)) + float(rate) * float(dt)
+        while float(self.bleed_accum) >= 1.0:
+            self.bleed_accum = float(self.bleed_accum) - 1.0
+            self.player.hp = max(0, int(self.player.hp) - 1)
+
+    def _inflict_wound(self, part: str, *, rate: float) -> None:
+        part = str(part)
+        rate = float(rate)
+        if rate <= 0.0 or self.player.hp <= 0:
+            return
+        wounds = getattr(self, "bleed_wounds", None)
+        if not isinstance(wounds, dict):
+            wounds = {}
+            self.bleed_wounds = wounds
+        # Cap wound count; keep the heaviest wounds and merge the rest.
+        if len(wounds) >= 3 and part not in wounds:
+            # Add to the weakest wound instead of creating a new slot.
+            try:
+                part = min(wounds.items(), key=lambda kv: float(kv[1]))[0]
+            except Exception:
+                pass
+        prev = float(wounds.get(part, 0.0))
+        wounds[part] = float(min(2.5, prev + rate))
+        if prev <= 0.0:
+            name = self._BODY_PART_NAMES.get(part, part)
+            self._set_hint(f"被抓伤：{name}流血！用绷带止血", seconds=1.6)
+
+    def _bandage_one_wound(self) -> str | None:
+        wounds = getattr(self, "bleed_wounds", None)
+        if not isinstance(wounds, dict) or not wounds:
+            return None
+        try:
+            part = max(wounds.items(), key=lambda kv: float(kv[1]))[0]
+        except Exception:
+            part = next(iter(wounds.keys()))
+        try:
+            del wounds[part]
+        except Exception:
+            pass
+        return str(part)
+
+    def _clear_all_wounds(self) -> int:
+        wounds = getattr(self, "bleed_wounds", None)
+        if not isinstance(wounds, dict) or not wounds:
+            return 0
+        n = len(wounds)
+        try:
+            wounds.clear()
+        except Exception:
+            self.bleed_wounds = {}
+        return int(n)
+
     def _player_tile(self) -> tuple[int, int]:
-        tx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
-        ty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
+        tx = int(math.floor(self.player.pos.x / self.TILE_SIZE))        
+        ty = int(math.floor(self.player.pos.y / self.TILE_SIZE))        
         return tx, ty
 
     def _player_chunk(self) -> tuple[int, int]:
@@ -15868,6 +16677,77 @@ class HardcoreSurvivalState(State):
             return
         self._try_pickup()
 
+    def _world_set_tile(self, tx: int, ty: int, tile_id: int) -> None:
+        tx = int(tx)
+        ty = int(ty)
+        tile_id = int(tile_id)
+        chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
+        base_tx = int(chunk.cx) * int(self.CHUNK_SIZE)
+        base_ty = int(chunk.cy) * int(self.CHUNK_SIZE)
+        lx = int(tx - base_tx)
+        ly = int(ty - base_ty)
+        if not (0 <= lx < int(self.CHUNK_SIZE) and 0 <= ly < int(self.CHUNK_SIZE)):
+            return
+        chunk.tiles[int(ly) * int(self.CHUNK_SIZE) + int(lx)] = int(tile_id)
+
+        # Keep multi-floor snapshots in sync so the change survives floor switches.
+        found = self._multi_house_at(int(tx), int(ty))
+        if found is None:
+            return
+        _ch, mh = found
+        cur_floor = int(getattr(mh, "cur_floor", 1))
+        tiles = mh.floor_tiles.get(int(cur_floor))
+        if not isinstance(tiles, list):
+            return
+        w = int(getattr(mh, "w", 0))
+        h = int(getattr(mh, "h", 0))
+        if w <= 0 or h <= 0 or len(tiles) != int(w) * int(h):
+            return
+        mx = int(tx - int(getattr(mh, "tx0", 0)))
+        my = int(ty - int(getattr(mh, "ty0", 0)))
+        if not (0 <= mx < w and 0 <= my < h):
+            return
+        tiles[int(my) * int(w) + int(mx)] = int(tile_id)
+
+    def _toggle_barricade(self) -> None:
+        if getattr(self, "mount", None) is not None:
+            self._set_hint("下车后再封门", seconds=1.1)
+            return
+        tx, ty = self._player_tile()
+        candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+        chosen: tuple[int, int, int] | None = None
+        for cx, cy in candidates:
+            t = int(self.world.get_tile(int(cx), int(cy)))
+            if t in (int(self.T_DOOR), int(self.T_BARRICADE)):
+                chosen = (int(cx), int(cy), int(t))
+                break
+        if chosen is None:
+            self._set_hint("附近没有门", seconds=1.0)
+            return
+        cx, cy, t = chosen
+
+        if t == int(self.T_DOOR):
+            need_plank = 1
+            need_nails = 4
+            if int(self.inventory.count("plank")) < int(need_plank) or int(self.inventory.count("nails")) < int(need_nails):
+                self._set_hint("需要木板+钉子", seconds=1.2)
+                return
+            self.inventory.remove("plank", int(need_plank))
+            self.inventory.remove("nails", int(need_nails))
+            self._world_set_tile(int(cx), int(cy), int(self.T_BARRICADE))
+            self._set_hint("封门", seconds=0.9)
+            return
+
+        # Remove barricade.
+        if int(self.inventory.count("crowbar")) <= 0 and int(self.inventory.count("hammer")) <= 0:
+            self._set_hint("需要撬棍/锤子", seconds=1.2)
+            return
+        self._world_set_tile(int(cx), int(cy), int(self.T_DOOR))
+        # Recover a little material.
+        self.inventory.add("nails", 2, self._ITEMS)
+        self.inventory.add("plank", 1, self._ITEMS)
+        self._set_hint("拆除封门", seconds=0.9)
+
     def _try_use_highrise_elevator(self) -> bool:
         if getattr(self, "world_elevator_ui_open", False):
             return True
@@ -16099,16 +16979,146 @@ class HardcoreSurvivalState(State):
             self._set_hint("喝了水：口渴+")
             return True
         if item_id == "bandage":
-            self.player.hp = int(clamp(self.player.hp + 18, 0, 100))
+            stopped = self._bandage_one_wound()
+            self.player.hp = int(clamp(self.player.hp + 18, 0, 100))    
             self.player.condition = clamp(self.player.condition + 3.0, 0.0, 100.0)
-            self._set_hint("使用绷带：生命+")
+            if stopped:
+                name = self._BODY_PART_NAMES.get(str(stopped), str(stopped))
+                self._set_hint(f"绷带止血：{name}", seconds=1.2)
+            else:
+                self._set_hint("使用绷带：生命+")
             return True
         if item_id == "medkit":
-            self.player.hp = int(clamp(self.player.hp + 55, 0, 100))
+            cleared = self._clear_all_wounds()
+            self.player.hp = int(clamp(self.player.hp + 55, 0, 100))     
             self.player.condition = clamp(self.player.condition + 10.0, 0.0, 100.0)
             self.player.morale = clamp(self.player.morale + 3.0, 0.0, 100.0)
-            self._set_hint("使用急救包：生命++")
+            if cleared > 0:
+                self._set_hint("急救包：止血 + 生命++")
+            else:
+                self._set_hint("使用急救包：生命++")
             return True
+
+        if item_id == "gas_can":
+            add = float(getattr(self, "GAS_CAN_REFUEL", 45.0))
+            add = float(clamp(add, 5.0, 100.0))
+
+            kind: str | None = None
+            target: object | None = None
+
+            if self.mount == "rv":
+                kind = "rv"
+                target = self.rv
+            elif self.mount == "bike":
+                mid = str(getattr(self.bike, "model_id", "bike"))
+                if mid.startswith("moto"):
+                    kind = "bike"
+                    target = self.bike
+                else:
+                    self._set_hint("自行车不需要汽油", seconds=1.0)
+                    return False
+            else:
+                best_kind: str | None = None
+                best_target: object | None = None
+                best_d2 = float(28.0 * 28.0)
+
+                rv_d2 = float((self.player.pos - self.rv.pos).length_squared())
+                if rv_d2 <= best_d2:
+                    best_kind = "rv"
+                    best_target = self.rv
+                    best_d2 = rv_d2
+
+                mid = str(getattr(self.bike, "model_id", "bike"))
+                if mid.startswith("moto"):
+                    bike_d2 = float((self.player.pos - self.bike.pos).length_squared())
+                    if bike_d2 <= best_d2:
+                        best_kind = "bike"
+                        best_target = self.bike
+                        best_d2 = bike_d2
+
+                # Also allow refueling parked motorcycles.
+                parked_chunk, parked_bike, parked_d2 = self._find_nearest_parked_bike(radius_px=28.0)
+                if parked_bike is not None and parked_chunk is not None:
+                    pb_mid = str(getattr(parked_bike, "model_id", "bike"))
+                    if pb_mid.startswith("moto") and float(parked_d2) <= float(best_d2):
+                        best_kind = "parked"
+                        best_target = parked_bike
+                        best_d2 = float(parked_d2)
+
+                kind = best_kind
+                target = best_target
+
+            if kind is None or target is None:
+                self._set_hint("靠近载具再加油", seconds=1.1)
+                return False
+
+            before = float(getattr(target, "fuel", 0.0))
+            if before >= 99.9:
+                self._set_hint("油箱已满", seconds=1.0)
+                return False
+
+            after = float(clamp(before + add, 0.0, 100.0))
+            try:
+                setattr(target, "fuel", after)
+            except Exception:
+                return False
+
+            if kind == "rv":
+                self._rv_no_fuel_warned = False
+                self._set_hint("房车加油", seconds=0.9)
+            elif kind in ("bike", "parked"):
+                self._bike_no_fuel_warned = False
+                self._set_hint("摩托加油", seconds=0.9)
+            else:
+                self._set_hint("加油", seconds=0.9)
+            return True
+
+        # Generic consumables (so the bulk item library is actually usable).
+        idef = self._ITEMS.get(item_id)
+        if idef is None:
+            return False
+        kind = str(getattr(idef, "kind", ""))
+        if kind not in ("food", "drink", "med"):
+            return False
+
+        seed = 0
+        for ch in str(item_id):
+            seed = (seed * 131 + ord(ch)) & 0xFFFFFFFF
+
+        if kind == "drink":
+            thirst = 20.0 + float(seed % 30)  # 20..49
+            morale = 1.0 + float((seed >> 3) % 4)  # 1..4
+            self.player.thirst = clamp(self.player.thirst + thirst, 0.0, 100.0)
+            self.player.morale = clamp(self.player.morale + morale, 0.0, 100.0)
+            self._set_hint(f"喝了{idef.name}：口渴+")
+            return True
+
+        if kind == "food":
+            hunger = 18.0 + float(seed % 25)  # 18..42
+            morale = 1.0 + float((seed >> 2) % 4)  # 1..4
+            cond = float((seed >> 8) % 3)  # 0..2
+            self.player.hunger = clamp(self.player.hunger + hunger, 0.0, 100.0)
+            self.player.morale = clamp(self.player.morale + morale, 0.0, 100.0)
+            self.player.condition = clamp(self.player.condition + cond, 0.0, 100.0)
+            self._set_hint(f"吃了{idef.name}：饥饿+")
+            return True
+
+        # kind == "med"
+        heal = 10.0 + float(seed % 18)  # 10..27
+        cond = 2.0 + float((seed >> 5) % 5)  # 2..6
+        morale = 0.0 + float((seed >> 9) % 3)  # 0..2
+        stopped = None
+        if any(k in str(item_id) for k in ("bandage", "suture", "splint", "iodine", "antiseptic", "ointment", "disinfect")):
+            stopped = self._bandage_one_wound()
+        self.player.hp = int(clamp(float(self.player.hp) + heal, 0.0, 100.0))
+        self.player.condition = clamp(self.player.condition + cond, 0.0, 100.0)
+        self.player.morale = clamp(self.player.morale + morale, 0.0, 100.0)
+        if stopped:
+            name = self._BODY_PART_NAMES.get(str(stopped), str(stopped))
+            self._set_hint(f"{idef.name}：止血({name})")
+        else:
+            self._set_hint(f"使用{idef.name}：恢复+")
+        return True
         return False
 
     def _equip_selected(self) -> None:
@@ -16124,13 +17134,15 @@ class HardcoreSurvivalState(State):
             return
 
         if idef.kind != "gun":
-            if idef.kind in ("food", "drink", "med"):
-                if not self._use_consumable(stack.item_id):
-                    self._set_hint("暂时不能使用")
+            if idef.kind in ("food", "drink", "med", "fuel"):
+                ok = self._use_consumable(stack.item_id)
+                if not ok:
+                    if not str(getattr(self, "hint_text", "")).strip():
+                        self._set_hint("暂时不能使用", seconds=1.0)
                     return
                 stack.qty -= 1
                 if stack.qty <= 0:
-                    self.inventory.slots[int(self.inv_index)] = None
+                    self.inventory.slots[int(self.inv_index)] = None     
                 return
             self._set_hint("不能使用/装备")
             return
@@ -16285,107 +17297,44 @@ class HardcoreSurvivalState(State):
             pdir = pygame.Vector2(1, 0)
         pdir = pdir.normalize()
 
-        if abs(float(pdir.y)) >= abs(float(pdir.x)):
-            dname = "down" if float(pdir.y) >= 0.0 else "up"
-        else:
-            dname = "right" if float(pdir.x) >= 0.0 else "left"
+        origin = pygame.Vector2(self.player.pos)
+        max_r = float(getattr(self, "_PUNCH_RANGE_PX", 18.0))
+        max_r2 = float(max_r * max_r)
+        arc_dot = float(getattr(self, "_PUNCH_ARC_DOT", 0.28))
 
-        pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
-        pf_run = getattr(self, "player_frames_run", None)
-        is_run = bool(getattr(self, "player_sprinting", False))
-        pf = pf_run if (is_run and isinstance(pf_run, dict)) else pf_walk
-        frames = pf.get(dname, pf["down"])
-
-        moving = self.player.vel.length_squared() > 1.0
-        walk_idx = 0
-        idle_anim = True
-        if not moving or len(frames) <= 1:
-            base = frames[0]
-        else:
-            idle_anim = False
-            walk = frames[1:]
-            phase = (float(self.player.walk_phase) % math.tau) / math.tau
-            walk_idx = int(phase * len(walk)) % len(walk)
-            base = walk[int(walk_idx)]
-
-        rect = base.get_rect()
-        rect.midbottom = (
-            iround(float(self.player.pos.x)),
-            iround(float(self.player.pos.y) + float(self.player.h) / 2.0),
-        )
-        if is_run and not bool(idle_anim) and int(walk_idx) in (1, 4):
-            rect.y += 1
-
-        height_delta = 0
-        av = getattr(self, "avatar", None)
-        if av is not None:
-            hidx = int(getattr(av, "height", 1))
-            height_delta = 1 if hidx == 0 else -1 if hidx == 2 else 0
-
-        sk = self._survivor_skeleton_nodes(
-            dname,
-            int(walk_idx),
-            idle=bool(idle_anim),
-            height_delta=int(height_delta),
-            run=bool(is_run),
-        )
-
-        total = float(self._PUNCH_TOTAL_S)
-        left = float(getattr(self, "punch_left", 0.0))
-        t = 1.0 - float(left) / max(1e-6, total)
-        ext = math.sin(float(clamp(t, 0.0, 1.0)) * math.pi)
-        reach = 1.0 + ext * 4.0
-
-        lh = sk.get("l_hand")
-        rh = sk.get("r_hand")
-        base_hand: pygame.Vector2
-        if lh is not None and rh is not None:
-            lhx, lhy = int(lh[0]), int(lh[1])
-            rhx, rhy = int(rh[0]), int(rh[1])
-            left_pt = (lhx, lhy) if lhx <= rhx else (rhx, rhy)
-            right_pt = (lhx, lhy) if lhx >= rhx else (rhx, rhy)
-            if abs(float(pdir.x)) >= abs(float(pdir.y)) and float(pdir.x) != 0.0:
-                hx, hy = left_pt if float(pdir.x) < 0.0 else right_pt
-            else:
-                use_right = bool(getattr(self, "punch_hand", 0))
-                hx, hy = right_pt if use_right else left_pt
-            base_hand = pygame.Vector2(int(rect.left + hx), int(rect.top + hy))
-        else:
-            hand_node = sk.get("r_hand")
-            if hand_node is not None:
-                hx, hy = hand_node
-                base_hand = pygame.Vector2(int(rect.left + hx), int(rect.top + hy))
-            else:
-                base_hand = pygame.Vector2(rect.centerx, rect.centery + 3)
-
-        fist = base_hand + pdir * float(reach)
-        fist_rect = pygame.Rect(0, 0, 8, 8)
-        fist_rect.center = (int(round(float(fist.x))), int(round(float(fist.y))))
-
-        dmg = int(self._PUNCH_DAMAGE)
-        hit = 0
-
+        best: HardcoreSurvivalState._Zombie | None = None
+        best_d2 = 1e18
         for z in self.zombies:
             if int(getattr(z, "hp", 0)) <= 0:
                 continue
-            if not fist_rect.colliderect(z.rect()):
+            to = pygame.Vector2(z.pos) - origin
+            d2 = float(to.length_squared())
+            if d2 > max_r2:
                 continue
+            if d2 > 0.001:
+                dot = float(to.normalize().dot(pdir))
+                if dot < arc_dot:
+                    continue
+            if d2 < best_d2:
+                best = z
+                best_d2 = d2
 
-            z.hp = int(z.hp) - int(dmg)
-            hit += 1
-            if int(z.hp) > 0:
-                z.stagger_left = max(float(getattr(z, "stagger_left", 0.0)), float(self._PUNCH_STAGGER_S))
-                z.stagger_vel = pygame.Vector2(pdir) * float(self._PUNCH_STAGGER_SPEED)
-            else:
-                self._on_zombie_killed(z)
+        if best is None:
+            return
 
-            self._spawn_hit_fx(pygame.Vector2(z.pos), dir=pdir)
+        dmg = int(self._PUNCH_DAMAGE)
+        best.hp = int(best.hp) - int(dmg)
+        if int(best.hp) > 0:
+            best.stagger_left = max(float(getattr(best, "stagger_left", 0.0)), float(self._PUNCH_STAGGER_S))
+            best.stagger_vel = pygame.Vector2(pdir) * float(self._PUNCH_STAGGER_SPEED)
+        else:
+            self._on_zombie_killed(best)
 
-        if hit > 0:
-            self.app.play_sfx("hit")
-            self.noise_left = max(float(getattr(self, "noise_left", 0.0)), 0.22)
-            self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), 120.0)
-            self.zombies = [z for z in self.zombies if int(z.hp) > 0]
+        self._spawn_hit_fx(pygame.Vector2(best.pos), dir=pdir)
+        self.app.play_sfx("hit")
+        self.noise_left = max(float(getattr(self, "noise_left", 0.0)), 0.22)
+        self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), 120.0)
+        self.zombies = [z for z in self.zombies if int(z.hp) > 0]
 
     def _spawn_hit_fx(self, pos: pygame.Vector2, *, dir: pygame.Vector2) -> None:
         pos = pygame.Vector2(pos)
@@ -16463,8 +17412,8 @@ class HardcoreSurvivalState(State):
             exits = [
                 pygame.Vector2(vw / 2 + self.player.w / 2 + 4, 0),
                 pygame.Vector2(-(vw / 2 + self.player.w / 2 + 4), 0),
-                pygame.Vector2(0, vh / 2 + self.player.h / 2 + 4),
-                pygame.Vector2(0, -(vh / 2 + self.player.h / 2 + 4)),
+                pygame.Vector2(0, vh / 2 + float(getattr(self.player, "collider_h", self.player.h)) / 2 + 4),
+                pygame.Vector2(0, -(vh / 2 + float(getattr(self.player, "collider_h", self.player.h)) / 2 + 4)),
             ]
             placed = False
             for off in exits:
@@ -16492,11 +17441,15 @@ class HardcoreSurvivalState(State):
 
         if can_parked and (not can_rv or parked_d2 <= rv_d2) and (not can_bike or parked_d2 < bike_d2):
             # Take a parked two-wheeler (including motorcycles) and mount it.
+            pb = parked_bike
+            pb_mid = str(getattr(pb, "model_id", "bike")) if pb is not None else "bike"
+            if pb_mid.startswith("moto") and int(self.inventory.count("key_moto")) <= 0:
+                self._set_hint("需要摩托钥匙", seconds=1.1)
+                return
             try:
                 self._stash_personal_bike_as_parked()
             except Exception:
                 pass
-            pb = parked_bike
             self.bike.pos.update(pygame.Vector2(getattr(pb, "pos", self.player.pos)))
             self.bike.vel.update(0, 0)
             self.bike.model_id = str(getattr(pb, "model_id", "bike"))
@@ -16514,11 +17467,18 @@ class HardcoreSurvivalState(State):
             return
 
         if can_bike and (not can_rv or bike_d2 <= rv_d2):
+            mid = str(getattr(self.bike, "model_id", "bike"))
+            if mid.startswith("moto") and int(self.inventory.count("key_moto")) <= 0:
+                self._set_hint("需要摩托钥匙", seconds=1.1)
+                return
             self.mount = "bike"
             self.player.pos.update(self.bike.pos)
             self._set_hint(f"骑上 {self._two_wheel_name(getattr(self.bike, 'model_id', 'bike'))}")
             return
 
+        if int(self.inventory.count("key_rv")) <= 0:
+            self._set_hint("需要房车钥匙", seconds=1.1)
+            return
         self.mount = "rv"
         self.player.pos.update(self.rv.pos)
         self._set_hint("上房车")
@@ -16937,6 +17897,32 @@ class HardcoreSurvivalState(State):
                 z.attack_left = float(mdef.attack_cd)
                 self.player.hp = max(0, int(self.player.hp) - int(mdef.dmg))
                 self.player.morale = float(clamp(self.player.morale - (2.0 + float(mdef.dmg) * 0.35), 0.0, 100.0))
+
+                # Chance to inflict a bleeding wound (scratch/bite).
+                try:
+                    chance = float(clamp(0.12 + 0.02 * float(mdef.dmg), 0.08, 0.55))
+                    if random.random() < chance:
+                        dx = float(self.player.pos.x - z.pos.x)
+                        dy = float(self.player.pos.y - z.pos.y)
+                        side_left = dx > 0.0
+                        part = "torso"
+                        if abs(dy) > abs(dx) and dy > 0.0 and random.random() < 0.18:
+                            part = "head"
+                        elif random.random() < 0.38:
+                            part = "torso"
+                        else:
+                            if abs(dx) >= abs(dy):
+                                part = "left_arm" if side_left else "right_arm"
+                                if random.random() < 0.35:
+                                    part = "left_leg" if side_left else "right_leg"
+                            else:
+                                part = "left_leg" if side_left else "right_leg"
+                                if random.random() < 0.35:
+                                    part = "left_arm" if side_left else "right_arm"
+                        rate = float(clamp(0.18 + 0.01 * float(mdef.dmg), 0.12, 0.60))
+                        self._inflict_wound(part, rate=rate)
+                except Exception:
+                    pass
 
     def _season_index(self) -> int:
         day = int(self.world_time_s / max(1e-6, self.DAY_LENGTH_S)) + 1
@@ -17391,6 +18377,7 @@ class HardcoreSurvivalState(State):
             self.T_COURT,
             self.T_FLOOR,
             self.T_ELEVATOR,
+            self.T_BARRICADE,
             self.T_SIDEWALK,
             self.T_BRICK,
             self.T_CONCRETE,
@@ -17469,6 +18456,21 @@ class HardcoreSurvivalState(State):
             if ((h >> 5) & 31) == 0:
                 nail = self._tint(col, add=(26, 18, 10))
                 surface.fill(nail, pygame.Rect(rect.centerx, rect.centery, 1, 1))
+
+        if tile_id == self.T_BARRICADE:
+            # Simple boarded-up door/barricade tile (solid).
+            base = self._tint(col, add=(10, 6, 0))
+            plank1 = self._tint(base, add=(-18, -14, -10))
+            plank2 = self._tint(base, add=(-30, -24, -18))
+            nail = self._tint(base, add=(64, 64, 72))
+            outline = (10, 10, 12)
+            for i, y_off in enumerate((2, 5, 8)):
+                rr = pygame.Rect(rect.x + 1, rect.y + int(y_off), rect.w - 2, 2)
+                surface.fill(plank1 if (i % 2) == 0 else plank2, rr)
+                pygame.draw.rect(surface, outline, rr, 1)
+                if rr.w >= 8:
+                    surface.fill(nail, pygame.Rect(rr.x + 2, rr.y + 1, 1, 1))
+                    surface.fill(nail, pygame.Rect(rr.right - 3, rr.y + 1, 1, 1))
 
         if tile_id == self.T_PARKING:
             # Painted stall lines + curb edge so parking lots read clearly.
@@ -18412,16 +19414,23 @@ class HardcoreSurvivalState(State):
             face_h = int(max(0, int(desired_total) - int(self.TILE_SIZE)))
             return int(max(36, int(face_h)))
 
-        if style == 1 and int(floors) > 1:
-            # Multi-floor house: taller facade than single-story homes.
-            f = int(clamp(int(floors), 2, 3))
-            base = 10 + (f - 1) * 8
-            if area >= 220:
-                base += 2
-            base += (int(var) % 5) - 2
+        if style == 1:
+            # Houses: use the same "layer height" logic as high-rises so the
+            # first floor reads taller (≈ 1.5× player height per floor).
+            f = int(clamp(int(floors) if int(floors) > 0 else 1, 1, 3))
+            floor_h = int(
+                clamp(
+                    int(round(float(getattr(getattr(self, "player", None), "h", 12)) * 1.5)),
+                    14,
+                    26,
+                )
+            )
+            desired_total = int(f) * int(floor_h)
+            face_h = int(max(0, int(desired_total) - int(self.TILE_SIZE)))
+            # Keep some roof surface visible.
             roof_h = int(max(1, (int(h) - 2) * int(self.TILE_SIZE)))
-            max_face = int(max(12, int(roof_h - 14)))
-            return int(clamp(int(base), 12, int(min(max_face, 50))))
+            max_face = int(max(3, int(roof_h - 14)))
+            return int(clamp(int(face_h), 3, int(min(max_face, 56))))
 
         base = {
             1: 3,  # 住宅
@@ -18693,6 +19702,7 @@ class HardcoreSurvivalState(State):
         end_ty: int,
         *,
         min_ground_y: int | None = None,
+        skip_building: tuple[int, int, int, int] | None = None,
     ) -> None:
         # Expand by a full chunk in each direction so facades from large
         # buildings don't pop in/out at the screen edges while walking.
@@ -18701,7 +19711,7 @@ class HardcoreSurvivalState(State):
         end_cx = end_tx // self.CHUNK_SIZE + chunk_pad
         start_cy = start_ty // self.CHUNK_SIZE - chunk_pad
         end_cy = end_ty // self.CHUNK_SIZE + chunk_pad
-        floor_slice_h = int(clamp(int(round(float(getattr(self.player, "h", 12)) * 1.5)), 14, 26))
+        floor_slice_h = int(clamp(int(round(float(getattr(self.player, "body_h", getattr(self.player, "h", 12))) * 1.5)), 14, 26))
         max_floors = int(max(2, int(getattr(self, "HIGHRISE_MAX_FLOORS", 10))))
 
         forced_slice: tuple[int, int, int, int, int, int] | None = getattr(self, "_inside_highrise_facade_slice", None)
@@ -18761,6 +19771,8 @@ class HardcoreSurvivalState(State):
                     continue
                 for b in getattr(chunk, "buildings", []):
                     tx0, ty0, w, h = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                    if skip_building is not None and (int(tx0), int(ty0), int(w), int(h)) == tuple(skip_building):
+                        continue
                     roof_kind = int(b[4]) if len(b) > 4 else 0
                     style, var = self._building_roof_style_var(int(roof_kind))
 
@@ -18797,11 +19809,11 @@ class HardcoreSurvivalState(State):
                         if forced_mh is not None and (int(tx0), int(ty0), int(w), int(h)) == forced_mh:
                             slice_floor = int(forced_floor)
                             slice_floors = int(forced_floors)
-                        elif inside_mh is not None:
-                            itx0, ity0, iw, ih = inside_mh
-                            if (int(itx0), int(ity0), int(iw), int(ih)) == (int(tx0), int(ty0), int(w), int(h)):
-                                slice_floor = int(inside_mh_floor)
-                                slice_floors = int(inside_mh_floors)
+                    if inside_mh is not None and int(style) in (1, 6):
+                        itx0, ity0, iw, ih = inside_mh
+                        if (int(itx0), int(ity0), int(iw), int(ih)) == (int(tx0), int(ty0), int(w), int(h)):
+                            slice_floor = int(inside_mh_floor)
+                            slice_floors = int(inside_mh_floors)
 
                     door_px: pygame.Rect | None = None
                     if door_tiles and door_side == "S":
@@ -18824,13 +19836,13 @@ class HardcoreSurvivalState(State):
                     if min_ground_y is not None and int(ground_y) <= int(min_ground_y):
                         continue
                     # South (bottom) face: draw the "front facade".
-                    # Extend upward for tall facades (high-rises and multi-floor houses).
+                    # Extend upward for tall facades (high-rises and houses).
                     south_y = int(ground_y - self.TILE_SIZE)
                     south_h = int(self.TILE_SIZE)
-                    if style == 6 or (style == 1 and int(floors) > 1):
+                    if style == 6 or style == 1:
                         south_y = int(ground_y - self.TILE_SIZE - int(face_h))
-                        south_h = int(self.TILE_SIZE + int(face_h))     
-                    if int(style) == 6 and slice_floor is not None and int(slice_floors) > 1:
+                        south_h = int(self.TILE_SIZE + int(face_h))      
+                    if int(style) in (1, 6) and slice_floor is not None and int(slice_floors) > 1:
                         floor_h = int(floor_slice_h)
                         floors_total = int(max(1, int(slice_floors)))
                         floor_i = int(clamp(int(slice_floor), 1, int(floors_total)))
@@ -18849,8 +19861,12 @@ class HardcoreSurvivalState(State):
                     shade = self._tint(front, add=(-18, -18, -18))
                     surface.fill(shade, pygame.Rect(int(south.x), int(south.bottom - shade_h), int(south.w), int(shade_h)))
 
-                    # Trim line under the roof.
-                    surface.fill(trim, pygame.Rect(south.x, south.y + 1, south.w, 2))
+                    # Trim line under the roof (or a separator when slicing to a lower floor).
+                    if slice_floor is not None and int(slice_floors) > 0 and int(slice_floor) < int(slice_floors):
+                        sep = self._tint(trim, add=(-34, -34, -38))
+                        surface.fill(sep, pygame.Rect(south.x, south.y + 1, south.w, 1))
+                    else:
+                        surface.fill(trim, pygame.Rect(south.x, south.y + 1, south.w, 2))
 
                     # High-rise floor label (for very tall buildings).
                     if int(style) == 6 and int(floors) >= 11:
@@ -18977,6 +19993,11 @@ class HardcoreSurvivalState(State):
 
                     if style in (1, 6):
                         # Residential/high-rise windows.
+                        detail_floors = int(floors)
+                        if int(style) == 1 and slice_floor is not None and int(slice_floors) > 1:
+                            # When inside a multi-floor house we slice the facade height.
+                            # Match the window pattern to the visible floors (this floor + below).
+                            detail_floors = int(max(1, int(slice_floor)))
                         win = self._tint(trim, add=(-40, -40, -46))
                         frame = outline
                         start_x = int(south.x + 6 + (var % 4))
@@ -18996,9 +20017,9 @@ class HardcoreSurvivalState(State):
                                     pygame.draw.rect(surface, frame, r, 1, border_radius=1)
                         else:
                             step_x = 12
-                            if int(floors) > 1 and south.h >= 18:
+                            if int(detail_floors) > 1 and south.h >= 18:
                                 # Multi-floor house: 2–3 window rows so the facade reads taller.
-                                rows = int(clamp(int(floors), 2, 3))
+                                rows = int(clamp(int(detail_floors), 2, 3))
                                 y0w = int(south.y + 4)
                                 y1w = int(south.bottom - 18)
                                 if y1w <= y0w:
@@ -19997,8 +21018,11 @@ class HardcoreSurvivalState(State):
                             floors = int(max_floors)
                         floors = int(min(int(floors), int(max_floors)))
                         cut_px = int(self._roof_cut_px(style=int(style), w=int(w), h=int(h), var=int(var), floors=int(floors)))
-                        cut_tiles = int(cut_px) // int(max(1, int(self.TILE_SIZE)))
+                        ts = int(max(1, int(self.TILE_SIZE)))
+                        cut_tiles = int(cut_px) // ts
                         core_h = int(max(2, int(h) - 2 - int(cut_tiles)))
+                        min_core_h = int(max(6, int(getattr(self, "HIGHRISE_MIN_FLOOR_TILES", 9))))
+                        core_h = int(min(int(max(int(core_h), int(min_core_h))), int(max(2, int(h) - 2))))
                         top_cut = int(max(0, (int(h) - 2) - int(core_h)))
                         floor_y0 = int(ty0 + 1 + int(top_cut))
                         self._inside_highrise_draw_mask = (int(tx0), int(ty0), int(w), int(h), int(floor_y0))
@@ -20008,7 +21032,7 @@ class HardcoreSurvivalState(State):
                         # band of the current floor.
                         floor_slice_h = int(
                             clamp(
-                                int(round(float(getattr(self.player, "h", 12)) * 1.5)),
+                                int(round(float(getattr(self.player, "body_h", getattr(self.player, "h", 12))) * 1.5)),
                                 14,
                                 26,
                             )
@@ -20145,33 +21169,32 @@ class HardcoreSurvivalState(State):
                             rect = pygame.Rect(int(px), int(py), int(ts), int(ts))
                             self._draw_world_tile(surface, rect, tx=int(tx), ty=int(ty), tile_id=int(tile), apply_mask=False)
 
-                    # Redraw the current-floor facade band on top of the lifted tiles.
-                    try:
-                        bx = int(tx0) * int(ts) - int(cam_x)
-                        by = int(ty0) * int(ts) - int(cam_y_draw)
-                        ground_y = int(by + int(h) * int(ts))
-                        south_h = int(max(1, int(floor_h)))
-                        south_y = int(ground_y - int(offset_px) - int(south_h))
-                        clip = pygame.Rect(int(bx - 3), int(south_y - 3), int(w) * int(ts) + 6, int(south_h) + 6)
-                        prev_clip = surface.get_clip()
-                        surface.set_clip(clip)
-                        try:
-                            self._draw_building_facades(
-                                surface,
-                                int(cam_x),
-                                int(cam_y_draw),
-                                int(tx0) - 3,
-                                int(tx0) + int(w) + 3,
-                                int(ty0) - 3,
-                                int(ty0) + int(h) + 3,
-                            )
-                        finally:
-                            surface.set_clip(prev_clip)
-                    except Exception:
-                        pass
-
                     if self.mount is None:
                         self._draw_player(surface, int(cam_x), int(cam_y_draw) + int(offset_px))
+                        # Occlude the elevated player with the current-floor facade band.
+                        try:
+                            bx = int(tx0) * int(ts) - int(cam_x)
+                            by = int(ty0) * int(ts) - int(cam_y_draw)
+                            ground_y = int(by + int(h) * int(ts))
+                            south_h = int(max(1, int(floor_h)))
+                            south_y = int(ground_y - int(offset_px) - int(south_h))
+                            clip = pygame.Rect(int(bx - 3), int(south_y - 3), int(w) * int(ts) + 6, int(south_h) + 6)
+                            prev_clip = surface.get_clip()
+                            surface.set_clip(clip)
+                            try:
+                                self._draw_building_facades(
+                                    surface,
+                                    int(cam_x),
+                                    int(cam_y_draw),
+                                    int(tx0) - 3,
+                                    int(tx0) + int(w) + 3,
+                                    int(ty0) - 3,
+                                    int(ty0) + int(h) + 3,
+                                )
+                            finally:
+                                surface.set_clip(prev_clip)
+                        except Exception:
+                            pass
                         self._occlude_mounted_vehicle_with_facades(
                             surface,
                             int(cam_x),
@@ -20219,6 +21242,15 @@ class HardcoreSurvivalState(State):
         entity_cam_y: int | None = None,
     ) -> None:
         entity_cam_y_i = int(cam_y) if entity_cam_y is None else int(entity_cam_y)
+        skip_building: tuple[int, int, int, int] | None = None
+        if entity_cam_y is not None:
+            overlay = getattr(self, "_inside_highrise_floor_overlay", None)
+            if overlay is not None:
+                try:
+                    tx0, ty0, w, h = overlay[:4]
+                    skip_building = (int(tx0), int(ty0), int(w), int(h))
+                except Exception:
+                    skip_building = None
         mount = getattr(self, "mount", None)
         if mount is None:
             if not hasattr(self, "player") or self.player is None:
@@ -20255,6 +21287,7 @@ class HardcoreSurvivalState(State):
                 int(start_ty),
                 int(end_ty),
                 min_ground_y=int(ground_y) + 1,
+                skip_building=skip_building,
             )
         finally:
             surface.set_clip(prev_clip)
@@ -21346,10 +22379,18 @@ class HardcoreSurvivalState(State):
             if fill_w > 0:
                 pygame.draw.rect(surface, fg, pygame.Rect(bar.x + 1, bar.y + 1, fill_w, bar.h - 2))
 
-        stat_line(20, "HP", float(self.player.hp), fg=(220, 90, 90))
-        stat_line(32, "饿", self.player.hunger, fg=(210, 170, 90))
-        stat_line(44, "渴", self.player.thirst, fg=(120, 170, 230))
-        stat_line(56, "健", self.player.condition, fg=(120, 210, 140))
+        stat_line(20, "HP", float(self.player.hp), fg=(220, 90, 90))    
+        try:
+            bleed_rate = float(self._bleed_total_rate())
+            if bleed_rate > 0.0 and isinstance(getattr(self, "bleed_wounds", None), dict) and self.bleed_wounds:
+                parts = [self._BODY_PART_NAMES.get(str(p), str(p)) for p in self.bleed_wounds.keys()]
+                txt = "流血 " + "/".join(parts[:3])
+                draw_text(surface, self.app.font_s, txt, (140, 20), pygame.Color(220, 90, 90), anchor="topleft")
+        except Exception:
+            pass
+        stat_line(32, "饿", self.player.hunger, fg=(210, 170, 90))      
+        stat_line(44, "渴", self.player.thirst, fg=(120, 170, 230))     
+        stat_line(56, "健", self.player.condition, fg=(120, 210, 140))  
         stat_line(68, "心", self.player.morale, fg=(200, 160, 240))
         stat_line(80, "体", self.player.stamina, fg=(240, 240, 240))
 
