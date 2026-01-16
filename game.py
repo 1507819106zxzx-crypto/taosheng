@@ -5872,12 +5872,153 @@ class HardcoreSurvivalState(State):
         if kind == "food":
             parts = item_id.split("_")
             base = parts[1] if len(parts) >= 3 and parts[0] == "food" else item_id
-            if base in ("tuna", "beans", "corn", "fruitcan", "soup") or "can" in base:
-                return make_can(label=accent)
-            if base in ("chips", "jerky", "candy", "chocolate", "nuts", "driedfruit", "seaweed"):
-                return make_bag(body=base_col, band=accent)
-            if base in ("cereal", "crackers", "mre", "mealbox", "biscuit"):
-                return make_box(body=base_col, band=accent)
+            flavor = parts[2] if len(parts) >= 3 and parts[0] == "food" else ""
+
+            # Flavor-coded label so variants read differently at a glance.
+            flavor_col = {
+                "plain": accent,
+                "spicy": (230, 92, 72),
+                "tomato": (230, 78, 86),
+                "curry": (232, 190, 90),
+                "garlic": (230, 230, 214),
+                "bbq": (184, 124, 78),
+                "pepper": (130, 130, 142),
+                "sweet": (232, 160, 190),
+            }.get(str(flavor), accent)
+            label = HardcoreSurvivalState._rgb_lerp(accent, flavor_col, 0.75)
+            ink = HardcoreSurvivalState._rgb_shift(label, 70, 70, 70)
+
+            def blit_pat_centered(surf: pygame.Surface, rect: pygame.Rect, pat: list[str], col: tuple[int, int, int]) -> None:
+                if not pat:
+                    return
+                pw = max(len(r) for r in pat)
+                ph = len(pat)
+                ox = int(rect.x + max(0, (int(rect.w) - int(pw)) // 2))
+                oy = int(rect.y + max(0, (int(rect.h) - int(ph)) // 2))
+                sw, sh = int(surf.get_width()), int(surf.get_height())
+                for yy, row in enumerate(pat):
+                    for xx, ch in enumerate(row):
+                        if ch != "#":
+                            continue
+                        px = int(ox + xx)
+                        py = int(oy + yy)
+                        if 0 <= px < sw and 0 <= py < sh:
+                            surf.set_at((px, py), col)
+
+            # More distinct silhouettes for common foods.
+            if base in ("bread",):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                crust = HardcoreSurvivalState._rgb_lerp((190, 132, 78), base_col, 0.45)
+                crumb = HardcoreSurvivalState._rgb_shift(crust, 28, 28, 28)
+                loaf = pygame.Rect(2, 4, 10, 6)
+                pygame.draw.rect(surf, crust, loaf, border_radius=3)
+                pygame.draw.rect(surf, outline, loaf, 1, border_radius=3)
+                pygame.draw.rect(surf, crumb, pygame.Rect(loaf.x + 1, loaf.y + 1, loaf.w - 2, 1))
+                for xx in (5, 8):
+                    pygame.draw.line(surf, HardcoreSurvivalState._rgb_shift(crust, -22, -22, -22), (xx, loaf.y + 2), (xx, loaf.bottom - 2), 1)
+                tag = pygame.Rect(5, 6, 4, 2)
+                pygame.draw.rect(surf, label, tag, border_radius=1)
+                pygame.draw.rect(surf, outline, tag, 1, border_radius=1)
+                return surf
+            if base in ("cheese",):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                cheese = HardcoreSurvivalState._rgb_lerp((232, 210, 110), base_col, 0.35)
+                cheese2 = HardcoreSurvivalState._rgb_shift(cheese, -35, -35, -35)
+                pts = [(3, 10), (11, 7), (11, 11)]
+                pygame.draw.polygon(surf, cheese, pts)
+                pygame.draw.polygon(surf, outline, pts, 1)
+                pygame.draw.line(surf, cheese2, (6, 10), (11, 7), 1)
+                for px, py in ((7, 9), (9, 10), (8, 11)):
+                    surf.set_at((px, py), HardcoreSurvivalState._rgb_shift(cheese, -55, -55, -55))
+                return surf
+            if base in ("pickles", "nuts"):
+                # Small jar (pickles / nuts).
+                surf = pygame.Surface((12, 14), pygame.SRCALPHA)
+                cap = (220, 220, 230)
+                jar = (110, 170, 110) if base == "pickles" else HardcoreSurvivalState._rgb_lerp((160, 120, 80), base_col, 0.35)
+                jar2 = HardcoreSurvivalState._rgb_shift(jar, -30, -30, -30)
+                pygame.draw.rect(surf, cap, pygame.Rect(4, 1, 4, 2), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(4, 1, 4, 2), 1, border_radius=1)
+                body = pygame.Rect(3, 3, 6, 10)
+                pygame.draw.rect(surf, jar, body, border_radius=3)
+                pygame.draw.rect(surf, outline, body, 1, border_radius=3)
+                band = pygame.Rect(3, 8, 6, 2)
+                pygame.draw.rect(surf, label, band, border_radius=1)
+                pygame.draw.rect(surf, outline, band, 1, border_radius=1)
+                pygame.draw.line(surf, jar2, (4, 5), (4, 12), 1)
+                return surf
+            if base in ("energybar", "chocolate"):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                wrap = HardcoreSurvivalState._rgb_lerp((210, 170, 90), base_col, 0.35)
+                wrap2 = HardcoreSurvivalState._rgb_shift(wrap, -35, -35, -35)
+                bar = pygame.Rect(2, 5, 10, 4)
+                pygame.draw.rect(surf, wrap, bar, border_radius=2)
+                pygame.draw.rect(surf, outline, bar, 1, border_radius=2)
+                pygame.draw.line(surf, wrap2, (3, 8), (10, 8), 1)
+                band = pygame.Rect(4, 6, 6, 2)
+                pygame.draw.rect(surf, label, band, border_radius=1)
+                pygame.draw.rect(surf, outline, band, 1, border_radius=1)
+                if base == "chocolate":
+                    cocoa = HardcoreSurvivalState._rgb_lerp((110, 70, 60), base_col, 0.35)
+                    pygame.draw.rect(surf, cocoa, pygame.Rect(3, 4, 8, 4), border_radius=1)
+                    pygame.draw.rect(surf, outline, pygame.Rect(3, 4, 8, 4), 1, border_radius=1)
+                    for xx in (6, 8):
+                        pygame.draw.line(surf, HardcoreSurvivalState._rgb_shift(cocoa, -30, -30, -30), (xx, 5), (xx, 7), 1)
+                return surf
+            if base in ("candy",):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                wrap = HardcoreSurvivalState._rgb_lerp((232, 160, 190), base_col, 0.35)
+                wrap2 = HardcoreSurvivalState._rgb_shift(wrap, -35, -35, -35)
+                core = pygame.Rect(4, 5, 6, 4)
+                pygame.draw.rect(surf, wrap, core, border_radius=2)
+                pygame.draw.rect(surf, outline, core, 1, border_radius=2)
+                pygame.draw.polygon(surf, wrap2, [(3, 6), (4, 5), (4, 9)])
+                pygame.draw.polygon(surf, wrap2, [(10, 5), (10, 9), (11, 6)])
+                pygame.draw.polygon(surf, outline, [(3, 6), (4, 5), (4, 9)], 1)
+                pygame.draw.polygon(surf, outline, [(10, 5), (10, 9), (11, 6)], 1)
+                band = pygame.Rect(5, 6, 4, 2)
+                pygame.draw.rect(surf, label, band, border_radius=1)
+                pygame.draw.rect(surf, outline, band, 1, border_radius=1)
+                return surf
+            if base in ("mealbox",):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                box = HardcoreSurvivalState._rgb_lerp((220, 220, 230), base_col, 0.35)
+                box2 = HardcoreSurvivalState._rgb_shift(box, -35, -35, -35)
+                br = pygame.Rect(2, 4, 10, 7)
+                pygame.draw.rect(surf, box, br, border_radius=2)
+                pygame.draw.rect(surf, outline, br, 1, border_radius=2)
+                pygame.draw.rect(surf, box2, pygame.Rect(br.x + 1, br.y + 4, br.w - 2, 2), border_radius=1)
+                pygame.draw.line(surf, outline, (br.x + 5, br.y + 1), (br.x + 5, br.bottom - 2), 1)
+                band = pygame.Rect(4, 6, 6, 2)
+                pygame.draw.rect(surf, label, band, border_radius=1)
+                pygame.draw.rect(surf, outline, band, 1, border_radius=1)
+                return surf
+            if base in ("mre",):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                pouch = HardcoreSurvivalState._rgb_lerp((120, 140, 110), base_col, 0.35)
+                pouch2 = HardcoreSurvivalState._rgb_shift(pouch, -30, -30, -30)
+                pr = pygame.Rect(3, 3, 8, 8)
+                pygame.draw.rect(surf, pouch, pr, border_radius=2)
+                pygame.draw.rect(surf, outline, pr, 1, border_radius=2)
+                pygame.draw.line(surf, outline, (pr.x + 1, pr.y + 2), (pr.right - 2, pr.y + 2), 1)
+                pygame.draw.line(surf, pouch2, (pr.x + 1, pr.bottom - 2), (pr.right - 2, pr.bottom - 2), 1)
+                band = pygame.Rect(4, 6, 6, 2)
+                pygame.draw.rect(surf, label, band, border_radius=1)
+                pygame.draw.rect(surf, outline, band, 1, border_radius=1)
+                return surf
+            if base in ("seaweed",):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                pack = HardcoreSurvivalState._rgb_lerp((70, 110, 80), base_col, 0.35)
+                pack2 = HardcoreSurvivalState._rgb_shift(pack, -35, -35, -35)
+                pr = pygame.Rect(3, 4, 8, 7)
+                pygame.draw.rect(surf, pack, pr, border_radius=2)
+                pygame.draw.rect(surf, outline, pr, 1, border_radius=2)
+                pygame.draw.line(surf, pack2, (4, 9), (10, 9), 1)
+                band = pygame.Rect(4, 6, 6, 2)
+                pygame.draw.rect(surf, label, band, border_radius=1)
+                pygame.draw.rect(surf, outline, band, 1, border_radius=1)
+                return surf
+
             if base in ("riceball",):
                 surf = pygame.Surface((14, 12), pygame.SRCALPHA)
                 rice = (240, 240, 240)
@@ -5905,7 +6046,39 @@ class HardcoreSurvivalState(State):
                 pygame.draw.rect(surf, accent, pygame.Rect(5, 6, 5, 2), border_radius=1)
                 pygame.draw.rect(surf, outline, pygame.Rect(5, 6, 5, 2), 1, border_radius=1)
                 return surf
-            return make_box(body=base_col, band=accent)
+            if base in ("tuna", "beans", "corn", "fruitcan", "soup") or "can" in base:
+                surf = make_can(label=label)
+                pat = {
+                    "tuna": ["###", ".#.", ".#."],  # T
+                    "beans": ["##.", "###", "##."],  # B
+                    "corn": ["###", "#..", "###"],  # C
+                    "fruitcan": ["###", "##.", "#.."],  # F
+                    "soup": ["###", ".##", "##."],  # S
+                }.get(str(base))
+                if pat:
+                    blit_pat_centered(surf, pygame.Rect(4, 5, 6, 3), pat, ink)
+                return surf
+            if base in ("chips", "jerky", "driedfruit"):
+                surf = make_bag(body=base_col, band=label)
+                pat = {
+                    "chips": ["#.#.#", ".#.#.", "#.#.#"],
+                    "jerky": ["#####", ".....", "#####"],
+                    "driedfruit": ["#...#", ".#.#.", "#...#"],
+                }.get(str(base))
+                if pat:
+                    blit_pat_centered(surf, pygame.Rect(4, 6, 6, 3), pat, ink)
+                return surf
+            if base in ("cereal", "crackers", "biscuit"):
+                surf = make_box(body=base_col, band=label)
+                pat = {
+                    "cereal": [".###.", "#...#"],
+                    "crackers": ["#.#.#", ".#.#."],
+                    "biscuit": [".###.", "#.#.#"],
+                }.get(str(base))
+                if pat:
+                    blit_pat_centered(surf, pygame.Rect(4, 6, 6, 2), pat, ink)
+                return surf
+            return make_box(body=base_col, band=label)
         if kind == "furniture":
             parts = item_id.split("_")
             fkind = parts[1] if len(parts) >= 3 and parts[0] == "furn" else "cabinet"
@@ -12263,7 +12436,7 @@ class HardcoreSurvivalState(State):
         chosen: tuple[int, int, str] | None = None
         interact = {"D", "E", "H", "A", "B"}
         if mode == "home":
-            interact.update({"S", "F", "C"})
+            interact.update({"S", "F", "C", "P", "X"})
         for cx, cy in candidates:
             ch = self._hr_int_char_at(cx, cy)
             if ch in interact:
@@ -12272,6 +12445,19 @@ class HardcoreSurvivalState(State):
         if chosen is None:
             self._set_hint("这里没有可互动", seconds=1.0)
             return
+
+        # While sitting, prefer PC/TV over the seat tile so "E" doesn't just stand up.
+        if (
+            mode == "home"
+            and str(getattr(self, "player_pose", "")) == "sit"
+            and str(getattr(self, "player_pose_space", "")) == "hr"
+            and chosen[2] == "C"
+        ):
+            for cx, cy in candidates:
+                ch2 = self._hr_int_char_at(cx, cy)
+                if ch2 in ("P", "X"):
+                    chosen = (cx, cy, ch2)
+                    break
         _cx, _cy, ch = chosen
         if ch == "E":
             self._hr_elevator_open()
@@ -12337,6 +12523,38 @@ class HardcoreSurvivalState(State):
                 self._home_ui_open(open_block=(int(min_x), int(min_y), int(max_x), int(max_y)), storage_kind="fridge")
             else:
                 self._home_ui_open(open_block=(int(_cx), int(_cy), int(_cx), int(_cy)), storage_kind="fridge")
+            return
+        if ch == "P" and mode == "home":
+            if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "hr":
+                self._set_hint("坐下再用电脑", seconds=1.0)
+                return
+            dx = int(_cx) - int(tx)
+            dy = int(_cy) - int(ty)
+            if abs(int(dx)) >= abs(int(dy)):
+                self.hr_int_facing = pygame.Vector2(1 if int(dx) > 0 else -1 if int(dx) < 0 else 0, 0)
+            else:
+                self.hr_int_facing = pygame.Vector2(0, 1 if int(dy) > 0 else -1 if int(dy) < 0 else 0)
+            self._toggle_world_map(open=True)
+            self._set_hint("电脑：地图", seconds=1.0)
+            return
+        if ch == "X" and mode == "home":
+            if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "hr":
+                self._set_hint("坐下再看电视", seconds=1.0)
+                return
+            dx = int(_cx) - int(tx)
+            dy = int(_cy) - int(ty)
+            if abs(int(dx)) >= abs(int(dy)):
+                self.hr_int_facing = pygame.Vector2(1 if int(dx) > 0 else -1 if int(dx) < 0 else 0, 0)
+            else:
+                self.hr_int_facing = pygame.Vector2(0, 1 if int(dy) > 0 else -1 if int(dy) < 0 else 0)
+            self.player.morale = float(clamp(float(self.player.morale) + 4.0, 0.0, 100.0))
+            self.inv_open = False
+            self.world_map_open = False
+            self.rv_ui_open = False
+            self.home_ui_open = False
+            self._gallery_page = 0
+            self._gallery_open = True
+            self._set_hint("看电视", seconds=1.0)
             return
         if ch == "C" and mode == "home":
             if str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "hr":
@@ -15383,11 +15601,11 @@ class HardcoreSurvivalState(State):
             surface.blit(spr, rect)
         elif use_pose and pose == "sit":
             shadow = pygame.Rect(0, 0, 16, 7)
-            shadow.center = (sx, sy + 6)
+            shadow.center = (sx, sy + 8)
             sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
             pygame.draw.ellipse(sh, (0, 0, 0, 110), sh.get_rect())
             surface.blit(sh, shadow.topleft)
-            rect = spr.get_rect(center=(sx, sy + 4))
+            rect = spr.get_rect(center=(sx, sy + 6))
             surface.blit(spr, rect)
         else:
             shadow = pygame.Rect(0, 0, 14, 6)
@@ -18058,7 +18276,7 @@ class HardcoreSurvivalState(State):
         # Pressing E again while sleeping gets you up.
         if str(getattr(self, "player_pose", "")) == "sleep" and str(getattr(self, "player_pose_space", "")) == "world":
             self._clear_player_pose()
-            self._set_hint("����", seconds=0.8)
+            self._set_hint("醒来", seconds=0.8)
             return True
 
         tx, ty = self._player_tile()
@@ -18111,7 +18329,171 @@ class HardcoreSurvivalState(State):
         self.player.stamina = 100.0
         self.player.morale = float(clamp(self.player.morale + 10.0, 0.0, 100.0))
         self._set_player_pose("sleep", space="world", anchor=(ax, ay), seconds=0.0)
-        self._set_hint("������Ϣ", seconds=1.1)
+        self._set_hint("躺床休息", seconds=1.1)
+        return True
+
+    def _try_use_pc_world(self) -> bool:
+        if getattr(self, "mount", None) is not None:
+            return False
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return False
+
+        tx, ty = self._player_tile()
+        candidates = [
+            (tx, ty),
+            (tx + 1, ty),
+            (tx - 1, ty),
+            (tx, ty + 1),
+            (tx, ty - 1),
+            (tx + 1, ty + 1),
+            (tx + 1, ty - 1),
+            (tx - 1, ty + 1),
+            (tx - 1, ty - 1),
+        ]
+        hit: tuple[int, int] | None = None
+        for cx, cy in candidates:
+            if int(self.world.get_tile(int(cx), int(cy))) == int(self.T_PC):
+                hit = (int(cx), int(cy))
+                break
+        if hit is None:
+            return False
+
+        if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "world":
+            self._set_hint("坐下再用电脑", seconds=1.0)
+            return True
+
+        dx = int(hit[0]) - int(tx)
+        dy = int(hit[1]) - int(ty)
+        if abs(int(dx)) >= abs(int(dy)):
+            if int(dx) > 0:
+                self.player.dir = "right"
+            elif int(dx) < 0:
+                self.player.dir = "left"
+        else:
+            if int(dy) > 0:
+                self.player.dir = "down"
+            elif int(dy) < 0:
+                self.player.dir = "up"
+
+        self._toggle_world_map(open=True)
+        self._set_hint("电脑：地图", seconds=1.0)
+        return True
+
+    def _try_watch_tv_world(self) -> bool:
+        if getattr(self, "mount", None) is not None:
+            return False
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return False
+
+        tx, ty = self._player_tile()
+        candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+        hit: tuple[int, int] | None = None
+        for cx, cy in candidates:
+            if int(self.world.get_tile(int(cx), int(cy))) == int(self.T_TV):
+                hit = (int(cx), int(cy))
+                break
+        if hit is None:
+            return False
+
+        if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "world":
+            self._set_hint("坐下再看电视", seconds=1.0)
+            return True
+
+        dx = int(hit[0]) - int(tx)
+        dy = int(hit[1]) - int(ty)
+        if abs(int(dx)) >= abs(int(dy)):
+            if int(dx) > 0:
+                self.player.dir = "right"
+            elif int(dx) < 0:
+                self.player.dir = "left"
+        else:
+            if int(dy) > 0:
+                self.player.dir = "down"
+            elif int(dy) < 0:
+                self.player.dir = "up"
+
+        self.player.morale = float(clamp(float(self.player.morale) + 3.0, 0.0, 100.0))
+        self.inv_open = False
+        self.world_map_open = False
+        self._gallery_page = 0
+        self._gallery_open = True
+        self._set_hint("看电视", seconds=1.0)
+        return True
+
+    def _try_sit_world(self) -> bool:
+        if getattr(self, "mount", None) is not None:
+            return False
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return False
+        if str(getattr(self, "player_pose", "")) == "sleep" and str(getattr(self, "player_pose_space", "")) == "world":
+            return False
+
+        tx, ty = self._player_tile()
+        candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+        chosen: tuple[int, int, int] | None = None
+        for cx, cy in candidates:
+            tid = int(self.world.get_tile(int(cx), int(cy)))
+            if tid in (int(self.T_CHAIR), int(self.T_SOFA)):
+                chosen = (int(cx), int(cy), int(tid))
+                break
+        if chosen is None:
+            return False
+
+        cx, cy, tid = chosen
+        seen: set[tuple[int, int]] = set()
+        stack = [(int(cx), int(cy))]
+        cells: list[tuple[int, int]] = []
+        while stack and len(cells) < 24:
+            sx, sy = stack.pop()
+            sx = int(sx)
+            sy = int(sy)
+            if (sx, sy) in seen:
+                continue
+            seen.add((sx, sy))
+            if int(self.world.get_tile(int(sx), int(sy))) != int(tid):
+                continue
+            cells.append((sx, sy))
+            stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
+        if not cells:
+            cells = [(int(cx), int(cy))]
+
+        min_x = min(int(p[0]) for p in cells)
+        max_x = max(int(p[0]) for p in cells)
+        min_y = min(int(p[1]) for p in cells)
+        max_y = max(int(p[1]) for p in cells)
+        ax = (float(min_x + max_x + 1) * float(self.TILE_SIZE)) * 0.5
+        ay = (float(min_y + max_y + 1) * float(self.TILE_SIZE)) * 0.5
+
+        dx = int(cx) - int(tx)
+        dy = int(cy) - int(ty)
+        if abs(int(dx)) >= abs(int(dy)):
+            if int(dx) > 0:
+                self.player.dir = "right"
+            elif int(dx) < 0:
+                self.player.dir = "left"
+        else:
+            if int(dy) > 0:
+                self.player.dir = "down"
+            elif int(dy) < 0:
+                self.player.dir = "up"
+
+        self._set_player_pose("sit", space="world", anchor=(ax, ay), seconds=0.0)
+        self._set_hint("坐下", seconds=0.9)
         return True
 
     def _try_unlock_near_door_world(self) -> bool:
@@ -18174,7 +18556,15 @@ class HardcoreSurvivalState(State):
         # Primary interact key on the world map: stairs/pickup (doors are walk-into).
         if str(getattr(self, "player_pose", "")) == "sleep" and str(getattr(self, "player_pose_space", "")) == "world":
             self._clear_player_pose()
-            self._set_hint("����", seconds=0.8)
+            self._set_hint("醒来", seconds=0.8)
+            return
+        if str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "world":
+            if self._try_use_pc_world():
+                return
+            if self._try_watch_tv_world():
+                return
+            self._clear_player_pose()
+            self._set_hint("起身", seconds=0.8)
             return
         if self._try_use_highrise_elevator():
             return
@@ -18184,9 +18574,17 @@ class HardcoreSurvivalState(State):
             return
         if self._try_open_home_storage_world():
             return
+        if self._try_pickup(quiet=True):
+            return
+        if self._try_use_pc_world():
+            return
+        if self._try_watch_tv_world():
+            return
+        if self._try_sit_world():
+            return
         if self._try_rest_world_bed():
             return
-        self._try_pickup()
+        self._try_pickup(quiet=False)
 
     def _world_set_tile(self, tx: int, ty: int, tile_id: int) -> None:
         tx = int(tx)
@@ -18747,20 +19145,21 @@ class HardcoreSurvivalState(State):
                 return True
         return False
 
-    def _try_pickup(self) -> None:
+    def _try_pickup(self, *, quiet: bool = False) -> bool:
         chunk, it = self._find_nearest_item(radius_px=18.0)
         if it is None or chunk is None:
-            self._set_hint("附近没有可拾取物")
-            return
+            if not bool(quiet):
+                self._set_hint("附近没有可拾取物")
+            return False
         idef = self._ITEMS.get(it.item_id)
         if idef is None:
             self._set_hint("未知物品")
-            return
+            return True
         left = self.inventory.add(it.item_id, int(it.qty), self._ITEMS)
         taken = int(it.qty) - int(left)
         if taken <= 0:
             self._set_hint("背包满了")
-            return
+            return True
         if left <= 0:
             try:
                 chunk.items.remove(it)
@@ -18769,6 +19168,7 @@ class HardcoreSurvivalState(State):
         else:
             it.qty = int(left)
         self._set_hint(f"拾取 {idef.name} x{taken}")
+        return True
 
     def _drop_selected(self) -> None:
         stack = self.inventory.drop_slot(int(self.inv_index))
@@ -20586,23 +20986,41 @@ class HardcoreSurvivalState(State):
                 if edge_r:
                     surface.fill(outline, pygame.Rect(back.right - 1, back.y + 1, 1, back.h + 4))
             elif tile_id == self.T_BED:
-                body = pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, rect.h - 3)
-                pygame.draw.rect(surface, col, body, border_radius=2)
-                pygame.draw.rect(surface, outline, body, 1, border_radius=2)
-                surface.fill(hi, pygame.Rect(body.x + 1, body.y + 1, max(1, body.w - 2), 1))
-                surface.fill(lo, pygame.Rect(body.x + 1, body.bottom - 2, max(1, body.w - 2), 1))
+                # Draw as a connected multi-tile object (no seam between tiles).
                 left_is_bed = int(self.world.peek_tile(int(tx - 1), int(ty))) == int(self.T_BED)
                 right_is_bed = int(self.world.peek_tile(int(tx + 1), int(ty))) == int(self.T_BED)
+                inset_l = 0 if left_is_bed else 1
+                inset_r = 0 if right_is_bed else 1
+                bw = int(rect.w) - int(inset_l) - int(inset_r)
+                if bw <= 0:
+                    inset_l, inset_r = 1, 1
+                    bw = max(1, int(rect.w) - 2)
+                body = pygame.Rect(rect.x + int(inset_l), rect.y + 2, int(bw), rect.h - 3)
+                surface.fill(col, body)
+                surface.fill(hi, pygame.Rect(body.x + 1, body.y + 1, max(1, body.w - 2), 1))
+                surface.fill(lo, pygame.Rect(body.x + 1, body.bottom - 2, max(1, body.w - 2), 1))
+                # Outline (only on outer edges).
+                pygame.draw.line(surface, outline, (body.left, body.top), (body.right - 1, body.top))
+                pygame.draw.line(surface, outline, (body.left, body.bottom - 1), (body.right - 1, body.bottom - 1))
+                if not left_is_bed:
+                    pygame.draw.line(surface, outline, (body.left, body.top), (body.left, body.bottom - 1))
+                if not right_is_bed:
+                    pygame.draw.line(surface, outline, (body.right - 1, body.top), (body.right - 1, body.bottom - 1))
+
                 # Pillow on the head side (prefer the "outer" end of a 2-tile bed).
                 if right_is_bed and not left_is_bed:
-                    surface.fill((230, 230, 236), pygame.Rect(body.x + 1, body.y + 1, 3, 2))
+                    pillow = pygame.Rect(body.x + 1, body.y + 1, 3, 2)
                 elif left_is_bed and not right_is_bed:
-                    surface.fill((230, 230, 236), pygame.Rect(body.right - 4, body.y + 1, 3, 2))
+                    pillow = pygame.Rect(body.right - 4, body.y + 1, 3, 2)
                 else:
-                    surface.fill((230, 230, 236), pygame.Rect(body.centerx - 1, body.y + 1, 2, 2))
-                # Legs so the bed doesn't read as a flat block.
-                surface.fill(outline, pygame.Rect(body.x + 1, body.bottom, 1, 1))
-                surface.fill(outline, pygame.Rect(body.right - 2, body.bottom, 1, 1))
+                    pillow = pygame.Rect(body.centerx - 1, body.y + 1, 2, 2)
+                surface.fill((230, 230, 236), pillow)
+
+                # Legs so the bed doesn't read as a flat block (outer corners only).
+                if not left_is_bed:
+                    surface.fill(outline, pygame.Rect(body.left + 1, body.bottom, 1, 1))
+                if not right_is_bed:
+                    surface.fill(outline, pygame.Rect(body.right - 2, body.bottom, 1, 1))
             elif tile_id == self.T_TABLE:
                 top = pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, 3)
                 pygame.draw.rect(surface, col, top, border_radius=2)
@@ -23495,11 +23913,11 @@ class HardcoreSurvivalState(State):
             if pose == "sit":
                 spr = self._get_pose_sprite("sit", direction=str(getattr(self.player, "dir", "down")), frame=0)
                 shadow = pygame.Rect(0, 0, 16, 6)
-                shadow.center = (ax, ay + 5)
+                shadow.center = (ax, ay + 7)
                 sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
                 pygame.draw.ellipse(sh, (0, 0, 0, 115), sh.get_rect())
                 surface.blit(sh, shadow.topleft)
-                rect = spr.get_rect(center=(ax, ay + 3))
+                rect = spr.get_rect(center=(ax, ay + 5))
                 surface.blit(spr, rect)
                 self._last_player_screen_rect = pygame.Rect(rect)
                 return
