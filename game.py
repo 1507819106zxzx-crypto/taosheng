@@ -4745,19 +4745,19 @@ class HardcoreSurvivalState(State):
     ]
     _HR_INT_HOME_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
-        "WVVV.......VVV.......VVV......W",
-        "W....SSS....W.....W...........W",
-        "W.BBB.......W.....W......BBB..W",
-        "W.BBB.......W.....W......BBB..W",
-        "W...................PPP......SW",
-        "W...........W.....WCPPP......SW",
-        "WWWWWWWWWWWWW.....WWWWWWWWWWWWW",
-        "W...............L....XXXX.....I",
-        "W.............................D",
-        "WWWWWWWWWWWWW........WWWWWWWWWW",
-        "WKKKKK..FF..W.CCCC...WRR,,,,,,W",
-        "W..TTT........CCCC....,,,,OO,,W",
-        "WKKKKK......W..TTT...W,U,,,,,,W",
+        "WVVV........VVVW.......VVV....W",
+        "W....SSS.......W.......SSS....W",
+        "W.BBBB.........W..BBBB........W",
+        "W.BBBB.........W..BBBB........W",
+        "W..............W........CPPP..W",
+        "WWWWWWWW.WWWWWWWWWWWWWW.WWWWWWW",
+        "W.............................W",
+        "W..........L..XXX.............I",
+        "W.............CCC.............D",
+        "W....................WWWWWWWWWW",
+        "WKKKKK..FF............,,,,,,,,W",
+        "WTTT.................WU,RR,,O,W",
+        "WKKKKK...............W,,RR,,,,W",
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
     ]
     _HR_INT_W = 31
@@ -14695,6 +14695,91 @@ class HardcoreSurvivalState(State):
         rect.midbottom = (sx, sy + 12)
         surface.blit(spr, rect)
 
+    def _draw_hr_interior_lamp_glows(
+        self,
+        surface: pygame.Surface,
+        *,
+        map_x: int,
+        map_y: int,
+        tile: int,
+        lamps: list[tuple[int, int]],
+    ) -> None:
+        if not lamps:
+            return
+        tile = int(tile)
+        if tile <= 0:
+            return
+
+        # Very subtle warm glow (high transparency), blocked by walls/windows.
+        radius_tiles = 12
+        radius_px = int(tile * radius_tiles)
+        glow_key = (int(tile), int(radius_px))
+        glow = getattr(self, "_hr_lamp_glow_cache", {}).get(glow_key) if hasattr(self, "_hr_lamp_glow_cache") else None
+        if glow is None:
+            g = pygame.Surface((radius_px * 2 + 1, radius_px * 2 + 1), pygame.SRCALPHA)
+            for r, a in (
+                (radius_px, 3),
+                (int(radius_px * 0.78), 5),
+                (int(radius_px * 0.56), 7),
+                (int(radius_px * 0.36), 10),
+            ):
+                if r <= 0:
+                    continue
+                pygame.draw.circle(g, (255, 240, 200, int(a)), (radius_px, radius_px), int(r))
+            pygame.draw.circle(g, (255, 250, 220, 14), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
+            cache = getattr(self, "_hr_lamp_glow_cache", {})
+            cache[glow_key] = g
+            self._hr_lamp_glow_cache = cache
+            glow = g
+
+        blocks = {"W", "V"}
+        w = int(self._HR_INT_W)
+        h = int(self._HR_INT_H)
+
+        for lx, ly in lamps:
+            lx = int(lx)
+            ly = int(ly)
+            seen: set[tuple[int, int]] = set()
+            lit: list[tuple[int, int]] = []
+            stack = [(lx, ly)]
+            r2 = int(radius_tiles) * int(radius_tiles)
+            while stack and len(lit) < 2200:
+                x, y = stack.pop()
+                x = int(x)
+                y = int(y)
+                if (x, y) in seen:
+                    continue
+                seen.add((x, y))
+                if not (0 <= x < w and 0 <= y < h):
+                    continue
+                dx = int(x - lx)
+                dy = int(y - ly)
+                if int(dx * dx + dy * dy) > int(r2):
+                    continue
+                lit.append((x, y))
+
+                ch = str(self._hr_int_char_at(int(x), int(y)))[:1]
+                if ch in blocks:
+                    continue
+                stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+
+            cx = int(map_x + lx * tile + tile // 2)
+            cy = int(map_y + ly * tile + tile // 2)
+            ox = int(cx - radius_px)
+            oy = int(cy - radius_px)
+            mask = pygame.Surface(glow.get_size(), pygame.SRCALPHA)
+            mask.fill((0, 0, 0, 0))
+            bounds = mask.get_rect()
+            for tx, ty in lit:
+                r = pygame.Rect(int(map_x + int(tx) * tile), int(map_y + int(ty) * tile), int(tile), int(tile))
+                lr = r.move(-int(ox), -int(oy)).clip(bounds)
+                if lr.w > 0 and lr.h > 0:
+                    mask.fill((255, 255, 255, 255), lr)
+
+            tmp = glow.copy()
+            tmp.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            surface.blit(tmp, (int(ox), int(oy)), special_flags=pygame.BLEND_RGBA_ADD)
+
     def _draw_hr_interior_scene(self, surface: pygame.Surface) -> None:  
         surface.fill((10, 10, 14))
         tile = int(self._HR_INT_TILE_SIZE)
@@ -14878,6 +14963,7 @@ class HardcoreSurvivalState(State):
         p_done: set[tuple[int, int]] = set()
         x_done: set[tuple[int, int]] = set()
         r_done: set[tuple[int, int]] = set()
+        lamp_tiles: list[tuple[int, int]] = []
 
         layout = getattr(self, "hr_layout", [])
         for y in range(int(self._HR_INT_H)):
@@ -14965,15 +15051,10 @@ class HardcoreSurvivalState(State):
                     continue
 
                 if ch == "L":
-                    # Standing lamp + warm glow.
+                    # Standing lamp (glow drawn later with wall occlusion).
                     bulb_col = (255, 230, 140) if light_on else (90, 90, 104)
                     if light_on:
-                        glow = pygame.Surface((int(tile * 3), int(tile * 3)), pygame.SRCALPHA)
-                        gcx = glow.get_width() // 2
-                        gcy = glow.get_height() // 2
-                        for rad, a in ((int(tile * 1.35), 12), (int(tile * 1.05), 18), (int(tile * 0.78), 28)):
-                            pygame.draw.circle(glow, (255, 240, 200, int(a)), (int(gcx), int(gcy)), int(rad))
-                        surface.blit(glow, (int(r.centerx - gcx), int(r.centery - gcy)))
+                        lamp_tiles.append((int(x), int(y)))
 
                     base_y = int(r.bottom - 5)
                     pole_top = int(r.y + 6)
@@ -15804,6 +15885,9 @@ class HardcoreSurvivalState(State):
                             surface.fill(leg_col, leg)
                             pygame.draw.rect(surface, outline, leg, 1)
                     continue
+
+        if mode == "home" and bool(light_on) and lamp_tiles:
+            self._draw_hr_interior_lamp_glows(surface, map_x=int(map_x), map_y=int(map_y), tile=int(tile), lamps=lamp_tiles)
 
         # Apartment floor loot + proximity outlines.
         if mode == "home":
@@ -23094,11 +23178,11 @@ class HardcoreSurvivalState(State):
         by1 = max(int(p[1]) for p in block)
         tile_rect = self._world_tile_screen_rect(int(bx0), int(by0), int(cam_x), int(cam_y))
         tile_rect = tile_rect.union(self._world_tile_screen_rect(int(bx1), int(by1), int(cam_x), int(cam_y)))
-        btn_w = 46
-        btn_h = 18
-        gap = 6
-        panel_w = int(len(opts) * btn_w + max(0, len(opts) - 1) * gap + 12)
-        panel_h = int(btn_h + 12)
+        btn_w = 38
+        btn_h = 16
+        gap = 4
+        panel_w = int(len(opts) * btn_w + max(0, len(opts) - 1) * gap + 10)
+        panel_h = int(btn_h + 10)
         px = int(tile_rect.centerx - panel_w // 2)
         py = int(tile_rect.top - panel_h - 8)
         if py < 4:
@@ -23106,17 +23190,17 @@ class HardcoreSurvivalState(State):
         px = int(clamp(int(px), 4, int(INTERNAL_W - 4 - panel_w)))
         py = int(clamp(int(py), 4, int(INTERNAL_H - 4 - panel_h)))
         panel = pygame.Rect(px, py, panel_w, panel_h)
-        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=8)
-        pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=8)
+        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=6)
+        pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=6)
 
-        x0 = int(panel.x + 6)
-        y0 = int(panel.y + 6)
+        x0 = int(panel.x + 5)
+        y0 = int(panel.y + 5)
         font = self.app.font_s
         rects: list[tuple[pygame.Rect, str]] = []
         for i, (label, action) in enumerate(opts):
             br = pygame.Rect(int(x0 + i * (btn_w + gap)), int(y0), int(btn_w), int(btn_h))
-            pygame.draw.rect(surface, (28, 28, 34), br, border_radius=6)
-            pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=6)
+            pygame.draw.rect(surface, (28, 28, 34), br, border_radius=5)
+            pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=5)
             draw_text(surface, font, str(label), (br.centerx, br.centery - 1), pygame.Color(230, 230, 240), anchor="center")
             rects.append((br, str(action)))
 
