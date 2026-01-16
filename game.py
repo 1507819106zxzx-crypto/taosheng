@@ -6992,8 +6992,9 @@ class HardcoreSurvivalState(State):
                 return {}
 
             # One tower per inner chunk (7-8 total); keep the perimeter for the podium/skirt building.
-            tower_w = 13
-            tower_h = 22
+            # Slightly larger towers so each apartment feels like a real home.
+            tower_w = 14
+            tower_h = 24
             inner_cx0 = int(cx0) + 1
             inner_cx1 = int(cx1) - 1
             inner_cy0 = int(cy0) + 1
@@ -7021,8 +7022,8 @@ class HardcoreSurvivalState(State):
             plan: dict[tuple[int, int], list[tuple[int, int, int, int, int, int]]] = {}
             for cx, cy in picked:
                 # Alternate left/right so we don't overwrite the internal road stripe at x=14..17.
-                x0 = 1 if ((int(cx) + int(cy)) % 2 == 0) else 18
-                y0 = 2
+                x0 = 0 if ((int(cx) + int(cy)) % 2 == 0) else 18
+                y0 = 0
                 base_tx = int(cx) * int(self.state.CHUNK_SIZE)
                 base_ty = int(cy) * int(self.state.CHUNK_SIZE)
                 tx0w = int(base_tx + int(x0))
@@ -8432,8 +8433,8 @@ class HardcoreSurvivalState(State):
                     h = rng.randint(22, 28)
                 elif town_kind == "高层住宅":
                     # Larger footprint so 2/3-unit apartments feel like real homes.
-                    w = rng.randint(18, 22)
-                    h = rng.randint(18, 24)
+                    w = rng.randint(20, 24)
+                    h = rng.randint(20, 26)
                 elif town_kind == "大型监狱":
                     w = rng.randint(22, 28)
                     h = rng.randint(20, 28)
@@ -21664,53 +21665,100 @@ class HardcoreSurvivalState(State):
         if bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "house_interior", False)) or bool(getattr(self, "sch_interior", False)) or bool(getattr(self, "rv_interior", False)):
             return
 
+        daylight, _tday = self._daylight_amount()
+        if float(daylight) >= 0.98:
+            return
+
         ts = int(self.TILE_SIZE)
         if ts <= 0:
             return
 
-        overlay = getattr(self, "_inside_highrise_floor_overlay", None)
-        btx0 = bty0 = bw = bh = floor_y0 = offset_px = 0
-        if overlay is not None:
-            try:
-                btx0, bty0, bw, bh, floor_y0, offset_px = int(overlay[0]), int(overlay[1]), int(overlay[2]), int(overlay[3]), int(overlay[4]), int(overlay[5])
-            except Exception:
-                overlay = None
+        # Only light inside the real home (world-map interior).
+        lamps: list[tuple[int, int]] = []
+        for ty in range(int(start_ty), int(end_ty) + 1):
+            for tx in range(int(start_tx), int(end_tx) + 1):
+                if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_LAMP):
+                    continue
+                if not self._tile_in_home_world(int(tx), int(ty)):
+                    continue
+                lamps.append((int(tx), int(ty)))
+        if not lamps:
+            return
 
-        # Cached radial glow sprite (additive) for performance.
-        radius = int(max(10, int(round(float(ts) * 2.2))))
-        glow_key = (int(ts), int(radius))
+        # Softer, more transparent glow; blocked by walls via a tile mask.
+        radius_tiles = 11
+        radius_px = int(max(int(ts) * 6, int(ts) * int(radius_tiles)))
+        glow_key = (int(ts), int(radius_px))
         glow = getattr(self, "_lamp_glow_cache", {}).get(glow_key) if hasattr(self, "_lamp_glow_cache") else None
         if glow is None:
-            g = pygame.Surface((radius * 2 + 1, radius * 2 + 1), pygame.SRCALPHA)
-            # Warm yellow falloff.
+            g = pygame.Surface((radius_px * 2 + 1, radius_px * 2 + 1), pygame.SRCALPHA)
+            # Very subtle falloff (high transparency).
             for r, a in (
-                (radius, 26),
-                (int(radius * 0.78), 38),
-                (int(radius * 0.56), 54),
-                (int(radius * 0.36), 78),
+                (radius_px, 6),
+                (int(radius_px * 0.78), 10),
+                (int(radius_px * 0.56), 14),
+                (int(radius_px * 0.36), 18),
             ):
                 if r <= 0:
                     continue
-                pygame.draw.circle(g, (255, 240, 180, int(a)), (radius, radius), int(r))
-            # Hot core.
-            pygame.draw.circle(g, (255, 250, 210, 110), (radius, radius), max(1, int(radius * 0.18)))
+                pygame.draw.circle(g, (255, 240, 180, int(a)), (radius_px, radius_px), int(r))
+            pygame.draw.circle(g, (255, 250, 210, 24), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
             cache = getattr(self, "_lamp_glow_cache", {})
             cache[glow_key] = g
             self._lamp_glow_cache = cache
             glow = g
 
-        # Draw glow for any lamp tiles in view.
-        for ty in range(int(start_ty), int(end_ty) + 1):
-            for tx in range(int(start_tx), int(end_tx) + 1):
-                if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_LAMP):
+        solid_blocks = {
+            int(self.T_DOOR),
+            int(self.T_DOOR_HOME),
+            int(self.T_DOOR_LOCKED),
+            int(self.T_DOOR_HOME_LOCKED),
+        }
+
+        for lx, ly in lamps:
+            # BFS mask: light doesn't propagate through walls/solid tiles, and never leaves home.
+            seen: set[tuple[int, int]] = set()
+            lit: list[tuple[int, int]] = []
+            stack = [(int(lx), int(ly))]
+            r2 = int(radius_tiles) * int(radius_tiles)
+            while stack and len(lit) < 1400:
+                x, y = stack.pop()
+                x = int(x)
+                y = int(y)
+                if (x, y) in seen:
                     continue
-                cx = int(tx) * int(ts) - int(cam_x) + int(ts // 2)
-                cy = int(ty) * int(ts) - int(cam_y) + int(ts // 2)
-                if overlay is not None and int(offset_px) > 0:
-                    if int(btx0) <= int(tx) < int(btx0) + int(bw) and int(bty0) <= int(ty) < int(bty0) + int(bh):
-                        if int(ty) >= int(max(int(bty0), int(floor_y0) - 1)):
-                            cy -= int(offset_px)
-                surface.blit(glow, (int(cx - radius), int(cy - radius)), special_flags=pygame.BLEND_RGBA_ADD)
+                seen.add((x, y))
+                dx = int(x - int(lx))
+                dy = int(y - int(ly))
+                if int(dx * dx + dy * dy) > int(r2):
+                    continue
+                if not self._tile_in_home_world(int(x), int(y)):
+                    continue
+                lit.append((int(x), int(y)))
+
+                tid = int(self.world.peek_tile(int(x), int(y)))
+                if bool(self._tile_solid(int(tid))) and int(tid) not in solid_blocks:
+                    continue
+                stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+
+            # Build a local mask surface (white where visible tiles exist).
+            base_rect = self._world_tile_screen_rect(int(lx), int(ly), int(cam_x), int(cam_y))
+            cx, cy = int(base_rect.centerx), int(base_rect.centery)
+            ox = int(cx - radius_px)
+            oy = int(cy - radius_px)
+            mask = pygame.Surface(glow.get_size(), pygame.SRCALPHA)
+            mask.fill((0, 0, 0, 0))
+            mask_bounds = mask.get_rect()
+            for tx, ty in lit:
+                r = self._world_tile_screen_rect(int(tx), int(ty), int(cam_x), int(cam_y))
+                lr = r.move(-int(ox), -int(oy))
+                lr = lr.clip(mask_bounds)
+                if lr.w > 0 and lr.h > 0:
+                    mask.fill((255, 255, 255, 255), lr)
+
+            tmp = glow.copy()
+            tmp.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            surface.blit(tmp, (int(ox), int(oy)), special_flags=pygame.BLEND_RGBA_ADD)
 
     def _season_index_for_day(self, day: int) -> int:
         return ((int(day) - 1) // max(1, int(self.SEASON_LENGTH_DAYS))) % len(self.SEASONS)
@@ -23046,11 +23094,11 @@ class HardcoreSurvivalState(State):
         by1 = max(int(p[1]) for p in block)
         tile_rect = self._world_tile_screen_rect(int(bx0), int(by0), int(cam_x), int(cam_y))
         tile_rect = tile_rect.union(self._world_tile_screen_rect(int(bx1), int(by1), int(cam_x), int(cam_y)))
-        btn_w = 62
-        btn_h = 22
-        gap = 8
-        panel_w = int(len(opts) * btn_w + max(0, len(opts) - 1) * gap + 16)
-        panel_h = int(btn_h + 16)
+        btn_w = 46
+        btn_h = 18
+        gap = 6
+        panel_w = int(len(opts) * btn_w + max(0, len(opts) - 1) * gap + 12)
+        panel_h = int(btn_h + 12)
         px = int(tile_rect.centerx - panel_w // 2)
         py = int(tile_rect.top - panel_h - 8)
         if py < 4:
@@ -23058,17 +23106,17 @@ class HardcoreSurvivalState(State):
         px = int(clamp(int(px), 4, int(INTERNAL_W - 4 - panel_w)))
         py = int(clamp(int(py), 4, int(INTERNAL_H - 4 - panel_h)))
         panel = pygame.Rect(px, py, panel_w, panel_h)
-        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=10)
-        pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=10)
+        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=8)
+        pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=8)
 
-        x0 = int(panel.x + 8)
-        y0 = int(panel.y + 8)
+        x0 = int(panel.x + 6)
+        y0 = int(panel.y + 6)
         font = self.app.font_s
         rects: list[tuple[pygame.Rect, str]] = []
         for i, (label, action) in enumerate(opts):
             br = pygame.Rect(int(x0 + i * (btn_w + gap)), int(y0), int(btn_w), int(btn_h))
-            pygame.draw.rect(surface, (28, 28, 34), br, border_radius=8)
-            pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=8)
+            pygame.draw.rect(surface, (28, 28, 34), br, border_radius=6)
+            pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=6)
             draw_text(surface, font, str(label), (br.centerx, br.centery - 1), pygame.Color(230, 230, 240), anchor="center")
             rects.append((br, str(action)))
 
