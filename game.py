@@ -4741,19 +4741,19 @@ class HardcoreSurvivalState(State):
     ]
     _HR_INT_HOME_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
-        "WVV.........................VVW",
-        "W..BBBB...SSS..W..BBBB...SSS..W",
-        "W..BBBB........W..BBBB........W",
-        "W..............W..............W",
-        "W..............W..............W",
-        "W..............W..............W",
-        "WWWWWWW.WWWWWWWWWWWWWWW.WWWWWWW",
-        "W...................WWWWWWWWWWW",
-        "W..SS...........XXXXW,,,,,,,,,W",
-        "W.........L.........WRRR,,,,,,W",
-        "W.....CCCC..TTTT.....,,O,,,,,,W",
-        "WKKKKKF...SS..PPP...W,,,,,,,U,W",
-        "W..............C....W,,,,,,,,,W",
+        "WVVV.......VVV.......VVV......W",
+        "W....SSS....W.....W...........W",
+        "W.BBB.......W.....W......BBB..W",
+        "W.BBB.......W.....W......BBB..W",
+        "W...................PPP......SW",
+        "W...........W.....WCPPP......SW",
+        "WWWWWWWWWWWWW.....WWWWWWWWWWWWW",
+        "W...............L....XXXX.....I",
+        "W.............................D",
+        "WWWWWWWWWWWWW........WWWWWWWWWW",
+        "WKKKKK..FF..W.CCCC...WRR,,,,,,W",
+        "W..TTT........CCCC....,,,,OO,,W",
+        "WKKKKK......W..TTT...W,U,,,,,,W",
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
     ]
     _HR_INT_W = 31
@@ -9857,6 +9857,7 @@ class HardcoreSurvivalState(State):
         self.hr_room_storages: dict[str, tuple[HardcoreSurvivalState._Inventory, HardcoreSurvivalState._Inventory]] = {}
         self.hr_room_floor_items: dict[str, list[HardcoreSurvivalState._WorldItem]] = {}
         self.hr_floor_items: list[HardcoreSurvivalState._WorldItem] = []
+        self.hr_room_lights: dict[str, bool] = {}
         self.home_ui_open = False
         self.home_ui_focus: str = "storage"  # player | storage
         self.home_ui_storage_kind: str = "cabinet"  # cabinet | fridge   
@@ -12260,6 +12261,12 @@ class HardcoreSurvivalState(State):
         if isinstance(pair, tuple) and len(pair) == 2:
             self.home_storage, self.fridge_storage = pair
             self.hr_current_room = str(room_id)
+            lights = getattr(self, "hr_room_lights", None)
+            if not isinstance(lights, dict):
+                lights = {}
+                self.hr_room_lights = lights
+            if str(room_id) not in lights:
+                lights[str(room_id)] = True
 
     def _hr_room_floor_items_bind(self, room_id: str, *, populate: bool) -> None:
         room_id = str(room_id).strip()
@@ -12436,15 +12443,15 @@ class HardcoreSurvivalState(State):
 
         door = self._hr_int_find("D")
         tile = int(self._HR_INT_TILE_SIZE)
-        if door is None:
-            self.hr_int_pos = pygame.Vector2((self._HR_INT_W / 2.0) * tile, (self._HR_INT_H / 2.0) * tile)
-        else:
+        sx = int(int(self._HR_INT_W) // 2)
+        sy = int(int(self._HR_INT_H) // 2)
+        if door is not None:
             dx, dy = door
             spawn = (dx - 1, dy) if dx >= int(self._HR_INT_W) - 1 else (dx + 1, dy)
             sx, sy = spawn
             if self._hr_int_solid_tile(self._hr_int_char_at(sx, sy)):
                 sx, sy = int(dx), int(dy)
-        self.hr_int_pos = pygame.Vector2((sx + 0.5) * tile, (sy + 0.5) * tile)
+        self.hr_int_pos = pygame.Vector2((float(sx) + 0.5) * float(tile), (float(sy) + 0.5) * float(tile))
         self.hr_int_vel = pygame.Vector2(0, 0)
         self.hr_int_walk_phase = 0.0
         self._set_hint("进入房间：E互动", seconds=1.1)
@@ -12584,7 +12591,7 @@ class HardcoreSurvivalState(State):
         chosen: tuple[int, int, str] | None = None
         interact = {"D", "E", "H", "A", "B", "^", "v"}
         if mode == "home":
-            interact.update({"S", "F", "C", "P", "X"})
+            interact.update({"S", "F", "C", "P", "X", "I"})
         for cx, cy in candidates:
             ch = self._hr_int_char_at(cx, cy)
             if ch in interact:
@@ -12615,6 +12622,19 @@ class HardcoreSurvivalState(State):
                 self._hr_leave_home()
                 return
             self._hr_interior_exit()
+            return
+        if ch == "I" and mode == "home":
+            room_id = str(getattr(self, "hr_current_room", "")).strip()
+            lights = getattr(self, "hr_room_lights", None)
+            if not isinstance(lights, dict):
+                lights = {}
+                self.hr_room_lights = lights
+            if room_id and room_id not in lights:
+                lights[room_id] = True
+            cur = bool(lights.get(room_id, True)) if room_id else True
+            if room_id:
+                lights[room_id] = (not cur)
+            self._set_hint("灯：开" if (not cur) else "灯：关", seconds=0.9)
             return
         if ch in ("^", "v"):
             floor = int(getattr(self, "hr_floor", 1))
@@ -14659,6 +14679,14 @@ class HardcoreSurvivalState(State):
         # Cozier indoor rendering (wood floors, furniture detail, window view).
         mode = str(getattr(self, "hr_mode", "lobby"))
         floor = int(getattr(self, "hr_floor", 1))
+        room_id = str(getattr(self, "hr_current_room", "")).strip()
+        lights = getattr(self, "hr_room_lights", None)
+        if not isinstance(lights, dict):
+            lights = {}
+            self.hr_room_lights = lights
+        light_on = True
+        if mode == "home" and room_id:
+            light_on = bool(lights.get(str(room_id), True))
 
         title = "高层住宅"
         home_room = str(getattr(self, "home_highrise_room", "")).strip()
@@ -14825,7 +14853,7 @@ class HardcoreSurvivalState(State):
                 ch = row[x] if x < len(row) else "W"
                 r = pygame.Rect(map_x + x * tile, map_y + y * tile, tile, tile)
 
-                if ch in ("W", "V", "D", "A", "H"):
+                if ch in ("W", "V", "D", "A", "H", "I"):
                     pygame.draw.rect(surface, wall, r)
                     pygame.draw.rect(surface, wall_hi, pygame.Rect(r.x, r.y, r.w, 4))
                     pygame.draw.rect(surface, wall_edge, r, 1)
@@ -14859,6 +14887,15 @@ class HardcoreSurvivalState(State):
                         pygame.draw.circle(surface, (240, 220, 140), (dr.right - 4, knob_y), 2)
                         if ch == "H":
                             pygame.draw.rect(surface, (120, 200, 140), pygame.Rect(dr.x + 2, dr.y + 2, dr.w - 4, 3), border_radius=1)
+                    elif ch == "I":
+                        # Light switch on the wall (controls room lighting).
+                        plate = pygame.Rect(int(r.centerx - 4), int(r.centery - 6), 8, 12)
+                        pygame.draw.rect(surface, (214, 214, 222), plate, border_radius=2)
+                        pygame.draw.rect(surface, outline, plate, 1, border_radius=2)
+                        knob_h = 4
+                        knob = pygame.Rect(int(plate.x + 2), int(plate.y + (2 if light_on else plate.h - knob_h - 2)), int(plate.w - 4), int(knob_h))
+                        pygame.draw.rect(surface, (255, 220, 140) if light_on else (120, 120, 132), knob, border_radius=2)
+                        pygame.draw.rect(surface, outline, knob, 1, border_radius=2)
                     continue
 
                 if ch in (",", "O", "U", "R"):
@@ -14896,12 +14933,14 @@ class HardcoreSurvivalState(State):
 
                 if ch == "L":
                     # Standing lamp + warm glow.
-                    glow = pygame.Surface((int(tile * 3), int(tile * 3)), pygame.SRCALPHA)
-                    gcx = glow.get_width() // 2
-                    gcy = glow.get_height() // 2
-                    for rad, a in ((int(tile * 1.35), 12), (int(tile * 1.05), 18), (int(tile * 0.78), 28)):
-                        pygame.draw.circle(glow, (255, 240, 200, int(a)), (int(gcx), int(gcy)), int(rad))
-                    surface.blit(glow, (int(r.centerx - gcx), int(r.centery - gcy)))
+                    bulb_col = (255, 230, 140) if light_on else (90, 90, 104)
+                    if light_on:
+                        glow = pygame.Surface((int(tile * 3), int(tile * 3)), pygame.SRCALPHA)
+                        gcx = glow.get_width() // 2
+                        gcy = glow.get_height() // 2
+                        for rad, a in ((int(tile * 1.35), 12), (int(tile * 1.05), 18), (int(tile * 0.78), 28)):
+                            pygame.draw.circle(glow, (255, 240, 200, int(a)), (int(gcx), int(gcy)), int(rad))
+                        surface.blit(glow, (int(r.centerx - gcx), int(r.centery - gcy)))
 
                     base_y = int(r.bottom - 5)
                     pole_top = int(r.y + 6)
@@ -14929,7 +14968,7 @@ class HardcoreSurvivalState(State):
                         ],
                         1,
                     )
-                    pygame.draw.circle(surface, (255, 230, 140), (int(r.centerx), int(shade.bottom - 1)), 2)
+                    pygame.draw.circle(surface, bulb_col, (int(r.centerx), int(shade.bottom - 1)), 2)
                     continue
 
                 if ch == "E":
@@ -15871,6 +15910,11 @@ class HardcoreSurvivalState(State):
             rect.midbottom = (sx, sy + 12)
             surface.blit(spr, rect)
 
+        if mode == "home" and not light_on:
+            dim = pygame.Surface((int(map_rect.w), int(map_rect.h)), pygame.SRCALPHA)
+            dim.fill((0, 0, 0, 132))
+            surface.blit(dim, map_rect.topleft)
+
         # Hover: furniture details + outline (home only).
         if str(getattr(self, "hr_mode", "lobby")) == "home":
             mouse = None
@@ -15912,16 +15956,22 @@ class HardcoreSurvivalState(State):
                             max_x = max(int(p[0]) for p in cells)
                             min_y = min(int(p[1]) for p in cells)
                             max_y = max(int(p[1]) for p in cells)
-                            sel = pygame.Rect(
+                            base_sel = pygame.Rect(
                                 int(map_x + min_x * tile),
                                 int(map_y + min_y * tile),
                                 int((max_x - min_x + 1) * tile),
                                 int((max_y - min_y + 1) * tile),
                             )
-                            ov = pygame.Surface((sel.w, sel.h), pygame.SRCALPHA)
-                            ov.fill((255, 220, 140, 20))
-                            pygame.draw.rect(ov, (255, 220, 140, 150), ov.get_rect(), 2, border_radius=8)
-                            surface.blit(ov, sel.topleft)
+                            # Match highlight to the actual furniture silhouette (not the full tile box).
+                            sel = pygame.Rect(base_sel)
+                            if ch == "B":
+                                sel = base_sel.inflate(-4, -8)
+                            sel = sel.clip(map_rect)
+                            if sel.w > 0 and sel.h > 0:
+                                ov = pygame.Surface((sel.w, sel.h), pygame.SRCALPHA)
+                                ov.fill((255, 220, 140, 20))
+                                pygame.draw.rect(ov, (255, 220, 140, 150), ov.get_rect(), 2, border_radius=10)
+                                surface.blit(ov, sel.topleft)
 
                             bw = int(max_x - min_x + 1)
                             bh = int(max_y - min_y + 1)
@@ -20443,9 +20493,13 @@ class HardcoreSurvivalState(State):
     def _spawn_one_zombie(self, target_pos: pygame.Vector2, *, in_town: bool) -> None:
         kind = self._pick_zombie_kind(in_town=in_town)
         mdef = self._MONSTER_DEFS.get(kind, self._MONSTER_DEFS["walker"])
-        for _ in range(14):
+        # Spawn outside the current camera view so zombies "walk in" instead of popping in.
+        view_r = float(math.hypot(float(INTERNAL_W) * 0.5, float(INTERNAL_H) * 0.5))
+        min_dist = view_r + (70.0 if in_town else 110.0)
+        max_dist = min_dist + (160.0 if in_town else 260.0)
+        for _ in range(24):
             ang = random.random() * math.tau
-            dist = random.randint(110, 180) if in_town else random.randint(140, 240)
+            dist = random.uniform(float(min_dist), float(max_dist))
             pos = pygame.Vector2(target_pos) + pygame.Vector2(math.cos(ang), math.sin(ang)) * float(dist)
             tx = int(math.floor(pos.x / self.TILE_SIZE))
             ty = int(math.floor(pos.y / self.TILE_SIZE))
