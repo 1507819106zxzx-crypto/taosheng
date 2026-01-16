@@ -322,6 +322,11 @@ class GameConfig:
     scale: int = 2
     fullscreen: bool = True
     show_grid: bool = True
+    # Lighting (tile radius + intensity/opacity scale).
+    lamp_world_radius_tiles: int = 5
+    lamp_world_intensity: float = 1.0
+    lamp_hr_radius_tiles: int = 5
+    lamp_hr_intensity: float = 1.0
 
     @classmethod
     def load(cls) -> "GameConfig":
@@ -331,6 +336,10 @@ class GameConfig:
                 scale=int(data.get("scale", 2)),
                 fullscreen=bool(data.get("fullscreen", True)),
                 show_grid=bool(data.get("show_grid", True)),
+                lamp_world_radius_tiles=int(data.get("lamp_world_radius_tiles", 5)),
+                lamp_world_intensity=float(data.get("lamp_world_intensity", 1.0)),
+                lamp_hr_radius_tiles=int(data.get("lamp_hr_radius_tiles", 5)),
+                lamp_hr_intensity=float(data.get("lamp_hr_intensity", 1.0)),
             )
         except Exception:
             return cls()
@@ -338,7 +347,15 @@ class GameConfig:
     def save(self) -> None:
         SETTINGS_PATH.write_text(
             json.dumps(
-                {"scale": int(self.scale), "fullscreen": bool(self.fullscreen), "show_grid": bool(self.show_grid)},
+                {
+                    "scale": int(self.scale),
+                    "fullscreen": bool(self.fullscreen),
+                    "show_grid": bool(self.show_grid),
+                    "lamp_world_radius_tiles": int(self.lamp_world_radius_tiles),
+                    "lamp_world_intensity": float(self.lamp_world_intensity),
+                    "lamp_hr_radius_tiles": int(self.lamp_hr_radius_tiles),
+                    "lamp_hr_intensity": float(self.lamp_hr_intensity),
+                },
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -1621,6 +1638,10 @@ class App:
 
         self.config = GameConfig.load()
         self.config.scale = int(clamp(self.config.scale, 1, 6))
+        self.config.lamp_world_radius_tiles = int(clamp(int(self.config.lamp_world_radius_tiles), 2, 18))
+        self.config.lamp_hr_radius_tiles = int(clamp(int(self.config.lamp_hr_radius_tiles), 2, 18))
+        self.config.lamp_world_intensity = float(clamp(float(self.config.lamp_world_intensity), 0.0, 3.0))
+        self.config.lamp_hr_intensity = float(clamp(float(self.config.lamp_hr_intensity), 0.0, 3.0))
 
         self.clock = pygame.time.Clock()
         self.render = pygame.Surface((INTERNAL_W, INTERNAL_H))
@@ -10439,6 +10460,9 @@ class HardcoreSurvivalState(State):
             if event.key in (pygame.K_F3,):
                 self._debug = not self._debug
                 return
+            if event.key in (pygame.K_F7, pygame.K_F8, pygame.K_F9, pygame.K_F10):
+                if self._adjust_lamp_settings_key(int(event.key)):
+                    return
 
     def _handle_inventory_mouse(self, event: pygame.event.Event) -> None:
         if not self.inv_open:
@@ -14706,23 +14730,35 @@ class HardcoreSurvivalState(State):
         if tile <= 0:
             return
 
-        # Very subtle warm glow (high transparency), blocked by walls/windows.
-        radius_tiles = 12
+        cfg = getattr(self.app, "config", None)
+        radius_tiles = int(getattr(cfg, "lamp_hr_radius_tiles", 5)) if cfg is not None else 5
+        radius_tiles = int(clamp(int(radius_tiles), 2, 18))
+        intensity = float(getattr(cfg, "lamp_hr_intensity", 1.0)) if cfg is not None else 1.0
+        intensity = float(clamp(float(intensity), 0.0, 3.0))
+        if intensity <= 0.01:
+            return
+
+        # Warm glow (additive), blocked by walls/windows.
         radius_px = int(tile * radius_tiles)
-        glow_key = (int(tile), int(radius_px))
+        glow_key = (int(tile), int(radius_px), int(round(float(intensity) * 100)))
         glow = getattr(self, "_hr_lamp_glow_cache", {}).get(glow_key) if hasattr(self, "_hr_lamp_glow_cache") else None
         if glow is None:
             g = pygame.Surface((radius_px * 2 + 1, radius_px * 2 + 1), pygame.SRCALPHA)
             for r, a in (
-                (radius_px, 3),
-                (int(radius_px * 0.78), 5),
-                (int(radius_px * 0.56), 7),
-                (int(radius_px * 0.36), 10),
+                (radius_px, 10),
+                (int(radius_px * 0.78), 14),
+                (int(radius_px * 0.56), 18),
+                (int(radius_px * 0.36), 26),
             ):
                 if r <= 0:
                     continue
-                pygame.draw.circle(g, (255, 240, 200, int(a)), (radius_px, radius_px), int(r))
-            pygame.draw.circle(g, (255, 250, 220, 14), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
+                aa = int(clamp(int(round(float(a) * float(intensity))), 0, 255))
+                if aa <= 0:
+                    continue
+                pygame.draw.circle(g, (255, 240, 200, int(aa)), (radius_px, radius_px), int(r))
+            core_a = int(clamp(int(round(44.0 * float(intensity))), 0, 255))
+            if core_a > 0:
+                pygame.draw.circle(g, (255, 250, 220, int(core_a)), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
             cache = getattr(self, "_hr_lamp_glow_cache", {})
             cache[glow_key] = g
             self._hr_lamp_glow_cache = cache
@@ -18238,6 +18274,41 @@ class HardcoreSurvivalState(State):
         self.hint_text = str(text)
         self.hint_left = float(seconds)
 
+    def _adjust_lamp_settings_key(self, key: int) -> bool:
+        cfg = getattr(self.app, "config", None)
+        if not isinstance(cfg, GameConfig):
+            return False
+
+        key = int(key)
+        in_hr = bool(getattr(self, "hr_interior", False))
+        if in_hr:
+            radius_name = "lamp_hr_radius_tiles"
+            inten_name = "lamp_hr_intensity"
+        else:
+            radius_name = "lamp_world_radius_tiles"
+            inten_name = "lamp_world_intensity"
+
+        if key in (pygame.K_F7, pygame.K_F8):
+            delta = -1 if key == pygame.K_F7 else 1
+            cur = int(getattr(cfg, radius_name, 5))
+            cur = int(clamp(int(cur) + int(delta), 2, 18))
+            setattr(cfg, radius_name, int(cur))
+            cfg.save()
+            self._set_hint(f"灯范围 {cur}", seconds=0.9)
+            return True
+
+        if key in (pygame.K_F9, pygame.K_F10):
+            delta = -0.1 if key == pygame.K_F9 else 0.1
+            cur = float(getattr(cfg, inten_name, 1.0))
+            cur = float(clamp(float(cur) + float(delta), 0.0, 3.0))
+            cur = float(round(cur, 2))
+            setattr(cfg, inten_name, float(cur))
+            cfg.save()
+            self._set_hint(f"灯强度 {cur:.2f}", seconds=0.9)
+            return True
+
+        return False
+
     def _dialog_start(self, title: str, lines: list[str], *, speed: float = 42.0) -> None:
         title = str(title).strip()
         if not title:
@@ -21694,29 +21765,6 @@ class HardcoreSurvivalState(State):
     def _draw_day_night_overlay(self, surface: pygame.Surface, *, in_rv: bool) -> None:
         daylight, tday = self._daylight_amount()
         max_alpha = 160 if not in_rv else 120
-        if not in_rv and bool(getattr(self, "home_light_on", True)):
-            try:
-                home_key = getattr(self, "home_highrise_world_key", None)
-                inside_key = getattr(self, "_inside_building_key", None)
-                if (
-                    isinstance(home_key, tuple)
-                    and len(home_key) == 4
-                    and isinstance(inside_key, tuple)
-                    and len(inside_key) == 4
-                    and tuple(int(v) for v in inside_key) == tuple(int(v) for v in home_key)
-                ):
-                    home_floor = int(getattr(self, "home_highrise_world_floor", 0) or 0)
-                    if home_floor > 0:
-                        ptx = int(math.floor(float(self.player.pos.x) / float(self.TILE_SIZE)))
-                        pty = int(math.floor(float(self.player.pos.y) / float(self.TILE_SIZE)))
-                        found = self._multi_house_at(int(ptx), int(pty))
-                        if found is not None:
-                            _ch, mh = found
-                            if int(getattr(mh, "cur_floor", 1)) != int(home_floor):
-                                raise RuntimeError("not home floor")
-                    max_alpha = min(int(max_alpha), 70)
-            except Exception:
-                pass
         a = int(round(float(max_alpha) * (1.0 - float(daylight))))
         if a <= 0:
             return
@@ -21765,24 +21813,36 @@ class HardcoreSurvivalState(State):
         if not lamps:
             return
 
-        # Softer, more transparent glow; blocked by walls via a tile mask.
-        radius_tiles = 11
-        radius_px = int(max(int(ts) * 6, int(ts) * int(radius_tiles)))
-        glow_key = (int(ts), int(radius_px))
+        cfg = getattr(self.app, "config", None)
+        radius_tiles = int(getattr(cfg, "lamp_world_radius_tiles", 6)) if cfg is not None else 6
+        radius_tiles = int(clamp(int(radius_tiles), 2, 18))
+        intensity = float(getattr(cfg, "lamp_world_intensity", 1.0)) if cfg is not None else 1.0
+        intensity = float(clamp(float(intensity), 0.0, 3.0))
+        if intensity <= 0.01:
+            return
+
+        # Lamp glow (additive) with wall-blocked mask.
+        radius_px = int(max(int(ts) * 2, int(ts) * int(radius_tiles)))
+        glow_key = (int(ts), int(radius_px), int(round(float(intensity) * 100)))
         glow = getattr(self, "_lamp_glow_cache", {}).get(glow_key) if hasattr(self, "_lamp_glow_cache") else None
         if glow is None:
             g = pygame.Surface((radius_px * 2 + 1, radius_px * 2 + 1), pygame.SRCALPHA)
-            # Very subtle falloff (high transparency).
+            # Falloff rings; intensity scales alpha (acts like "opacity/brightness").
             for r, a in (
-                (radius_px, 6),
-                (int(radius_px * 0.78), 10),
-                (int(radius_px * 0.56), 14),
-                (int(radius_px * 0.36), 18),
+                (radius_px, 14),
+                (int(radius_px * 0.78), 22),
+                (int(radius_px * 0.56), 30),
+                (int(radius_px * 0.36), 42),
             ):
                 if r <= 0:
                     continue
-                pygame.draw.circle(g, (255, 240, 180, int(a)), (radius_px, radius_px), int(r))
-            pygame.draw.circle(g, (255, 250, 210, 24), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
+                aa = int(clamp(int(round(float(a) * float(intensity))), 0, 255))
+                if aa <= 0:
+                    continue
+                pygame.draw.circle(g, (255, 240, 180, int(aa)), (radius_px, radius_px), int(r))
+            core_a = int(clamp(int(round(60.0 * float(intensity))), 0, 255))
+            if core_a > 0:
+                pygame.draw.circle(g, (255, 250, 210, core_a), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
             cache = getattr(self, "_lamp_glow_cache", {})
             cache[glow_key] = g
             self._lamp_glow_cache = cache
@@ -22757,6 +22817,7 @@ class HardcoreSurvivalState(State):
                 and not bool(getattr(self, "world_map_open", False))
                 and not bool(getattr(self, "home_ui_open", False))
                 and not bool(getattr(self, "world_elevator_ui_open", False))
+                and not (str(getattr(self, "player_pose_space", "")) == "world" and str(getattr(self, "player_pose", "")) in ("sleep", "sit"))
                 and getattr(self, "mount", None) is None
             ):
                 pt = getattr(self, "_draw_player_tile_xy", None)
@@ -22772,16 +22833,6 @@ class HardcoreSurvivalState(State):
                             int(self.T_ELEVATOR),
                             int(self.T_STAIRS_UP),
                             int(self.T_STAIRS_DOWN),
-                            int(self.T_FRIDGE),
-                            int(self.T_SHELF),
-                            int(self.T_BED),
-                            int(self.T_SOFA),
-                            int(self.T_CHAIR),
-                            int(self.T_TABLE),
-                            int(self.T_TV),
-                            int(self.T_PC),
-                            int(self.T_LAMP),
-                            int(self.T_SWITCH),
                         ):
                             pygame.draw.rect(surface, (0, 0, 0), rect, 1)
                             pygame.draw.rect(surface, (255, 220, 140), rect.inflate(-2, -2), 1)
@@ -23073,6 +23124,8 @@ class HardcoreSurvivalState(State):
             or bool(getattr(self, "rv_interior", False))
         ):
             return
+        if str(getattr(self, "player_pose_space", "")) == "world" and str(getattr(self, "player_pose", "")) in ("sleep", "sit"):
+            return
 
         tx, ty = self._player_tile()
         candidates = [
@@ -23143,10 +23196,14 @@ class HardcoreSurvivalState(State):
         if not block:
             block = [(int(cx), int(cy))]
 
+        tile_rect: pygame.Rect | None = None
         for bx, by in block:
             r = self._world_tile_screen_rect(int(bx), int(by), int(cam_x), int(cam_y))
-            pygame.draw.rect(surface, (0, 0, 0), r, 1)
-            pygame.draw.rect(surface, (255, 220, 140), r.inflate(-2, -2), 1)
+            tile_rect = r if tile_rect is None else tile_rect.union(r)
+        if tile_rect is None:
+            return
+        pygame.draw.rect(surface, (0, 0, 0), tile_rect, 1, border_radius=6)
+        pygame.draw.rect(surface, (255, 220, 140), tile_rect.inflate(-2, -2), 1, border_radius=6)
 
         # Build options.
         opts: list[tuple[str, str]] = []
@@ -23167,13 +23224,6 @@ class HardcoreSurvivalState(State):
         if not opts:
             return
 
-        ts = int(self.TILE_SIZE)
-        bx0 = min(int(p[0]) for p in block)
-        bx1 = max(int(p[0]) for p in block)
-        by0 = min(int(p[1]) for p in block)
-        by1 = max(int(p[1]) for p in block)
-        tile_rect = self._world_tile_screen_rect(int(bx0), int(by0), int(cam_x), int(cam_y))
-        tile_rect = tile_rect.union(self._world_tile_screen_rect(int(bx1), int(by1), int(cam_x), int(cam_y)))
         btn_w = 38
         btn_h = 16
         gap = 4
