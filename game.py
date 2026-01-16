@@ -9963,6 +9963,10 @@ class HardcoreSurvivalState(State):
         self.home_move_mode = False
         self.home_move_cursor = (0, 0)
         self.home_move_carry = None
+        self.world_ctx_open = False
+        self.world_ctx_target = None
+        self.world_ctx_rects = []
+        self._last_cam_draw = (0, 0)
 
         self.hr_elevator_ui_open = False
         self.hr_elevator_sel = 0
@@ -10262,6 +10266,12 @@ class HardcoreSurvivalState(State):
                 self._handle_inventory_mouse(event)
                 return
 
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if self._handle_world_furniture_carry_mouse(event):
+                return
+            if self._handle_world_context_menu_mouse(event):
+                return
+
         if event.type == pygame.KEYDOWN:
             if getattr(self, "rv_ui_open", False):
                 self._handle_rv_ui_key(int(event.key))
@@ -10279,6 +10289,10 @@ class HardcoreSurvivalState(State):
                 return
             if bool(getattr(self, "home_move_mode", False)):
                 self._handle_home_move_mode_key(int(event.key))
+                return
+            if self._world_furniture_carry_active() and event.key in (pygame.K_ESCAPE, pygame.K_q):
+                self._home_move_cancel()
+                self._set_hint("已取消", seconds=0.8)
                 return
             if event.key in (pygame.K_m,):
                 self._toggle_world_map()
@@ -18131,7 +18145,8 @@ class HardcoreSurvivalState(State):
         else:
             self.aim_dir = self._compute_aim_dir()
 
-        self._update_gun_timers(dt, allow_fire=True)
+        block_fire = bool(getattr(self, "world_ctx_open", False)) or bool(getattr(self, "home_move_mode", False)) or self._world_furniture_carry_active()
+        self._update_gun_timers(dt, allow_fire=not bool(block_fire))
 
         self._update_punch(dt)
         self._update_zombies(dt)
@@ -19440,6 +19455,105 @@ class HardcoreSurvivalState(State):
         if key in (pygame.K_DOWN, pygame.K_s):
             self._home_move_cursor_move(0, 1)
             return
+
+    def _world_furniture_carry_active(self) -> bool:
+        return isinstance(getattr(self, "home_move_carry", None), dict) and not bool(getattr(self, "home_move_mode", False))
+
+    def _world_context_action(self, action: str) -> None:
+        action = str(action)
+        target = getattr(self, "world_ctx_target", None)
+        if not (isinstance(target, tuple) and len(target) == 3):
+            return
+        tx, ty, _tid = int(target[0]), int(target[1]), int(target[2])
+
+        if action == "sit":
+            self._try_sit_world()
+            return
+        if action == "sleep":
+            self._try_rest_world_bed()
+            return
+        if action == "open":
+            self._try_open_home_storage_world()
+            return
+        if action == "light":
+            self._try_toggle_home_light_world()
+            return
+        if action == "tv":
+            self._try_watch_tv_world()
+            return
+        if action == "pc":
+            self._try_use_pc_world()
+            return
+        if action == "move":
+            if self._home_furniture_pickup_at(int(tx), int(ty)):
+                # Close the context menu immediately so clicks place furniture.
+                self.world_ctx_open = False
+                self.world_ctx_target = None
+                self.world_ctx_rects = []
+            else:
+                self._set_hint("不能搬", seconds=0.9)
+            return
+
+    def _handle_world_context_menu_mouse(self, event: pygame.event.Event) -> bool:
+        if bool(getattr(self, "home_move_mode", False)):
+            return False
+        if self._world_furniture_carry_active():
+            return False
+        if not bool(getattr(self, "world_ctx_open", False)):
+            return False
+        rects = getattr(self, "world_ctx_rects", None)
+        if not isinstance(rects, list) or not rects:
+            return False
+        if not hasattr(event, "pos"):
+            return False
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return False
+        mx, my = int(internal[0]), int(internal[1])
+        btn = int(getattr(event, "button", 0))
+        if btn == 3:
+            self.world_ctx_open = False
+            self.world_ctx_target = None
+            self.world_ctx_rects = []
+            return True
+        if btn != 1:
+            return True
+        for r, action in rects:
+            if isinstance(r, pygame.Rect) and r.collidepoint(mx, my):
+                self._world_context_action(str(action))
+                self.world_ctx_open = False
+                self.world_ctx_target = None
+                self.world_ctx_rects = []
+                return True
+        # Click outside closes the menu (and consumes the click so it doesn't fire).
+        self.world_ctx_open = False
+        self.world_ctx_target = None
+        self.world_ctx_rects = []
+        return True
+
+    def _handle_world_furniture_carry_mouse(self, event: pygame.event.Event) -> bool:
+        if not self._world_furniture_carry_active():
+            return False
+        if not hasattr(event, "pos"):
+            return False
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return False
+        mx, my = int(internal[0]), int(internal[1])
+        btn = int(getattr(event, "button", 0))
+        if btn == 3:
+            self._home_move_cancel()
+            self._set_hint("已取消", seconds=0.8)
+            return True
+        if btn != 1:
+            return True
+
+        cam_x, cam_y = getattr(self, "_last_cam_draw", (int(getattr(self, "cam_x", 0)), int(getattr(self, "cam_y", 0))))
+        tx, ty = self._screen_to_world_tile(int(mx), int(my), int(cam_x), int(cam_y))
+        if self._home_furniture_place_at(int(tx), int(ty)):
+            return True
+        self._set_hint("放不下", seconds=0.8)
+        return True
 
     def _world_set_tile(self, tx: int, ty: int, tile_id: int) -> None:
         tx = int(tx)
@@ -21535,6 +21649,69 @@ class HardcoreSurvivalState(State):
         overlay.fill((int(col[0]), int(col[1]), int(col[2]), int(a)))
         surface.blit(overlay, (0, 0))
 
+    def _draw_world_lamp_glows(
+        self,
+        surface: pygame.Surface,
+        cam_x: int,
+        cam_y: int,
+        start_tx: int,
+        end_tx: int,
+        start_ty: int,
+        end_ty: int,
+    ) -> None:
+        if not bool(getattr(self, "home_light_on", True)):
+            return
+        if bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "house_interior", False)) or bool(getattr(self, "sch_interior", False)) or bool(getattr(self, "rv_interior", False)):
+            return
+
+        ts = int(self.TILE_SIZE)
+        if ts <= 0:
+            return
+
+        overlay = getattr(self, "_inside_highrise_floor_overlay", None)
+        btx0 = bty0 = bw = bh = floor_y0 = offset_px = 0
+        if overlay is not None:
+            try:
+                btx0, bty0, bw, bh, floor_y0, offset_px = int(overlay[0]), int(overlay[1]), int(overlay[2]), int(overlay[3]), int(overlay[4]), int(overlay[5])
+            except Exception:
+                overlay = None
+
+        # Cached radial glow sprite (additive) for performance.
+        radius = int(max(10, int(round(float(ts) * 2.2))))
+        glow_key = (int(ts), int(radius))
+        glow = getattr(self, "_lamp_glow_cache", {}).get(glow_key) if hasattr(self, "_lamp_glow_cache") else None
+        if glow is None:
+            g = pygame.Surface((radius * 2 + 1, radius * 2 + 1), pygame.SRCALPHA)
+            # Warm yellow falloff.
+            for r, a in (
+                (radius, 26),
+                (int(radius * 0.78), 38),
+                (int(radius * 0.56), 54),
+                (int(radius * 0.36), 78),
+            ):
+                if r <= 0:
+                    continue
+                pygame.draw.circle(g, (255, 240, 180, int(a)), (radius, radius), int(r))
+            # Hot core.
+            pygame.draw.circle(g, (255, 250, 210, 110), (radius, radius), max(1, int(radius * 0.18)))
+            cache = getattr(self, "_lamp_glow_cache", {})
+            cache[glow_key] = g
+            self._lamp_glow_cache = cache
+            glow = g
+
+        # Draw glow for any lamp tiles in view.
+        for ty in range(int(start_ty), int(end_ty) + 1):
+            for tx in range(int(start_tx), int(end_tx) + 1):
+                if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_LAMP):
+                    continue
+                cx = int(tx) * int(ts) - int(cam_x) + int(ts // 2)
+                cy = int(ty) * int(ts) - int(cam_y) + int(ts // 2)
+                if overlay is not None and int(offset_px) > 0:
+                    if int(btx0) <= int(tx) < int(btx0) + int(bw) and int(bty0) <= int(ty) < int(bty0) + int(bh):
+                        if int(ty) >= int(max(int(bty0), int(floor_y0) - 1)):
+                            cy -= int(offset_px)
+                surface.blit(glow, (int(cx - radius), int(cy - radius)), special_flags=pygame.BLEND_RGBA_ADD)
+
     def _season_index_for_day(self, day: int) -> int:
         return ((int(day) - 1) // max(1, int(self.SEASON_LENGTH_DAYS))) % len(self.SEASONS)
 
@@ -22470,6 +22647,12 @@ class HardcoreSurvivalState(State):
                             int(self.T_FRIDGE),
                             int(self.T_SHELF),
                             int(self.T_BED),
+                            int(self.T_SOFA),
+                            int(self.T_CHAIR),
+                            int(self.T_TABLE),
+                            int(self.T_TV),
+                            int(self.T_PC),
+                            int(self.T_LAMP),
                             int(self.T_SWITCH),
                         ):
                             pygame.draw.rect(surface, (0, 0, 0), rect, 1)
@@ -22536,6 +22719,362 @@ class HardcoreSurvivalState(State):
         surface.fill(body_col, torso)
         surface.fill(body_col, leg_l)
         surface.fill(body_col, leg_r)
+
+    def _tile_in_home_world(self, tx: int, ty: int) -> bool:
+        tx = int(tx)
+        ty = int(ty)
+        home_key = getattr(self, "home_highrise_world_key", None)
+        if not (isinstance(home_key, tuple) and len(home_key) == 4):
+            return False
+        hit = self._peek_building_at_tile(int(tx), int(ty))
+        if hit is None:
+            return False
+        btx0, bty0, bw, bh = hit[:4]
+        if (int(btx0), int(bty0), int(bw), int(bh)) != tuple(int(v) for v in home_key):
+            return False
+        home_floor = int(getattr(self, "home_highrise_world_floor", 0) or 0)
+        if home_floor > 0:
+            found = self._multi_house_at(int(tx), int(ty))
+            if found is None:
+                return False
+            _ch, mh = found
+            if int(getattr(mh, "cur_floor", 1)) != int(home_floor):
+                return False
+        return True
+
+    def _world_tile_screen_rect(self, tx: int, ty: int, cam_x: int, cam_y: int) -> pygame.Rect:
+        tx = int(tx)
+        ty = int(ty)
+        ts = int(self.TILE_SIZE)
+        x = int(tx) * int(ts) - int(cam_x)
+        y = int(ty) * int(ts) - int(cam_y)
+        overlay = getattr(self, "_inside_highrise_floor_overlay", None)
+        if overlay is not None:
+            try:
+                tx0, ty0, w, h, floor_y0, offset_px = (
+                    int(overlay[0]),
+                    int(overlay[1]),
+                    int(overlay[2]),
+                    int(overlay[3]),
+                    int(overlay[4]),
+                    int(overlay[5]),
+                )
+                start_y = int(max(int(ty0), int(floor_y0) - 1))
+                if int(offset_px) > 0 and int(tx0) <= int(tx) < int(tx0) + int(w) and int(ty0) <= int(ty) < int(ty0) + int(h) and int(ty) >= int(start_y):
+                    y -= int(offset_px)
+            except Exception:
+                pass
+        return pygame.Rect(int(x), int(y), int(ts), int(ts))
+
+    def _screen_to_world_tile(self, mx: int, my: int, cam_x: int, cam_y: int) -> tuple[int, int]:
+        mx = int(mx)
+        my = int(my)
+        ts = int(self.TILE_SIZE)
+        if ts <= 0:
+            return 0, 0
+        tx = int(math.floor((float(cam_x) + float(mx)) / float(ts)))
+        ty = int(math.floor((float(cam_y) + float(my)) / float(ts)))
+        overlay = getattr(self, "_inside_highrise_floor_overlay", None)
+        if overlay is not None:
+            try:
+                tx0, ty0, w, h, floor_y0, offset_px = (
+                    int(overlay[0]),
+                    int(overlay[1]),
+                    int(overlay[2]),
+                    int(overlay[3]),
+                    int(overlay[4]),
+                    int(overlay[5]),
+                )
+                start_y = int(max(int(ty0), int(floor_y0) - 1))
+                if int(offset_px) > 0:
+                    x0 = int(tx0) * int(ts) - int(cam_x)
+                    x1 = int(x0 + int(w) * int(ts))
+                    y0 = int(start_y) * int(ts) - int(cam_y) - int(offset_px)
+                    y1 = int((int(ty0) + int(h)) * int(ts) - int(cam_y) - int(offset_px))
+                    if int(x0) <= int(mx) < int(x1) and int(y0) <= int(my) < int(y1):
+                        ty = int(math.floor((float(cam_y) + float(my) + float(offset_px)) / float(ts)))
+            except Exception:
+                pass
+        return int(tx), int(ty)
+
+    def _home_furniture_pickup_at(self, tx: int, ty: int) -> bool:
+        if getattr(self, "mount", None) is not None:
+            return False
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return False
+        if isinstance(getattr(self, "home_move_carry", None), dict):
+            return False
+
+        tx = int(tx)
+        ty = int(ty)
+        ptx, pty = self._player_tile()
+        if abs(int(tx) - int(ptx)) > 1 or abs(int(ty) - int(pty)) > 1:
+            return False
+        if not self._tile_in_home_world(int(tx), int(ty)):
+            return False
+
+        movable = {
+            int(self.T_TABLE),
+            int(self.T_SHELF),
+            int(self.T_BED),
+            int(self.T_SOFA),
+            int(self.T_FRIDGE),
+            int(self.T_TV),
+            int(self.T_CHAIR),
+            int(self.T_PC),
+            int(self.T_LAMP),
+        }
+        tid = int(self.world.get_tile(int(tx), int(ty)))
+        if tid not in movable:
+            return False
+
+        seen: set[tuple[int, int]] = set()
+        stack = [(int(tx), int(ty))]
+        cells: list[tuple[int, int]] = []
+        while stack and len(cells) < 24:
+            cx, cy = stack.pop()
+            cx = int(cx)
+            cy = int(cy)
+            if (cx, cy) in seen:
+                continue
+            seen.add((cx, cy))
+            if int(self.world.get_tile(int(cx), int(cy))) != int(tid):
+                continue
+            cells.append((int(cx), int(cy)))
+            stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+
+        if not cells:
+            return False
+        offsets = [(int(cx - tx), int(cy - ty)) for cx, cy in cells]
+        self.home_move_carry = {"tid": int(tid), "offsets": offsets, "origin_cells": list(cells)}
+        for cx, cy in cells:
+            self._world_set_tile(int(cx), int(cy), int(self.T_FLOOR))
+        self._set_hint("搬运：左键放下 | 右键取消", seconds=1.4)
+        return True
+
+    def _home_furniture_can_place_at(self, anchor_tx: int, anchor_ty: int) -> tuple[bool, list[tuple[int, int]]]:
+        carry = getattr(self, "home_move_carry", None)
+        if not isinstance(carry, dict):
+            return False, []
+        tid = int(carry.get("tid", 0))
+        offsets = carry.get("offsets", [])
+        if not isinstance(offsets, list) or tid <= 0:
+            return False, []
+
+        anchor_tx = int(anchor_tx)
+        anchor_ty = int(anchor_ty)
+        cells = [(int(anchor_tx + int(dx)), int(anchor_ty + int(dy))) for dx, dy in offsets]
+        for tx, ty in cells:
+            if not self._tile_in_home_world(int(tx), int(ty)):
+                return False, cells
+            if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_FLOOR):
+                return False, cells
+        return True, cells
+
+    def _home_furniture_place_at(self, anchor_tx: int, anchor_ty: int) -> bool:
+        ok, cells = self._home_furniture_can_place_at(int(anchor_tx), int(anchor_ty))
+        if not ok:
+            return False
+        carry = getattr(self, "home_move_carry", None)
+        if not isinstance(carry, dict):
+            return False
+        tid = int(carry.get("tid", 0))
+        if tid <= 0:
+            return False
+        for tx, ty in cells:
+            self._world_set_tile(int(tx), int(ty), int(tid))
+        self.home_move_carry = None
+        self._set_hint("已放下", seconds=0.9)
+        return True
+
+    def _draw_world_furniture_carry_preview(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        if bool(getattr(self, "home_move_mode", False)):
+            return
+        carry = getattr(self, "home_move_carry", None)
+        if not isinstance(carry, dict):
+            return
+        if getattr(self, "mount", None) is not None:
+            return
+
+        mp = self.app.screen_to_internal(pygame.mouse.get_pos())
+        if mp is None:
+            return
+        mx, my = int(mp[0]), int(mp[1])
+        anchor_tx, anchor_ty = self._screen_to_world_tile(int(mx), int(my), int(cam_x), int(cam_y))
+        ok, cells = self._home_furniture_can_place_at(int(anchor_tx), int(anchor_ty))
+        col = (120, 200, 140) if ok else (220, 90, 70)
+        ts = int(self.TILE_SIZE)
+        ghost = pygame.Surface((ts, ts), pygame.SRCALPHA)
+        ghost.fill((int(col[0]), int(col[1]), int(col[2]), 60))
+        for tx, ty in cells:
+            r = self._world_tile_screen_rect(int(tx), int(ty), int(cam_x), int(cam_y))
+            surface.blit(ghost, r.topleft)
+            pygame.draw.rect(surface, col, r, 1)
+
+        # Tiny hint near the cursor (minimal text).
+        hint = "放下/取消"
+        font = self.app.font_s
+        w = int(font.size(hint)[0]) + 10
+        h = int(font.get_height()) + 6
+        bx = int(clamp(int(mx + 14), 4, int(INTERNAL_W - 4 - w)))
+        by = int(clamp(int(my + 14), 4, int(INTERNAL_H - 4 - h)))
+        panel = pygame.Rect(bx, by, w, h)
+        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=6)
+        pygame.draw.rect(surface, (90, 90, 110), panel, 1, border_radius=6)
+        draw_text(surface, font, hint, (panel.centerx, panel.centery - 1), pygame.Color(230, 230, 240), anchor="center")
+
+    def _draw_world_context_menu(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        self.world_ctx_open = False
+        self.world_ctx_target = None
+        self.world_ctx_rects = []
+        if bool(getattr(self, "home_move_mode", False)):
+            return
+        if isinstance(getattr(self, "home_move_carry", None), dict):
+            return
+        if getattr(self, "mount", None) is not None:
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return
+
+        tx, ty = self._player_tile()
+        candidates = [
+            (tx, ty),
+            (tx + 1, ty),
+            (tx - 1, ty),
+            (tx, ty + 1),
+            (tx, ty - 1),
+            (tx + 1, ty + 1),
+            (tx + 1, ty - 1),
+            (tx - 1, ty + 1),
+            (tx - 1, ty - 1),
+        ]
+        interact = {
+            int(self.T_SOFA),
+            int(self.T_CHAIR),
+            int(self.T_BED),
+            int(self.T_FRIDGE),
+            int(self.T_SHELF),
+            int(self.T_TV),
+            int(self.T_PC),
+            int(self.T_LAMP),
+            int(self.T_SWITCH),
+        }
+        pri = {
+            int(self.T_SWITCH): 0,
+            int(self.T_FRIDGE): 1,
+            int(self.T_SHELF): 1,
+            int(self.T_BED): 2,
+            int(self.T_SOFA): 3,
+            int(self.T_CHAIR): 3,
+            int(self.T_PC): 4,
+            int(self.T_TV): 4,
+            int(self.T_LAMP): 5,
+        }
+        chosen: tuple[int, int, int] | None = None
+        best = None
+        for cx, cy in candidates:
+            tid = int(self.world.get_tile(int(cx), int(cy)))
+            if tid not in interact:
+                continue
+            if not self._tile_in_home_world(int(cx), int(cy)):
+                continue
+            d = max(abs(int(cx) - int(tx)), abs(int(cy) - int(ty)))
+            key = (int(pri.get(int(tid), 9)), int(d), int(cy), int(cx))
+            if best is None or key < best:
+                best = key
+                chosen = (int(cx), int(cy), int(tid))
+        if chosen is None:
+            return
+
+        cx, cy, tid = chosen
+        # Outline the whole connected block (2-tile bed/sofa/pc).
+        seen: set[tuple[int, int]] = set()
+        stack = [(int(cx), int(cy))]
+        block: list[tuple[int, int]] = []
+        while stack and len(block) < 24:
+            sx, sy = stack.pop()
+            sx = int(sx)
+            sy = int(sy)
+            if (sx, sy) in seen:
+                continue
+            seen.add((sx, sy))
+            if int(self.world.get_tile(int(sx), int(sy))) != int(tid):
+                continue
+            block.append((int(sx), int(sy)))
+            stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
+        if not block:
+            block = [(int(cx), int(cy))]
+
+        for bx, by in block:
+            r = self._world_tile_screen_rect(int(bx), int(by), int(cam_x), int(cam_y))
+            pygame.draw.rect(surface, (0, 0, 0), r, 1)
+            pygame.draw.rect(surface, (255, 220, 140), r.inflate(-2, -2), 1)
+
+        # Build options.
+        opts: list[tuple[str, str]] = []
+        if int(tid) in (int(self.T_SOFA), int(self.T_CHAIR)):
+            opts = [("坐", "sit"), ("搬运", "move")]
+        elif int(tid) == int(self.T_BED):
+            opts = [("睡觉", "sleep"), ("搬运", "move")]
+        elif int(tid) in (int(self.T_FRIDGE), int(self.T_SHELF)):
+            opts = [("打开", "open"), ("搬运", "move")]
+        elif int(tid) == int(self.T_PC):
+            opts = [("用电脑", "pc"), ("搬运", "move")]
+        elif int(tid) == int(self.T_TV):
+            opts = [("看电视", "tv"), ("搬运", "move")]
+        elif int(tid) == int(self.T_LAMP):
+            opts = [("搬运", "move")]
+        elif int(tid) == int(self.T_SWITCH):
+            opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light")]
+        if not opts:
+            return
+
+        ts = int(self.TILE_SIZE)
+        bx0 = min(int(p[0]) for p in block)
+        bx1 = max(int(p[0]) for p in block)
+        by0 = min(int(p[1]) for p in block)
+        by1 = max(int(p[1]) for p in block)
+        tile_rect = self._world_tile_screen_rect(int(bx0), int(by0), int(cam_x), int(cam_y))
+        tile_rect = tile_rect.union(self._world_tile_screen_rect(int(bx1), int(by1), int(cam_x), int(cam_y)))
+        btn_w = 62
+        btn_h = 22
+        gap = 8
+        panel_w = int(len(opts) * btn_w + max(0, len(opts) - 1) * gap + 16)
+        panel_h = int(btn_h + 16)
+        px = int(tile_rect.centerx - panel_w // 2)
+        py = int(tile_rect.top - panel_h - 8)
+        if py < 4:
+            py = int(tile_rect.bottom + 8)
+        px = int(clamp(int(px), 4, int(INTERNAL_W - 4 - panel_w)))
+        py = int(clamp(int(py), 4, int(INTERNAL_H - 4 - panel_h)))
+        panel = pygame.Rect(px, py, panel_w, panel_h)
+        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=10)
+        pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=10)
+
+        x0 = int(panel.x + 8)
+        y0 = int(panel.y + 8)
+        font = self.app.font_s
+        rects: list[tuple[pygame.Rect, str]] = []
+        for i, (label, action) in enumerate(opts):
+            br = pygame.Rect(int(x0 + i * (btn_w + gap)), int(y0), int(btn_w), int(btn_h))
+            pygame.draw.rect(surface, (28, 28, 34), br, border_radius=8)
+            pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=8)
+            draw_text(surface, font, str(label), (br.centerx, br.centery - 1), pygame.Color(230, 230, 240), anchor="center")
+            rects.append((br, str(action)))
+
+        self.world_ctx_open = True
+        self.world_ctx_target = (int(cx), int(cy), int(tid))
+        self.world_ctx_rects = rects
 
     def _blit_sprite_outline(self, surface: pygame.Surface, spr: pygame.Surface, rect: pygame.Rect, *, color: tuple[int, int, int]) -> None:
         r, g, b = (int(color[0]), int(color[1]), int(color[2]))
@@ -25029,9 +25568,21 @@ class HardcoreSurvivalState(State):
                 int(self.T_FLOOR),
                 int(self.T_DOOR),
                 int(self.T_DOOR_HOME),
+                int(self.T_DOOR_LOCKED),
+                int(self.T_DOOR_HOME_LOCKED),
                 int(self.T_ELEVATOR),
                 int(self.T_STAIRS_UP),
                 int(self.T_STAIRS_DOWN),
+                int(self.T_TABLE),
+                int(self.T_SHELF),
+                int(self.T_BED),
+                int(self.T_SOFA),
+                int(self.T_FRIDGE),
+                int(self.T_TV),
+                int(self.T_CHAIR),
+                int(self.T_PC),
+                int(self.T_LAMP),
+                int(self.T_SWITCH),
             )
             if can_be_inside:
                 pchunk = self.world.peek_chunk(int(ptx) // int(self.CHUNK_SIZE), int(pty) // int(self.CHUNK_SIZE))
@@ -25145,6 +25696,7 @@ class HardcoreSurvivalState(State):
                     cam_y_draw = int(cam_y_draw - int(lift))
             except Exception:
                 cam_y_draw = int(cam_y)
+        self._last_cam_draw = (int(cam_x), int(cam_y_draw))
 
         start_tx = int(math.floor(cam_x / self.TILE_SIZE)) - 1
         start_ty = int(math.floor(cam_y_draw / self.TILE_SIZE)) - 1
@@ -25262,6 +25814,7 @@ class HardcoreSurvivalState(State):
                 pass
         self._draw_roofs(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_day_night_overlay(surface, in_rv=False)
+        self._draw_world_lamp_glows(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_weather_effects(surface, in_rv=False)
         self._draw_home_move_mode_overlay(surface, cam_x, cam_y_draw)
         self._draw_survival_ui(surface)
@@ -25275,6 +25828,8 @@ class HardcoreSurvivalState(State):
             self._draw_home_storage_ui(surface)
             return
 
+        self._draw_world_furniture_carry_preview(surface, cam_x, cam_y_draw)
+        self._draw_world_context_menu(surface, cam_x, cam_y_draw)
         self._draw_hover_tooltip(surface)
         self._draw_speech_bubble(surface)
         self._draw_dialog(surface)
