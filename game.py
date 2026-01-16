@@ -10439,10 +10439,6 @@ class HardcoreSurvivalState(State):
             if event.key in (pygame.K_F3,):
                 self._debug = not self._debug
                 return
-            if event.key in (pygame.K_k,):
-                self.inv_open = False
-                if self._debug_enter_home_world():
-                    return
 
     def _handle_inventory_mouse(self, event: pygame.event.Event) -> None:
         if not self.inv_open:
