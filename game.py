@@ -4706,46 +4706,58 @@ class HardcoreSurvivalState(State):
 
     # High-rise apartment (multi-floor) interior.
     _HR_INT_LOBBY_LAYOUT: list[str] = [
-        "WWWWWWWWWWWWWWWWWWWWWWW",
-        "W.....................W",
-        "W....CC.......CC......W",
-        "W....CC.......CC......W",
-        "W.....................W",
-        "W.........EE..........D",
-        "W.........EE..........W",
-        "W.....................W",
-        "W....CC.......CC......W",
-        "W....CC.......CC......W",
-        "WWWWWWWWWWWWWWWWWWWWWWW",
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+        "W.............................W",
+        "W....CC.................CC....W",
+        "W....CC.................CC....W",
+        "W.............................W",
+        "W.......^^....EE..............W",
+        "W.......vv....EE..............W",
+        "W.............................D",
+        "W.............................W",
+        "W....CC.................CC....W",
+        "W....CC.................CC....W",
+        "W.............................W",
+        "W.............................W",
+        "W.............................W",
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
     ]
     _HR_INT_HALL_BASE: list[str] = [
-        "WWWWWWWWWWWWWWWWWWWWWWW",
-        "WWWWWWWWWWWAWWWWWWWWWWW",
-        "WWWWWWWW.......WWWWWWWW",
-        "WWWWWWWA.......AWWWWWWW",
-        "WWWWWWWW.......WWWWWWWW",
-        "WWWWWWWW...EE..WWWWWWWW",
-        "WWWWWWWW...EE..WWWWWWWW",
-        "WWWWWWWW.......WWWWWWWW",
-        "WWWWWWWW.......WWWWWWWW",
-        "WWWWWWWW.......WWWWWWWW",
-        "WWWWWWWWWWWWWWWWWWWWWWW",
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+        "W..............A..............W",
+        "W.............................W",
+        "W.......A.............A.......W",
+        "W.............................W",
+        "W.......^^....EE..............W",
+        "W.......vv....EE..............W",
+        "W.............................W",
+        "W.............................W",
+        "W.............................W",
+        "W.............................W",
+        "W.............................W",
+        "W.............................W",
+        "W.............................W",
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
     ]
     _HR_INT_HOME_LAYOUT: list[str] = [
-        "WWWWWWWWWWWWWWWWWWWWWWW",
-        "WVV.................VVW",
-        "W..BBBBBB.W....SS.PPP.W",
-        "W..BBBBBB.W......CPPP.W",
-        "W.........W..TTTT.XXXXW",
-        "W..SS......KKKKKF.....D",
-        "W.........W.CCCC.WWWWWW",
-        "W..SS.....W.....WU,,RRW",
-        "W.........W......,O,RRW",
-        "W...............W,,,,,W",
-        "WWWWWWWWWWWWWWWWWWWWWWW",
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+        "WVV.........................VVW",
+        "W..BBBB...SSS..W..BBBB...SSS..W",
+        "W..BBBB........W..BBBB........W",
+        "W..............W..............W",
+        "W..............W..............W",
+        "W..............W..............W",
+        "WWWWWWW.WWWWWWWWWWWWWWW.WWWWWWW",
+        "W...................WWWWWWWWWWW",
+        "W..SS...........XXXXW,,,,,,,,,W",
+        "W.........L.........WRRR,,,,,,W",
+        "W.....CCCC..TTTT.....,,O,,,,,,W",
+        "WKKKKKF...SS..PPP...W,,,,,,,U,W",
+        "W..............C....W,,,,,,,,,W",
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
     ]
-    _HR_INT_W = 23
-    _HR_INT_H = 11
+    _HR_INT_W = 31
+    _HR_INT_H = 15
     _HR_INT_TILE_SIZE = 20
     _HR_INT_SPRITE_SCALE = 2
     HIGHRISE_MAX_FLOORS = 10
@@ -4753,7 +4765,7 @@ class HardcoreSurvivalState(State):
     # for high-rises so the lobby + apartments don't collapse into "only elevator".
     HIGHRISE_MIN_FLOOR_TILES = 9
     _HR_INT_MAX_FLOORS_DEFAULT = HIGHRISE_MAX_FLOORS
-    _HR_INT_APT_DOORS: list[tuple[int, int]] = [(7, 3), (15, 3), (11, 1)]
+    _HR_INT_APT_DOORS: list[tuple[int, int]] = [(8, 3), (22, 3), (15, 1)]
 
     GAS_CAN_REFUEL = 45.0
 
@@ -8413,12 +8425,12 @@ class HardcoreSurvivalState(State):
                     w = rng.randint(16, 23)
                     h = rng.randint(13, 19)
                 elif town_kind == "高层住宅大":
-                    w = rng.randint(16, 24)
-                    h = rng.randint(16, 24)
+                    w = rng.randint(22, 27)
+                    h = rng.randint(22, 28)
                 elif town_kind == "高层住宅":
-                    # Keep 2-unit apartments roomy (avoid narrow units).
-                    w = rng.randint(15, 18)
-                    h = rng.randint(15, 20)
+                    # Larger footprint so 2/3-unit apartments feel like real homes.
+                    w = rng.randint(18, 22)
+                    h = rng.randint(18, 24)
                 elif town_kind == "大型监狱":
                     w = rng.randint(22, 28)
                     h = rng.randint(20, 28)
@@ -9947,6 +9959,16 @@ class HardcoreSurvivalState(State):
         self.hr_elevator_sel = 0
         self.hr_elevator_cols = 4
         self.hr_max_floors = int(self._HR_INT_MAX_FLOORS_DEFAULT)
+        self.hr_travel_active = False
+        self.hr_travel_kind = ""
+        self.hr_travel_from = 1
+        self.hr_travel_to = 1
+        self.hr_travel_display = 1
+        self.hr_travel_dir = 1
+        self.hr_travel_step_s = 0.35
+        self.hr_travel_acc = 0.0
+        self.hr_travel_done_left = -1.0
+        self.hr_travel_spawn_at = "elevator"
         # World-map elevator UI (high-rise floors).
         self.world_elevator_ui_open = False
         self.world_elevator_sel = 0
@@ -10083,6 +10105,9 @@ class HardcoreSurvivalState(State):
         self.dialog_reveal = 0.0  # float char cursor
         self.dialog_speed = 42.0  # chars/sec
         self.dialog_blink = 0.0
+        # Non-blocking speech bubble (doesn't swallow input).
+        self.speech_text = ""
+        self.speech_left = 0.0
         self.muzzle_flash_left = 0.0
         self.noise_left = 0.0
         self.noise_radius = 0.0
@@ -10139,6 +10164,10 @@ class HardcoreSurvivalState(State):
             if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION, pygame.MOUSEWHEEL):
                 self._handle_world_map_mouse(event)
                 return
+
+        # High-rise travel (elevator/stairs) blocks input while the timer runs.
+        if bool(getattr(self, "hr_interior", False)) and bool(getattr(self, "hr_travel_active", False)):
+            return
 
         if getattr(self, "dialog_open", False):
             if event.type == pygame.KEYDOWN:
@@ -11347,7 +11376,7 @@ class HardcoreSurvivalState(State):
 
     def _hr_int_solid_tile(self, ch: str) -> bool:
         ch = str(ch)[:1]
-        return ch not in (".", ",", "D", "E")
+        return ch not in (".", ",", "D", "E", "L", "^", "v")
 
     def _hr_int_move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
         # Match the collision/slide behavior of other interior scenes (house/school/RV).
@@ -11586,11 +11615,38 @@ class HardcoreSurvivalState(State):
             return False
 
         tile = int(self._HR_INT_TILE_SIZE)
-        map_w = int(self._HR_INT_W) * tile
-        map_h = int(self._HR_INT_H) * tile
-        map_x = (INTERNAL_W - map_w) // 2
-        map_y = 38
-        map_rect = pygame.Rect(map_x, map_y, map_w, map_h)
+        full_map_w = int(self._HR_INT_W) * tile
+        full_map_h = int(self._HR_INT_H) * tile
+        map_y0 = 38
+        map_w = int(min(int(full_map_w), max(1, int(INTERNAL_W) - 20)))
+        map_h = int(min(int(full_map_h), max(1, int(INTERNAL_H) - int(map_y0) - 10)))
+        map_x0 = (INTERNAL_W - map_w) // 2
+        map_rect = pygame.Rect(int(map_x0), int(map_y0), int(map_w), int(map_h))
+
+        # Same camera math as the renderer (layout may exceed the viewport).
+        cam = getattr(self, "_hr_int_draw_cam", None)
+        if isinstance(cam, tuple) and len(cam) >= 2:
+            cam_x, cam_y = int(cam[0]), int(cam[1])
+        else:
+            pose = str(getattr(self, "player_pose", "")).strip()
+            pose_space = str(getattr(self, "player_pose_space", "")).strip()
+            pose_anchor = getattr(self, "player_pose_anchor", None)
+            use_pose = bool(pose and pose_space == "hr" and pose_anchor is not None)
+            if use_pose:
+                focus = pygame.Vector2(float(pose_anchor[0]), float(pose_anchor[1]))
+            else:
+                focus = pygame.Vector2(self.hr_int_pos)
+            if int(full_map_w) <= int(map_w):
+                cam_x = 0
+            else:
+                cam_x = int(clamp(float(focus.x) - float(map_w) / 2.0, 0.0, float(full_map_w - map_w)))
+            if int(full_map_h) <= int(map_h):
+                cam_y = 0
+            else:
+                cam_y = int(clamp(float(focus.y) - float(map_h) / 2.0, 0.0, float(full_map_h - map_h)))
+
+        map_x = int(map_x0) - int(cam_x)
+        map_y = int(map_y0) - int(cam_y)
 
         movable = {"B", "S", "F", "K", "T", "C", "P", "X"}
 
@@ -11678,7 +11734,7 @@ class HardcoreSurvivalState(State):
             rows[int(hy)][int(hx)] = "H"
         return ["".join(r) for r in rows]
 
-    def _hr_set_floor(self, floor: int) -> None:
+    def _hr_set_floor(self, floor: int, *, spawn_at: str = "elevator") -> None:
         max_f = int(max(1, int(getattr(self, "hr_max_floors", int(self._HR_INT_MAX_FLOORS_DEFAULT)))))
         floor = int(clamp(int(floor), 1, max_f))
         self.hr_floor = int(floor)
@@ -11689,7 +11745,16 @@ class HardcoreSurvivalState(State):
             self.hr_mode = "hall"
             self._hr_int_set_layout(self._hr_make_hall_layout(floor))
 
-        elev = self._hr_int_find("E")
+        spawn_at = str(spawn_at)
+        spawn_ch = "E"
+        if spawn_at == "stairs_up":
+            spawn_ch = "^"
+        elif spawn_at == "stairs_down":
+            spawn_ch = "v"
+
+        elev = self._hr_int_find(str(spawn_ch)[:1])
+        if elev is None:
+            elev = self._hr_int_find("E")
         tile = int(self._HR_INT_TILE_SIZE)
         if elev is None:
             self.hr_int_pos = pygame.Vector2((self._HR_INT_W / 2.0) * tile, (self._HR_INT_H / 2.0) * tile)
@@ -11699,6 +11764,85 @@ class HardcoreSurvivalState(State):
         self.hr_int_vel = pygame.Vector2(0, 0)
         self.hr_int_facing = pygame.Vector2(0, 1)
         self.hr_int_walk_phase = 0.0
+
+    def _hr_travel_start(self, target_floor: int, *, kind: str, spawn_at: str = "elevator") -> None:
+        if not bool(getattr(self, "hr_interior", False)):
+            return
+        if bool(getattr(self, "hr_travel_active", False)):
+            return
+        kind = str(kind).strip() or "elevator"
+
+        max_f = int(max(1, int(getattr(self, "hr_max_floors", int(self._HR_INT_MAX_FLOORS_DEFAULT)))))
+        cur = int(getattr(self, "hr_floor", 1))
+        target = int(clamp(int(target_floor), 1, int(max_f)))
+        if int(target) == int(cur):
+            self._set_hint(f"已在 {int(cur)}F", seconds=0.8)
+            return
+
+        step = 0.35
+        if kind != "elevator":
+            step = 0.60
+
+        self.inv_open = False
+        self.home_ui_open = False
+        self.home_ui_open_block = None
+        self.world_map_open = False
+        self._gallery_open = False
+        self.hr_elevator_ui_open = False
+        self.hr_elevator_input = ""
+        self.hr_auto_walk_to_elevator = False
+        self.hr_auto_walk_delay = 0.0
+        self._clear_player_pose()
+
+        self.hr_travel_active = True
+        self.hr_travel_kind = kind
+        self.hr_travel_from = int(cur)
+        self.hr_travel_to = int(target)
+        self.hr_travel_display = int(cur)
+        self.hr_travel_dir = 1 if int(target) > int(cur) else -1
+        self.hr_travel_step_s = float(max(0.10, float(step)))
+        self.hr_travel_acc = 0.0
+        self.hr_travel_done_left = -1.0
+        self.hr_travel_spawn_at = str(spawn_at)
+        self.hr_int_vel = pygame.Vector2(0, 0)
+
+    def _hr_travel_update(self, dt: float) -> None:
+        if not bool(getattr(self, "hr_travel_active", False)):
+            return
+        dt = float(dt)
+        cur = int(getattr(self, "hr_travel_display", int(getattr(self, "hr_floor", 1))))
+        target = int(getattr(self, "hr_travel_to", cur))
+        step = float(getattr(self, "hr_travel_step_s", 0.35))
+        step = float(max(0.06, step))
+        direction = 1 if int(getattr(self, "hr_travel_dir", 1)) >= 0 else -1
+
+        if int(cur) == int(target):
+            done_left = float(getattr(self, "hr_travel_done_left", -1.0))
+            if done_left < 0.0:
+                self.hr_travel_done_left = 0.25
+                return
+            done_left = done_left - dt
+            self.hr_travel_done_left = done_left
+            if done_left <= 0.0:
+                spawn_at = str(getattr(self, "hr_travel_spawn_at", "elevator"))
+                self.hr_travel_active = False
+                self.hr_travel_kind = ""
+                self._hr_set_floor(int(target), spawn_at=spawn_at)
+            return
+
+        acc = float(getattr(self, "hr_travel_acc", 0.0)) + dt
+        while acc >= step and int(cur) != int(target):
+            acc -= step
+            cur = int(cur) + int(direction)
+            # Clamp so we never step beyond target.
+            if direction > 0 and int(cur) > int(target):
+                cur = int(target)
+            elif direction < 0 and int(cur) < int(target):
+                cur = int(target)
+            self.hr_travel_display = int(cur)
+        self.hr_travel_acc = float(acc)
+        if int(cur) == int(target):
+            self.hr_travel_done_left = 0.25
 
     def _hr_elevator_open(self) -> None:
         if not getattr(self, "hr_interior", False):
@@ -11811,7 +11955,7 @@ class HardcoreSurvivalState(State):
         self.hr_elevator_input = ""
         if et == int(pygame.MOUSEBUTTONDOWN) and button == 1:
             self.hr_elevator_ui_open = False
-            self._hr_set_floor(int(hit_floor))
+            self._hr_travel_start(int(hit_floor), kind="elevator", spawn_at="elevator")
 
     def _handle_hr_elevator_ui_key(self, key: int) -> None:
         if not getattr(self, "hr_elevator_ui_open", False):
@@ -11850,9 +11994,9 @@ class HardcoreSurvivalState(State):
                     target = int(typed)
                 except ValueError:
                     target = int(options[sel])
-                self._hr_set_floor(int(target))
+                self._hr_travel_start(int(target), kind="elevator", spawn_at="elevator")
             else:
-                self._hr_set_floor(int(options[sel]))
+                self._hr_travel_start(int(options[sel]), kind="elevator", spawn_at="elevator")
             return
 
         if key in (pygame.K_PAGEUP,):
@@ -12329,6 +12473,8 @@ class HardcoreSurvivalState(State):
         self._gallery_open = False
         self.hr_interior = True
         self.hr_elevator_ui_open = False
+        self.hr_travel_active = False
+        self.hr_travel_kind = ""
         self.hr_edit_mode = False
         self.hr_edit_dragging = False
         self.home_ui_open = False
@@ -12386,6 +12532,8 @@ class HardcoreSurvivalState(State):
         self._clear_player_pose()
         self.hr_interior = False
         self.hr_elevator_ui_open = False
+        self.hr_travel_active = False
+        self.hr_travel_kind = ""
         self.hr_edit_mode = False
         self.hr_edit_dragging = False
         self.home_ui_open = False
@@ -12434,7 +12582,7 @@ class HardcoreSurvivalState(State):
         tx, ty = self._hr_int_player_tile()
         candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
         chosen: tuple[int, int, str] | None = None
-        interact = {"D", "E", "H", "A", "B"}
+        interact = {"D", "E", "H", "A", "B", "^", "v"}
         if mode == "home":
             interact.update({"S", "F", "C", "P", "X"})
         for cx, cy in candidates:
@@ -12467,6 +12615,20 @@ class HardcoreSurvivalState(State):
                 self._hr_leave_home()
                 return
             self._hr_interior_exit()
+            return
+        if ch in ("^", "v"):
+            floor = int(getattr(self, "hr_floor", 1))
+            max_f = int(max(1, int(getattr(self, "hr_max_floors", int(self._HR_INT_MAX_FLOORS_DEFAULT)))))
+            if ch == "^":
+                if floor >= max_f:
+                    self._set_hint("已经是顶层", seconds=1.0)
+                    return
+                self._hr_travel_start(int(floor + 1), kind="stairs", spawn_at="stairs_down")
+                return
+            if floor <= 1:
+                self._set_hint("已经是一楼", seconds=1.0)
+                return
+            self._hr_travel_start(int(floor - 1), kind="stairs", spawn_at="stairs_up")
             return
         if ch == "S" and mode == "home":
             w = int(self._HR_INT_W)
@@ -12635,8 +12797,10 @@ class HardcoreSurvivalState(State):
             self._set_hint("这不是你的家", seconds=1.2)
             return
         if ch == "A":
-            if int(self.inventory.count("crowbar")) <= 0:
-                self._set_hint("门锁住了(需要撬棍)", seconds=1.2)
+            has_key = int(self.inventory.count("key_house")) > 0
+            has_crowbar = int(self.inventory.count("crowbar")) > 0
+            if not (has_key or has_crowbar):
+                self._set_hint("门锁住了(需要钥匙/撬棍)", seconds=1.2)
                 return
 
             doors = list(getattr(self, "_HR_INT_APT_DOORS", []))
@@ -14481,11 +14645,14 @@ class HardcoreSurvivalState(State):
     def _draw_hr_interior_scene(self, surface: pygame.Surface) -> None:  
         surface.fill((10, 10, 14))
         tile = int(self._HR_INT_TILE_SIZE)
-        map_w = int(self._HR_INT_W) * tile
-        map_h = int(self._HR_INT_H) * tile
-        map_x = (INTERNAL_W - map_w) // 2
-        map_y = 38
-        panel = pygame.Rect(map_x - 10, map_y - 10, map_w + 20, map_h + 20)
+        full_map_w = int(self._HR_INT_W) * tile
+        full_map_h = int(self._HR_INT_H) * tile
+        map_y0 = 38
+        map_w = int(min(int(full_map_w), max(1, int(INTERNAL_W) - 20)))
+        map_h = int(min(int(full_map_h), max(1, int(INTERNAL_H) - int(map_y0) - 10)))
+        map_x0 = (INTERNAL_W - map_w) // 2
+        map_y0 = int(map_y0)
+        panel = pygame.Rect(int(map_x0) - 10, int(map_y0) - 10, int(map_w) + 20, int(map_h) + 20)
         pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=12)
         pygame.draw.rect(surface, (70, 70, 86), panel, 2, border_radius=12)
 
@@ -14539,15 +14706,42 @@ class HardcoreSurvivalState(State):
                 anchor="topright",
             )
 
-        map_rect = pygame.Rect(map_x, map_y, map_w, map_h)
+        map_rect = pygame.Rect(int(map_x0), int(map_y0), int(map_w), int(map_h))
         floor_kind = "home" if mode == "home" else "stone"
-        surface.blit(self._interior_floor_surface(map_w, map_h, kind=floor_kind), map_rect.topleft)
+        # Camera within the interior so layouts can be larger than the viewport.
+        pose = str(getattr(self, "player_pose", "")).strip()
+        pose_space = str(getattr(self, "player_pose_space", "")).strip()
+        pose_anchor = getattr(self, "player_pose_anchor", None)
+        use_pose = bool(pose and pose_space == "hr" and pose_anchor is not None)
+        if use_pose:
+            focus = pygame.Vector2(float(pose_anchor[0]), float(pose_anchor[1]))
+        else:
+            focus = pygame.Vector2(self.hr_int_pos)
+        if int(full_map_w) <= int(map_w):
+            cam_x = 0
+        else:
+            cam_x = int(clamp(float(focus.x) - float(map_w) / 2.0, 0.0, float(full_map_w - map_w)))
+        if int(full_map_h) <= int(map_h):
+            cam_y = 0
+        else:
+            cam_y = int(clamp(float(focus.y) - float(map_h) / 2.0, 0.0, float(full_map_h - map_h)))
+        self._hr_int_draw_rect = pygame.Rect(map_rect)
+        self._hr_int_draw_cam = (int(cam_x), int(cam_y))
+        self._hr_int_draw_origin = (int(map_x0), int(map_y0))
+
+        # Shift the draw origin by the camera, but keep map_rect in screen space.
+        map_x = int(map_x0) - int(cam_x)
+        map_y = int(map_y0) - int(cam_y)
+
+        prev_clip = surface.get_clip()
+        surface.set_clip(map_rect)
+        surface.blit(self._interior_floor_surface(int(full_map_w), int(full_map_h), kind=floor_kind), (int(map_x), int(map_y)))
 
         # "Back wall" band (front-view cue) for the player's home, per reference.
         if mode == "home":
             wall_h = int(tile * 2)
-            wall_h = int(clamp(wall_h, 18, max(18, map_h - 40)))
-            wall_rect = pygame.Rect(int(map_x), int(map_y), int(map_w), int(wall_h))
+            wall_h = int(clamp(wall_h, 18, max(18, int(map_h) - 40)))
+            wall_rect = pygame.Rect(int(map_rect.x), int(map_rect.y), int(map_rect.w), int(wall_h))
             wall_surf = pygame.Surface((wall_rect.w, wall_rect.h))
             wall_base = (188, 186, 182)
             wall_surf.fill(wall_base)
@@ -14678,6 +14872,66 @@ class HardcoreSurvivalState(State):
                     surface.fill(grout, pygame.Rect(r.x, r.y, 1, r.h))
 
                 # Objects over the floor texture.
+                if ch in ("^", "v"):
+                    step_r = r.inflate(-6, -6)
+                    sh = pygame.Surface((step_r.w, step_r.h), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=5)
+                    surface.blit(sh, (step_r.x + 2, step_r.y + 3))
+                    pygame.draw.rect(surface, steel2, step_r, border_radius=5)
+                    pygame.draw.rect(surface, outline, step_r, 1, border_radius=5)
+                    for i in range(3):
+                        yy = int(step_r.y + 4 + i * 5)
+                        pygame.draw.line(surface, steel, (step_r.x + 3, yy), (step_r.right - 4, yy), 1)
+                    if ch == "^":
+                        arrow = [(step_r.centerx, step_r.y + 3), (step_r.centerx - 4, step_r.y + 10), (step_r.centerx + 4, step_r.y + 10)]
+                    else:
+                        arrow = [
+                            (step_r.centerx, step_r.bottom - 3),
+                            (step_r.centerx - 4, step_r.bottom - 10),
+                            (step_r.centerx + 4, step_r.bottom - 10),
+                        ]
+                    pygame.draw.polygon(surface, (255, 220, 140), arrow)
+                    pygame.draw.polygon(surface, outline, arrow, 1)
+                    continue
+
+                if ch == "L":
+                    # Standing lamp + warm glow.
+                    glow = pygame.Surface((int(tile * 3), int(tile * 3)), pygame.SRCALPHA)
+                    gcx = glow.get_width() // 2
+                    gcy = glow.get_height() // 2
+                    for rad, a in ((int(tile * 1.35), 12), (int(tile * 1.05), 18), (int(tile * 0.78), 28)):
+                        pygame.draw.circle(glow, (255, 240, 200, int(a)), (int(gcx), int(gcy)), int(rad))
+                    surface.blit(glow, (int(r.centerx - gcx), int(r.centery - gcy)))
+
+                    base_y = int(r.bottom - 5)
+                    pole_top = int(r.y + 6)
+                    pygame.draw.line(surface, (90, 84, 76), (int(r.centerx), base_y), (int(r.centerx), pole_top), 2)
+                    pygame.draw.circle(surface, outline, (int(r.centerx), base_y), 3, 1)
+                    pygame.draw.ellipse(surface, (60, 54, 46), pygame.Rect(int(r.centerx - 5), int(base_y), 10, 4))
+
+                    shade = pygame.Rect(int(r.centerx - 6), int(pole_top - 1), 12, 7)
+                    pygame.draw.polygon(
+                        surface,
+                        (238, 230, 200),
+                        [
+                            (shade.left, shade.bottom),
+                            (shade.centerx, shade.top),
+                            (shade.right, shade.bottom),
+                        ],
+                    )
+                    pygame.draw.polygon(
+                        surface,
+                        outline,
+                        [
+                            (shade.left, shade.bottom),
+                            (shade.centerx, shade.top),
+                            (shade.right, shade.bottom),
+                        ],
+                        1,
+                    )
+                    pygame.draw.circle(surface, (255, 230, 140), (int(r.centerx), int(shade.bottom - 1)), 2)
+                    continue
+
                 if ch == "E":
                     if (x, y) in elev_done:
                         continue
@@ -15693,6 +15947,7 @@ class HardcoreSurvivalState(State):
                             else:
                                 hint = "R 进入摆放模式 | 左键拖拽"
                             self._hover_tooltip = ([str(name), str(desc), str(hint)], (mx, my))
+        surface.set_clip(prev_clip)
         return
 
         floor_a = (64, 62, 58)
@@ -16127,6 +16382,49 @@ class HardcoreSurvivalState(State):
             pygame.Color(160, 160, 175),
             anchor="center",
         )
+
+    def _draw_hr_travel_ui(self, surface: pygame.Surface) -> None:
+        if not bool(getattr(self, "hr_travel_active", False)):
+            return
+        overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 210))
+        surface.blit(overlay, (0, 0))
+
+        kind = str(getattr(self, "hr_travel_kind", "elevator"))
+        title = "电梯运行中" if kind == "elevator" else "楼梯中"
+        draw_text(surface, self.app.font_m, title, (INTERNAL_W // 2, INTERNAL_H // 2 - 58), pygame.Color(240, 240, 240), anchor="center")
+
+        f0 = int(getattr(self, "hr_travel_from", int(getattr(self, "hr_floor", 1))))
+        f1 = int(getattr(self, "hr_travel_to", f0))
+        cur = int(getattr(self, "hr_travel_display", f0))
+        direction = 1 if int(f1) >= int(f0) else -1
+        floors = list(range(int(f0), int(f1) + int(direction), int(direction)))
+        if not floors:
+            floors = [int(cur)]
+
+        big_font = getattr(self.app, "font_l", self.app.font_m)
+        draw_text(surface, big_font, str(int(cur)), (INTERNAL_W // 2, INTERNAL_H // 2 - 18), pygame.Color(255, 220, 140), anchor="center")
+
+        font = self.app.font_s
+        labels = [str(int(f)) for f in floors]
+        widths = [int(font.size(lbl)[0]) for lbl in labels]
+        gap = 10
+        total_w = int(sum(widths) + max(0, len(widths) - 1) * gap)
+        x = int(INTERNAL_W // 2 - total_w // 2)
+        y = int(INTERNAL_H // 2 + 18)
+        for f, lbl, w in zip(floors, labels, widths):
+            passed = (direction > 0 and int(f) < int(cur)) or (direction < 0 and int(f) > int(cur))
+            if int(f) == int(cur):
+                col = pygame.Color(255, 220, 140)
+            elif passed:
+                col = pygame.Color(220, 220, 232)
+            else:
+                col = pygame.Color(140, 140, 155)
+            draw_text(surface, font, lbl, (int(x + w // 2), int(y)), col, anchor="center")
+            x += int(w + gap)
+
+        hint = "等待..." if kind == "elevator" else "一层一层走..."
+        draw_text(surface, self.app.font_s, hint, (INTERNAL_W // 2, INTERNAL_H // 2 + 44), pygame.Color(160, 160, 175), anchor="center")
 
     def _rv_ui_open(self) -> None:
         if not self._can_access_rv():
@@ -16586,6 +16884,75 @@ class HardcoreSurvivalState(State):
                     )
                     if rect.colliderect(prect):
                         hits.append(prect)
+
+                # Parked vehicles (cars + bikes) are solid in the world.
+                for car in getattr(chunk, "cars", []):
+                    mid = str(getattr(car, "model_id", "rv"))
+                    model = self._CAR_MODELS.get(mid) or self._CAR_MODELS.get("rv")
+                    if model is None:
+                        continue
+                    cw, ch = int(model.collider[0]), int(model.collider[1])
+                    if cw <= 0 or ch <= 0:
+                        continue
+                    cpos = pygame.Vector2(getattr(car, "pos", pygame.Vector2(0, 0)))
+                    crect = pygame.Rect(
+                        int(round(float(cpos.x) - float(cw) / 2.0)),
+                        int(round(float(cpos.y) - float(ch) / 2.0)),
+                        int(cw),
+                        int(ch),
+                    )
+                    if rect.colliderect(crect):
+                        hits.append(crect)
+
+                for b in getattr(chunk, "bikes", []):
+                    mid = str(getattr(b, "model_id", "bike"))
+                    bw, bh = self._two_wheel_collider_px(mid)
+                    d = str(getattr(b, "dir", "right"))
+                    if d in ("up", "down"):
+                        bw, bh = int(bh), int(bw)
+                    bw = max(2, int(bw))
+                    bh = max(2, int(bh))
+                    bpos = pygame.Vector2(getattr(b, "pos", pygame.Vector2(0, 0)))
+                    brect = pygame.Rect(
+                        int(round(float(bpos.x) - float(bw) / 2.0)),
+                        int(round(float(bpos.y) - float(bh) / 2.0)),
+                        int(bw),
+                        int(bh),
+                    )
+                    if rect.colliderect(brect):
+                        hits.append(brect)
+
+        # Player-owned vehicles are also solid when on foot.
+        if self.mount != "rv":
+            try:
+                vw, vh = int(getattr(self.rv, "w", 0)), int(getattr(self.rv, "h", 0))
+                if vw > 0 and vh > 0:
+                    vpos = pygame.Vector2(getattr(self.rv, "pos", pygame.Vector2(0, 0)))
+                    vrect = pygame.Rect(
+                        int(round(float(vpos.x) - float(vw) / 2.0)),
+                        int(round(float(vpos.y) - float(vh) / 2.0)),
+                        int(vw),
+                        int(vh),
+                    )
+                    if rect.colliderect(vrect):
+                        hits.append(vrect)
+            except Exception:
+                pass
+        if self.mount != "bike":
+            try:
+                bw, bh = int(getattr(self.bike, "w", 0)), int(getattr(self.bike, "h", 0))
+                if bw > 0 and bh > 0:
+                    bpos = pygame.Vector2(getattr(self.bike, "pos", pygame.Vector2(0, 0)))
+                    brect = pygame.Rect(
+                        int(round(float(bpos.x) - float(bw) / 2.0)),
+                        int(round(float(bpos.y) - float(bh) / 2.0)),
+                        int(bw),
+                        int(bh),
+                    )
+                    if rect.colliderect(brect):
+                        hits.append(brect)
+            except Exception:
+                pass
         return hits
 
     def _collide_rect_world_vehicle(self, rect: pygame.Rect) -> list[pygame.Rect]:
@@ -16637,6 +17004,75 @@ class HardcoreSurvivalState(State):
                     )
                     if rect.colliderect(prect):
                         hits.append(prect)
+
+                # Parked vehicles block drivable vehicles too.
+                for car in getattr(chunk, "cars", []):
+                    mid = str(getattr(car, "model_id", "rv"))
+                    model = self._CAR_MODELS.get(mid) or self._CAR_MODELS.get("rv")
+                    if model is None:
+                        continue
+                    cw, ch = int(model.collider[0]), int(model.collider[1])
+                    if cw <= 0 or ch <= 0:
+                        continue
+                    cpos = pygame.Vector2(getattr(car, "pos", pygame.Vector2(0, 0)))
+                    crect = pygame.Rect(
+                        int(round(float(cpos.x) - float(cw) / 2.0)),
+                        int(round(float(cpos.y) - float(ch) / 2.0)),
+                        int(cw),
+                        int(ch),
+                    )
+                    if rect.colliderect(crect):
+                        hits.append(crect)
+
+                for b in getattr(chunk, "bikes", []):
+                    mid = str(getattr(b, "model_id", "bike"))
+                    bw, bh = self._two_wheel_collider_px(mid)
+                    d = str(getattr(b, "dir", "right"))
+                    if d in ("up", "down"):
+                        bw, bh = int(bh), int(bw)
+                    bw = max(2, int(bw))
+                    bh = max(2, int(bh))
+                    bpos = pygame.Vector2(getattr(b, "pos", pygame.Vector2(0, 0)))
+                    brect = pygame.Rect(
+                        int(round(float(bpos.x) - float(bw) / 2.0)),
+                        int(round(float(bpos.y) - float(bh) / 2.0)),
+                        int(bw),
+                        int(bh),
+                    )
+                    if rect.colliderect(brect):
+                        hits.append(brect)
+
+        # Player-owned vehicles block other vehicles (but never collide with themselves).
+        if self.mount != "rv":
+            try:
+                vw, vh = int(getattr(self.rv, "w", 0)), int(getattr(self.rv, "h", 0))
+                if vw > 0 and vh > 0:
+                    vpos = pygame.Vector2(getattr(self.rv, "pos", pygame.Vector2(0, 0)))
+                    vrect = pygame.Rect(
+                        int(round(float(vpos.x) - float(vw) / 2.0)),
+                        int(round(float(vpos.y) - float(vh) / 2.0)),
+                        int(vw),
+                        int(vh),
+                    )
+                    if rect.colliderect(vrect):
+                        hits.append(vrect)
+            except Exception:
+                pass
+        if self.mount != "bike":
+            try:
+                bw, bh = int(getattr(self.bike, "w", 0)), int(getattr(self.bike, "h", 0))
+                if bw > 0 and bh > 0:
+                    bpos = pygame.Vector2(getattr(self.bike, "pos", pygame.Vector2(0, 0)))
+                    brect = pygame.Rect(
+                        int(round(float(bpos.x) - float(bw) / 2.0)),
+                        int(round(float(bpos.y) - float(bh) / 2.0)),
+                        int(bw),
+                        int(bh),
+                    )
+                    if rect.colliderect(brect):
+                        hits.append(brect)
+            except Exception:
+                pass
         return hits
 
     def _move_with_collisions(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float) -> pygame.Vector2:
@@ -17089,6 +17525,10 @@ class HardcoreSurvivalState(State):
                 self.hint_text = ""
 
         self._dialog_update(float(dt))
+        if float(getattr(self, "speech_left", 0.0)) > 0.0:
+            self.speech_left = max(0.0, float(getattr(self, "speech_left", 0.0)) - dt)
+            if float(self.speech_left) <= 0.0:
+                self.speech_text = ""
 
         if getattr(self, "rv_ui_status_left", 0.0) > 0.0:
             self.rv_ui_status_left = max(0.0, float(self.rv_ui_status_left) - dt)
@@ -17269,6 +17709,16 @@ class HardcoreSurvivalState(State):
 
         if getattr(self, "hr_interior", False):
             base_speed = 60.0
+            if bool(getattr(self, "hr_travel_active", False)):
+                self.player_sprinting = False
+                self.hr_int_vel = pygame.Vector2(0, 0)
+                self.hr_int_walk_phase *= 0.90
+                self._hr_travel_update(dt)
+                self.player.vel.update(0, 0)
+                self.rv.vel.update(0, 0)
+                self.bike.vel.update(0, 0)
+                self._update_gun_timers(dt, allow_fire=False)
+                return
 
             # "Walk into the lobby then to the elevator" feel on entry.
             if bool(getattr(self, "hr_auto_walk_to_elevator", False)):  
@@ -17659,6 +18109,84 @@ class HardcoreSurvivalState(State):
         speed = float(getattr(self, "dialog_speed", 42.0))
         self.dialog_reveal = float(min(float(len(full)), float(getattr(self, "dialog_reveal", 0.0)) + speed * float(dt)))
 
+    def _speech_say(self, text: str, *, seconds: float = 1.2) -> None:
+        self.speech_text = str(text)
+        self.speech_left = float(max(0.0, float(seconds)))
+
+    def _draw_speech_bubble(self, surface: pygame.Surface) -> None:
+        if float(getattr(self, "speech_left", 0.0)) <= 0.0:
+            return
+        text = str(getattr(self, "speech_text", "")).strip()
+        if not text:
+            return
+        try:
+            font = self.app.font_s
+            max_w = int(min(180, INTERNAL_W - 16))
+
+            lines: list[str] = []
+            cur = ""
+            for ch in text:
+                test = cur + ch
+                if cur and font.size(test)[0] > max_w:
+                    lines.append(cur)
+                    cur = ch
+                else:
+                    cur = test
+            if cur:
+                lines.append(cur)
+            drawn = lines[:2] if lines else [""]
+
+            pad_x = 10
+            pad_y = 8
+            line_gap = 2
+            tail_h = 8
+            tail_w = 12
+            bubble_bg = (0, 0, 0, 180)
+            bubble_border = (220, 220, 235, 140)
+            bubble_hi = (240, 220, 140, 20)
+
+            content_w = max(1, max(int(font.size(str(ln))[0]) for ln in drawn))
+            bubble_w = int(clamp(int(content_w + pad_x * 2), 64, INTERNAL_W - 12))
+            bubble_h = int(clamp(int(len(drawn) * (font.get_height() + line_gap) + pad_y * 2), 30, 90))
+
+            anchor = getattr(self, "_last_player_screen_rect", None)
+            if not isinstance(anchor, pygame.Rect):
+                anchor = pygame.Rect(INTERNAL_W // 2 - 6, INTERNAL_H // 2 - 10, 12, 20)
+            mouth_x = int(anchor.centerx)
+            mouth_y = int(anchor.top + max(2, int(anchor.h) // 4))
+
+            # Tail tip position (screen).
+            tip_x = int(mouth_x)
+            tip_y = int(mouth_y - 2)
+
+            bubble_surf = pygame.Surface((bubble_w, bubble_h + tail_h), pygame.SRCALPHA)
+            panel = pygame.Surface((bubble_w, bubble_h), pygame.SRCALPHA)
+            panel.fill(bubble_bg)
+            pygame.draw.rect(panel, bubble_hi, panel.get_rect(), border_radius=10)
+            pygame.draw.rect(panel, bubble_border, panel.get_rect(), 2, border_radius=10)
+            bubble_surf.blit(panel, (0, 0))
+
+            out = bubble_surf.get_rect(centerx=tip_x, bottom=tip_y + 1)
+            out.left = int(clamp(int(out.left), 6, INTERNAL_W - out.w - 6))
+            out.top = int(clamp(int(out.top), 6, INTERNAL_H - out.h - 6))
+
+            tip_x_local = int(clamp(int(tip_x - out.left), 10, bubble_w - 11))
+            base_y = int(bubble_h - 1)
+            tip_y_local = int(bubble_h + tail_h - 1)
+            tail = [(tip_x_local - tail_w // 2, base_y), (tip_x_local + tail_w // 2, base_y), (tip_x_local, tip_y_local)]
+            pygame.draw.polygon(bubble_surf, bubble_bg, tail)
+            pygame.draw.polygon(bubble_surf, bubble_border, tail, 2)
+
+            tx = pad_x
+            ty = pad_y
+            for ln in drawn:
+                bubble_surf.blit(font.render(str(ln), False, pygame.Color(230, 230, 240)), (tx, ty))
+                ty += int(font.get_height() + line_gap)
+
+            surface.blit(bubble_surf, out.topleft)
+        except Exception:
+            return
+
     def _maybe_show_home_highrise_dialog(self) -> None:
         # Show a small home guidance dialog when the player walks up to their
         # home high-rise entrance on the world map.
@@ -17684,6 +18212,9 @@ class HardcoreSurvivalState(State):
         far = float(self.TILE_SIZE) * 4.8
         armed = bool(getattr(self, "home_highrise_dialog_armed", True))
         if armed and d2 <= near * near:
+            self._speech_say("我的家", seconds=1.3)
+            self.home_highrise_dialog_armed = False
+            return
             home_floor = int(getattr(self, "home_highrise_floor", 0))
             home_room = str(getattr(self, "home_highrise_room", "")).strip()
             if home_floor > 0 and home_room:
@@ -18523,8 +19054,10 @@ class HardcoreSurvivalState(State):
             t = int(self.world.get_tile(int(cx), int(cy)))
             if t not in (int(self.T_DOOR_LOCKED), int(self.T_DOOR_HOME_LOCKED)):
                 continue
-            if int(self.inventory.count("key_house")) <= 0:
-                self._set_hint("��Ҫ��Կ", seconds=1.1)
+            has_key = int(self.inventory.count("key_house")) > 0
+            has_crowbar = int(self.inventory.count("crowbar")) > 0
+            if not (has_key or has_crowbar):
+                self._set_hint("需要钥匙/撬棍", seconds=1.1)
                 return True
 
             want = int(t)
@@ -18548,7 +19081,7 @@ class HardcoreSurvivalState(State):
             new_tid = int(self.T_DOOR) if int(want) == int(self.T_DOOR_LOCKED) else int(self.T_DOOR_HOME)
             for sx, sy in cells:
                 self._world_set_tile(int(sx), int(sy), int(new_tid))
-            self._set_hint("�ѽ���", seconds=0.9)
+            self._set_hint("已解锁" if has_key else "撬开了", seconds=0.9)
             return True
         return False
 
@@ -23490,6 +24023,7 @@ class HardcoreSurvivalState(State):
                 self._draw_inventory_ui(surface)
             if getattr(self, "_gallery_open", False):
                 self._draw_sprite_gallery_ui(surface)
+            self._draw_speech_bubble(surface)
             self._draw_dialog(surface)
             return
         if getattr(self, "sch_interior", False):
@@ -23507,6 +24041,7 @@ class HardcoreSurvivalState(State):
                 self._draw_inventory_ui(surface)
             if getattr(self, "_gallery_open", False):
                 self._draw_sprite_gallery_ui(surface)
+            self._draw_speech_bubble(surface)
             self._draw_dialog(surface)
             return
         if getattr(self, "hr_interior", False):
@@ -23521,12 +24056,16 @@ class HardcoreSurvivalState(State):
                 self._draw_home_storage_ui(surface)
                 return
             self._draw_hover_tooltip(surface)
+            if bool(getattr(self, "hr_travel_active", False)):
+                self._draw_hr_travel_ui(surface)
+                return
             if getattr(self, "hr_elevator_ui_open", False):
                 self._draw_hr_elevator_ui(surface)
             elif self.inv_open:
                 self._draw_inventory_ui(surface)
             if getattr(self, "_gallery_open", False):
                 self._draw_sprite_gallery_ui(surface)
+            self._draw_speech_bubble(surface)
             self._draw_dialog(surface)
             return
         if getattr(self, "rv_interior", False):
@@ -23545,6 +24084,7 @@ class HardcoreSurvivalState(State):
                 self._draw_inventory_ui(surface)
             if getattr(self, "_gallery_open", False):
                 self._draw_sprite_gallery_ui(surface)
+            self._draw_speech_bubble(surface)
             self._draw_dialog(surface)
             return
         cam_x = int(getattr(self, "cam_x", 0))
@@ -23811,6 +24351,7 @@ class HardcoreSurvivalState(State):
             return
 
         self._draw_hover_tooltip(surface)
+        self._draw_speech_bubble(surface)
         self._draw_dialog(surface)
 
         if self._debug:
