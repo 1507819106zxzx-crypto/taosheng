@@ -323,7 +323,7 @@ class GameConfig:
     fullscreen: bool = True
     show_grid: bool = True
     # Lighting (tile radius + intensity/opacity scale).
-    lamp_world_radius_tiles: int = 5
+    lamp_world_radius_tiles: int = 3
     lamp_world_intensity: float = 1.0
     lamp_world_halo: float = 0.35
     lamp_hr_radius_tiles: int = 5
@@ -4789,7 +4789,7 @@ class HardcoreSurvivalState(State):
         "WKKKKK................W,,,O,,,W",
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
     ]
-    _HR_INT_HOME_LAYOUT_VERSION = 4
+    _HR_INT_HOME_LAYOUT_VERSION = 5
     _HR_INT_W = 31
     _HR_INT_H = 15
     _HR_INT_TILE_SIZE = 20
@@ -4839,11 +4839,11 @@ class HardcoreSurvivalState(State):
     # Multi-floor house (2–3 floors) interior.
     _HOUSE_INT_F1_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWW",
-        "WVV.................VVW",
-        "W..BBBBB....SSSS......W",
-        "W..BBBBB....SSSS..TT..W",
-        "W.................TT..W",
-        "W....^^........vv.....D",
+        "WVV...........W,,,,,VVW",
+        "W..BBBBB..SSSSW,,,O,,,W",
+        "W..BBBBB..SSSSd,,,,,,,W",
+        "W..............,,,R,,,W",
+        "W....^^........vvWWWWWD",
         "W....^^........vv.....W",
         "W.....................W",
         "W..KKKKK..TTTT..FFFF..W",
@@ -4852,15 +4852,15 @@ class HardcoreSurvivalState(State):
     ]
     _HOUSE_INT_FLOOR_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWW",
-        "WVV.................VVW",
-        "W......SSSS....BBBBB..W",
-        "W..TT..SSSS....BBBBB..W",
-        "W..TT.................W",
+        "WVV...........W,,,,,VVW",
+        "W......SSSS...W,,,O,,,W",
+        "W..TT..SSSS...d,,,,,,,W",
+        "W..TT..........,,,R,,,W",
+        "W....^^........vvWWWWWW",
         "W....^^........vv.....W",
-        "W....^^........vv.....W",
-        "W.....................W",
-        "W..KKKKK..TTTT..SSSS..W",
-        "W..KKKKK..TTTT..SSSS..W",
+        "W.........BBBBB.......W",
+        "W..KKKKK..BBBBB.SSSS..W",
+        "W..KKKKK........SSSS..W",
         "WWWWWWWWWWWWWWWWWWWWWWW",
     ]
     _HOUSE_INT_W = 23
@@ -11422,7 +11422,7 @@ class HardcoreSurvivalState(State):
 
     def _house_int_solid_tile(self, ch: str) -> bool:
         ch = str(ch)[:1]
-        return ch not in (".", "D", "^", "v")
+        return ch not in (".", "D", "^", "v", ",", "d")
 
     def _house_int_move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
         tile = int(self._HOUSE_INT_TILE_SIZE)
@@ -14723,8 +14723,9 @@ class HardcoreSurvivalState(State):
         map_x = (INTERNAL_W - map_w) // 2
         map_y = 38
         panel = pygame.Rect(map_x - 10, map_y - 10, map_w + 20, map_h + 20)
-        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=12)
-        pygame.draw.rect(surface, (70, 70, 86), panel, 2, border_radius=12)
+        # Panel (pixel style)
+        pygame.draw.rect(surface, (70, 70, 86), panel.inflate(4, 4))
+        pygame.draw.rect(surface, (18, 18, 22), panel)
 
         floor = int(getattr(self, "house_floor", 1))
         max_f = int(max(1, int(getattr(self, "house_max_floors", int(self._HOUSE_INT_MAX_FLOORS_DEFAULT)))))
@@ -14800,14 +14801,16 @@ class HardcoreSurvivalState(State):
                         surface.blit(wv, glass.topleft)
                         if wkind in ("rain", "storm", "snow"):
                             self._draw_window_precip(surface, glass, kind=wkind, intensity=inten)
-                        pygame.draw.rect(surface, frame, glass.inflate(4, 4), 1, border_radius=2)
+                        # Window frame (pixel style)
+                        pygame.draw.rect(surface, frame, glass.inflate(4, 4), 1)
                         pygame.draw.rect(surface, outline, glass, 1)
                         pygame.draw.line(surface, (40, 40, 50), (glass.centerx, glass.top + 1), (glass.centerx, glass.bottom - 2), 1)
                     elif ch == "D":
+                        # Door (pixel style)
                         dr = pygame.Rect(r.x + 5, r.y + 4, r.w - 10, r.h - 8)
-                        pygame.draw.rect(surface, (240, 220, 140), dr, border_radius=2)
-                        pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
-                        pygame.draw.circle(surface, outline, (dr.right - 5, dr.centery), 2)
+                        pygame.draw.rect(surface, outline, dr.inflate(2, 2))
+                        pygame.draw.rect(surface, (240, 220, 140), dr)
+                        pygame.draw.rect(surface, outline, pygame.Rect(dr.right - 6, dr.centery - 2, 4, 4))
                     continue
 
                 if ch in ("^", "v"):
@@ -14819,8 +14822,9 @@ class HardcoreSurvivalState(State):
                             done.add((int(x) + int(dx), int(y) + int(dy)))
                     br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
                     inner = br.inflate(-4, -4)
-                    pygame.draw.rect(surface, steel, inner, border_radius=4)
-                    pygame.draw.rect(surface, outline, inner, 1, border_radius=4)
+                    # Stairs (pixel style)
+                    pygame.draw.rect(surface, outline, inner.inflate(2, 2))
+                    pygame.draw.rect(surface, steel, inner)
                     pygame.draw.rect(surface, steel2, pygame.Rect(inner.x + 3, inner.y + 3, inner.w - 6, 3))
                     cx = int(inner.centerx)
                     cy = int(inner.centery)
@@ -14841,44 +14845,105 @@ class HardcoreSurvivalState(State):
                     er = br.inflate(-4, -4)
 
                     if ch == "B":
-                        pygame.draw.rect(surface, wood2, er, border_radius=3)
-                        pygame.draw.rect(surface, outline, er, 1, border_radius=3)
+                        # Bed frame (pixel style)
+                        pygame.draw.rect(surface, outline, er.inflate(2, 2))
+                        pygame.draw.rect(surface, wood2, er)
                         matt = er.inflate(-4, -4)
-                        pygame.draw.rect(surface, bed_matt, matt, border_radius=2)
-                        pygame.draw.rect(surface, outline, matt, 1, border_radius=2)
+                        pygame.draw.rect(surface, outline, matt.inflate(2, 2))
+                        pygame.draw.rect(surface, bed_matt, matt)
                         blank = pygame.Rect(matt.x, matt.y + matt.h // 2, matt.w, matt.h // 2)
-                        pygame.draw.rect(surface, bed_blank, blank, border_radius=2)
-                        pygame.draw.rect(surface, outline, blank, 1, border_radius=2)
+                        pygame.draw.rect(surface, outline, blank.inflate(2, 2))
+                        pygame.draw.rect(surface, bed_blank, blank)
                         pil = pygame.Rect(matt.x + 2, matt.y + 2, 8, 6)
-                        pygame.draw.rect(surface, pillow, pil, border_radius=2)
-                        pygame.draw.rect(surface, outline, pil, 1, border_radius=2)
+                        pygame.draw.rect(surface, outline, pil.inflate(2, 2))
+                        pygame.draw.rect(surface, pillow, pil)
                     elif ch == "S":
-                        pygame.draw.rect(surface, (72, 80, 108), er, border_radius=3)
-                        pygame.draw.rect(surface, outline, er, 1, border_radius=3)
+                        # Sofa (pixel style)
+                        pygame.draw.rect(surface, outline, er.inflate(2, 2))
+                        pygame.draw.rect(surface, (72, 80, 108), er)
                         for yy in range(er.y + 6, er.bottom - 6, 6):
                             pygame.draw.line(surface, (40, 40, 50), (er.x + 2, yy), (er.right - 3, yy), 1)
-                        pygame.draw.rect(surface, (210, 180, 110), pygame.Rect(er.x + 3, er.y + 3, 4, 3), border_radius=1)
+                        handle = pygame.Rect(er.x + 3, er.y + 3, 4, 3)
+                        pygame.draw.rect(surface, outline, handle.inflate(2, 2))
+                        pygame.draw.rect(surface, (210, 180, 110), handle)
                     elif ch == "F":
-                        pygame.draw.rect(surface, (236, 236, 242), er, border_radius=3)
-                        pygame.draw.rect(surface, outline, er, 1, border_radius=3)
-                        pygame.draw.rect(surface, (200, 200, 210), pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4))
-                        pygame.draw.rect(surface, outline, pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4), 1)
+                        # Fridge (pixel style)
+                        pygame.draw.rect(surface, outline, er.inflate(2, 2))
+                        pygame.draw.rect(surface, (236, 236, 242), er)
+                        top_rect = pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4)
+                        pygame.draw.rect(surface, (200, 200, 210), top_rect)
+                        pygame.draw.rect(surface, outline, top_rect, 1)
                         pygame.draw.line(surface, outline, (er.x + 6, er.y + 6), (er.x + 6, er.bottom - 6), 1)
                     elif ch == "K":
-                        pygame.draw.rect(surface, (62, 66, 74), er, border_radius=3)
-                        pygame.draw.rect(surface, outline, er, 1, border_radius=3)
-                        pygame.draw.rect(surface, (96, 102, 112), pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4))
-                        pygame.draw.rect(surface, outline, pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4), 1)
-                        pygame.draw.rect(surface, (18, 18, 22), pygame.Rect(er.x + 6, er.y + 6, 8, 6), border_radius=2)
-                    else:  # T
-                        pygame.draw.rect(surface, wood, er, border_radius=3)
-                        pygame.draw.rect(surface, outline, er, 1, border_radius=3)
+                        # Kitchen (pixel style)
+                        pygame.draw.rect(surface, outline, er.inflate(2, 2))
+                        pygame.draw.rect(surface, (62, 66, 74), er)
+                        top_rect = pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4)
+                        pygame.draw.rect(surface, (96, 102, 112), top_rect)
+                        pygame.draw.rect(surface, outline, top_rect, 1)
+                        stove = pygame.Rect(er.x + 6, er.y + 6, 8, 6)
+                        pygame.draw.rect(surface, outline, stove.inflate(2, 2))
+                        pygame.draw.rect(surface, (18, 18, 22), stove)
+                    else:  # T - Table
+                        pygame.draw.rect(surface, outline, er.inflate(2, 2))
+                        pygame.draw.rect(surface, wood, er)
                         top = pygame.Rect(er.x + 2, er.y + 2, er.w - 4, 4)
                         pygame.draw.rect(surface, wood2, top)
                         pygame.draw.rect(surface, outline, top, 1)
                         # Legs
                         pygame.draw.rect(surface, wood2, pygame.Rect(er.x + 3, er.bottom - 5, 2, 4))
                         pygame.draw.rect(surface, wood2, pygame.Rect(er.right - 5, er.bottom - 5, 2, 4))
+                    continue
+
+                # Bathroom door (small door to bathroom)
+                if ch == "d":
+                    # Draw wall background first
+                    pygame.draw.rect(surface, wall, r)
+                    pygame.draw.rect(surface, wall_hi, pygame.Rect(r.x, r.y, r.w, 4))
+                    pygame.draw.rect(surface, wall_edge, r, 1)
+                    # Door (pixel style)
+                    dr = pygame.Rect(r.x + 4, r.y + 3, r.w - 8, r.h - 5)
+                    pygame.draw.rect(surface, outline, dr.inflate(2, 2))
+                    pygame.draw.rect(surface, (180, 160, 130), dr)
+                    # Door handle
+                    pygame.draw.rect(surface, outline, pygame.Rect(dr.right - 5, dr.centery - 1, 3, 3))
+                    continue
+
+                # Bathroom floor tile
+                if ch == ",":
+                    bath_floor = pygame.Rect(r.x + 1, r.y + 1, r.w - 2, r.h - 2)
+                    pygame.draw.rect(surface, (180, 190, 200), bath_floor)
+                    pygame.draw.rect(surface, outline, bath_floor, 1)
+                    continue
+
+                # Toilet
+                if ch == "O":
+                    # Bowl base (pixel style)
+                    bowl = pygame.Rect(r.x + 4, r.y + 6, r.w - 8, r.h - 8)
+                    pygame.draw.rect(surface, outline, bowl.inflate(2, 2))
+                    pygame.draw.rect(surface, (240, 240, 245), bowl)
+                    # Tank
+                    tank = pygame.Rect(r.x + 6, r.y + 2, r.w - 12, 6)
+                    pygame.draw.rect(surface, outline, tank.inflate(2, 2))
+                    pygame.draw.rect(surface, (230, 230, 238), tank)
+                    # Seat
+                    seat = pygame.Rect(bowl.x + 2, bowl.y + 2, bowl.w - 4, bowl.h - 4)
+                    pygame.draw.rect(surface, (200, 200, 210), seat)
+                    continue
+
+                # Shower
+                if ch == "R":
+                    # Shower base (pixel style)
+                    base = pygame.Rect(r.x + 2, r.y + 2, r.w - 4, r.h - 4)
+                    pygame.draw.rect(surface, outline, base.inflate(2, 2))
+                    pygame.draw.rect(surface, (160, 170, 185), base)
+                    # Drain
+                    drain = pygame.Rect(base.centerx - 3, base.centery - 3, 6, 6)
+                    pygame.draw.rect(surface, (80, 85, 95), drain)
+                    pygame.draw.rect(surface, outline, drain, 1)
+                    # Shower head indicator
+                    head = pygame.Rect(base.x + 2, base.y + 2, 4, 4)
+                    pygame.draw.rect(surface, steel, head)
                     continue
 
         p = pygame.Vector2(self.house_int_pos)
@@ -15503,35 +15568,37 @@ class HardcoreSurvivalState(State):
                         surface.blit(wv, glass.topleft)
                         if wkind in ("rain", "storm", "snow"):
                             self._draw_window_precip(surface, glass, kind=wkind, intensity=inten)
-                        pygame.draw.rect(surface, frame, glass.inflate(4, 4), 1, border_radius=2)
+                        # Pixel-style window frame.
+                        pygame.draw.rect(surface, frame, glass.inflate(4, 4), 1)
                         pygame.draw.rect(surface, outline, glass, 1)
                         pygame.draw.line(surface, (40, 40, 50), (glass.centerx, glass.top + 1), (glass.centerx, glass.bottom - 2), 1)
                     elif ch == "D":
+                        # Pixel-style door.
                         dr = pygame.Rect(r.x + 5, r.y + 4, r.w - 10, r.h - 8)
-                        pygame.draw.rect(surface, (240, 220, 140), dr, border_radius=2)
-                        pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                        pygame.draw.rect(surface, outline, dr.inflate(2, 2))
+                        pygame.draw.rect(surface, (240, 220, 140), dr)
                         pygame.draw.circle(surface, outline, (dr.right - 5, dr.centery), 2)
                     elif ch in ("A", "H"):
                         # Apartment doors: keep a solid wall frame, bottom aligned to the baseboard.
-                        # Doors should be taller than one tile (player sprite is 2x inside).
+                        # Doors should be taller than one tile (player sprite is 2x inside). Pixel-style.
                         door_h = int(clamp(int(tile * 1.7), int(tile + 8), int(tile * 2 - 2)))
                         dr = pygame.Rect(r.x + 2, int(r.bottom - 2 - door_h), r.w - 4, door_h)
-                        pygame.draw.rect(surface, wood, dr, border_radius=2)
-                        pygame.draw.rect(surface, outline, dr, 1, border_radius=2)
+                        pygame.draw.rect(surface, outline, dr.inflate(2, 2))
+                        pygame.draw.rect(surface, wood, dr)
                         pygame.draw.rect(surface, wood2, pygame.Rect(dr.x + 2, dr.y + 2, dr.w - 4, 4))
                         knob_y = int(dr.y + dr.h * 0.62)
                         pygame.draw.circle(surface, (240, 220, 140), (dr.right - 4, knob_y), 2)
                         if ch == "H":
-                            pygame.draw.rect(surface, (120, 200, 140), pygame.Rect(dr.x + 2, dr.y + 2, dr.w - 4, 3), border_radius=1)
+                            pygame.draw.rect(surface, (120, 200, 140), pygame.Rect(dr.x + 2, dr.y + 2, dr.w - 4, 3))
                     elif ch == "I":
-                        # Light switch on the wall (controls room lighting).
+                        # Light switch on the wall (controls room lighting). Pixel-style.
                         plate = pygame.Rect(int(r.centerx - 4), int(r.centery - 6), 8, 12)
-                        pygame.draw.rect(surface, (214, 214, 222), plate, border_radius=2)
-                        pygame.draw.rect(surface, outline, plate, 1, border_radius=2)
+                        pygame.draw.rect(surface, outline, plate.inflate(2, 2))
+                        pygame.draw.rect(surface, (214, 214, 222), plate)
                         knob_h = 4
                         knob = pygame.Rect(int(plate.x + 2), int(plate.y + (2 if light_on else plate.h - knob_h - 2)), int(plate.w - 4), int(knob_h))
-                        pygame.draw.rect(surface, (255, 220, 140) if light_on else (120, 120, 132), knob, border_radius=2)
-                        pygame.draw.rect(surface, outline, knob, 1, border_radius=2)
+                        pygame.draw.rect(surface, outline, knob.inflate(2, 2))
+                        pygame.draw.rect(surface, (255, 220, 140) if light_on else (120, 120, 132), knob)
                     continue
 
                 if ch in (",", "O", "U", "R"):
@@ -15547,11 +15614,12 @@ class HardcoreSurvivalState(State):
                 # Objects over the floor texture.
                 if ch in ("^", "v"):
                     step_r = r.inflate(-6, -6)
-                    sh = pygame.Surface((step_r.w, step_r.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=5)
-                    surface.blit(sh, (step_r.x + 2, step_r.y + 3))
-                    pygame.draw.rect(surface, steel2, step_r, border_radius=5)
-                    pygame.draw.rect(surface, outline, step_r, 1, border_radius=5)
+                    sh = pygame.Surface((step_r.w + 4, step_r.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect())
+                    surface.blit(sh, (step_r.x, step_r.y + 2))
+                    # Pixel-style stairs.
+                    pygame.draw.rect(surface, outline, step_r.inflate(2, 2))
+                    pygame.draw.rect(surface, steel2, step_r)
                     for i in range(3):
                         yy = int(step_r.y + 4 + i * 5)
                         pygame.draw.line(surface, steel, (step_r.x + 3, yy), (step_r.right - 4, yy), 1)
@@ -15614,11 +15682,12 @@ class HardcoreSurvivalState(State):
                     surface.blit(sh, (bowl.x + 1, bowl.y + 2))
                     pygame.draw.ellipse(surface, porcelain, bowl)
                     pygame.draw.ellipse(surface, outline, bowl, 1)
-                    pygame.draw.rect(surface, porcelain2, tank, border_radius=2)
-                    pygame.draw.rect(surface, outline, tank, 1, border_radius=2)
-                    pygame.draw.rect(surface, steel2, pygame.Rect(tank.right - 3, tank.y + 1, 2, 2), border_radius=1)
-                    pygame.draw.rect(surface, porcelain2, base, border_radius=2)
-                    pygame.draw.rect(surface, outline, base, 1, border_radius=2)
+                    # Pixel-style toilet parts.
+                    pygame.draw.rect(surface, outline, tank.inflate(2, 2))
+                    pygame.draw.rect(surface, porcelain2, tank)
+                    pygame.draw.rect(surface, steel2, pygame.Rect(tank.right - 3, tank.y + 1, 2, 2))
+                    pygame.draw.rect(surface, outline, base.inflate(2, 2))
+                    pygame.draw.rect(surface, porcelain2, base)
                     hole = bowl.inflate(-6, -6)
                     pygame.draw.ellipse(surface, (30, 30, 36), hole)
                     water = hole.inflate(-4, -4)
@@ -15653,14 +15722,15 @@ class HardcoreSurvivalState(State):
                             elev_done.add((int(x) + int(dx), int(y) + int(dy)))
                     br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
                     er = br.inflate(-4, -4)
-                    sh = pygame.Surface((er.w, er.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 80), sh.get_rect(), border_radius=4)
-                    surface.blit(sh, (er.x + 2, er.y + 3))
-                    pygame.draw.rect(surface, steel, er, border_radius=4)
-                    pygame.draw.rect(surface, outline, er, 1, border_radius=4)
+                    sh = pygame.Surface((er.w + 4, er.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 80), sh.get_rect())
+                    surface.blit(sh, (er.x, er.y + 2))
+                    # Pixel-style elevator.
+                    pygame.draw.rect(surface, outline, er.inflate(2, 2))
+                    pygame.draw.rect(surface, steel, er)
                     pygame.draw.rect(surface, steel2, pygame.Rect(er.x + 3, er.y + 3, er.w - 6, 3))
                     pygame.draw.line(surface, outline, (er.centerx, er.y + 4), (er.centerx, er.bottom - 5), 1)
-                    pygame.draw.rect(surface, (255, 220, 140), pygame.Rect(er.right - 9, er.y + 10, 3, 5), border_radius=1)
+                    pygame.draw.rect(surface, (255, 220, 140), pygame.Rect(er.right - 9, er.y + 10, 3, 5))
                     continue
 
                 if ch == "B":
@@ -15687,23 +15757,24 @@ class HardcoreSurvivalState(State):
                             bed_done.add((int(x) + int(dx), int(y) + int(dy)))
                     br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
                     bed_r = br.inflate(-4, -8)
-                    sh = pygame.Surface((bed_r.w, bed_r.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 90), sh.get_rect(), border_radius=6)
-                    surface.blit(sh, (bed_r.x + 2, bed_r.y + 3))
-                    pygame.draw.rect(surface, bed_matt, bed_r, border_radius=6)
-                    pygame.draw.rect(surface, outline, bed_r, 1, border_radius=6)
+                    # Pixel-style outline: draw outline first, then fill.
+                    sh = pygame.Surface((bed_r.w + 4, bed_r.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 90), sh.get_rect())
+                    surface.blit(sh, (bed_r.x + 1, bed_r.y + 2))
+                    pygame.draw.rect(surface, outline, bed_r.inflate(2, 2))
+                    pygame.draw.rect(surface, bed_matt, bed_r)
                     hb = pygame.Rect(bed_r.x, bed_r.y, 8, bed_r.h)
-                    pygame.draw.rect(surface, wood2, hb, border_radius=5)
-                    pygame.draw.rect(surface, outline, hb, 1, border_radius=5)
+                    pygame.draw.rect(surface, outline, hb.inflate(2, 2))
+                    pygame.draw.rect(surface, wood2, hb)
                     p1 = pygame.Rect(bed_r.x + 10, bed_r.y + 4, max(10, bed_r.w // 5), 7)
                     p2 = pygame.Rect(p1.x, p1.y + 10, p1.w, 7)
-                    pygame.draw.rect(surface, pillow, p1, border_radius=3)
-                    pygame.draw.rect(surface, pillow, p2, border_radius=3)
-                    pygame.draw.rect(surface, outline, p1, 1, border_radius=3)
-                    pygame.draw.rect(surface, outline, p2, 1, border_radius=3)
+                    pygame.draw.rect(surface, outline, p1.inflate(2, 2))
+                    pygame.draw.rect(surface, pillow, p1)
+                    pygame.draw.rect(surface, outline, p2.inflate(2, 2))
+                    pygame.draw.rect(surface, pillow, p2)
                     bl = pygame.Rect(bed_r.x + 10, bed_r.y + 20, bed_r.w - 14, max(10, bed_r.h - 24))
-                    pygame.draw.rect(surface, bed_blank, bl, border_radius=5)
-                    pygame.draw.rect(surface, outline, bl, 1, border_radius=5)
+                    pygame.draw.rect(surface, outline, bl.inflate(2, 2))
+                    pygame.draw.rect(surface, bed_blank, bl)
                     for sx in range(bl.x + 6, bl.right - 4, 10):
                         pygame.draw.line(surface, bed_blank2, (sx, bl.y + 2), (sx, bl.bottom - 3), 1)
                     # Bed legs/frame (so it doesn't look like it floats).
@@ -15746,9 +15817,10 @@ class HardcoreSurvivalState(State):
                     br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
                     # Less inset so the countertop reads flush to the block edges.
                     obj = br.inflate(-2, -6)
-                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=6)
-                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+                    # Pixel-style outline.
+                    sh = pygame.Surface((obj.w + 4, obj.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect())
+                    surface.blit(sh, (obj.x + 1, obj.y + 2))
 
                     # Marble countertop (big visible top, thin front face).
                     top_h = int(clamp(int(obj.h * 0.58), 12, 18))
@@ -15759,8 +15831,9 @@ class HardcoreSurvivalState(State):
                     stone_face2 = (150, 152, 160)
                     marble_base = (228, 230, 236)
 
-                    pygame.draw.rect(surface, stone_face, front_r, border_radius=6)
-                    pygame.draw.rect(surface, outline, front_r, 1, border_radius=6)
+                    # Pixel-style outline for front face.
+                    pygame.draw.rect(surface, outline, front_r.inflate(2, 2))
+                    pygame.draw.rect(surface, stone_face, front_r)
                     pygame.draw.rect(surface, stone_face2, pygame.Rect(front_r.x + 1, front_r.y + 2, front_r.w - 2, 3))
 
                     marble = self._marble_surface(
@@ -15769,8 +15842,9 @@ class HardcoreSurvivalState(State):
                         seed=int(getattr(self, "seed", 0)) ^ (int(x) * 65537) ^ (int(y) * 9719) ^ 0x51F15EED,
                         base=marble_base,
                     )
+                    # Pixel-style outline for marble top.
+                    pygame.draw.rect(surface, outline, top_r.inflate(2, 2))
                     surface.blit(marble, top_r.topleft)
-                    pygame.draw.rect(surface, outline, top_r, 1, border_radius=6)
                     pygame.draw.line(surface, outline, (top_r.x + 2, top_r.bottom - 1), (top_r.right - 3, top_r.bottom - 1), 1)
 
                     # Cabinet seams / handles on the front face (stone drawers).
@@ -15790,8 +15864,9 @@ class HardcoreSurvivalState(State):
                     sink_w = int(clamp(int(top_r.w * 0.20), 14, 22))
                     sink_h = int(clamp(int(top_r.h - 5), 6, 10))
                     sink = pygame.Rect(top_r.x + int(top_r.w * 0.18), top_r.y + 3, sink_w, sink_h)
-                    pygame.draw.rect(surface, steel, sink, border_radius=3)
-                    pygame.draw.rect(surface, outline, sink, 1, border_radius=3)
+                    # Pixel-style sink.
+                    pygame.draw.rect(surface, outline, sink.inflate(2, 2))
+                    pygame.draw.rect(surface, steel, sink)
                     pygame.draw.circle(surface, (60, 60, 70), (sink.right - 3, sink.y + 3), 1)
                     pygame.draw.line(surface, steel2, (sink.x + 2, sink.y + 1), (sink.x + 2, sink.y - 3), 1)
                     pygame.draw.line(surface, steel2, (sink.x + 2, sink.y - 3), (sink.x + 7, sink.y - 3), 1)
@@ -15799,8 +15874,9 @@ class HardcoreSurvivalState(State):
                     stove_w = int(clamp(int(top_r.w * 0.20), 14, 22))
                     stove_h = sink_h
                     stove = pygame.Rect(top_r.right - int(top_r.w * 0.16) - stove_w, top_r.y + 3, stove_w, stove_h)
-                    pygame.draw.rect(surface, (40, 40, 50), stove, border_radius=3)
-                    pygame.draw.rect(surface, outline, stove, 1, border_radius=3)
+                    # Pixel-style stove.
+                    pygame.draw.rect(surface, outline, stove.inflate(2, 2))
+                    pygame.draw.rect(surface, (40, 40, 50), stove)
                     pygame.draw.circle(surface, (80, 80, 90), (stove.x + stove_w // 3, stove.centery), 2)
                     pygame.draw.circle(surface, (80, 80, 90), (stove.right - stove_w // 3, stove.centery), 2)
 
@@ -15812,8 +15888,9 @@ class HardcoreSurvivalState(State):
                     pygame.draw.ellipse(surface, (205, 214, 224), bowl)
                     pygame.draw.ellipse(surface, outline, bowl, 1)
                     pot = pygame.Rect(top_r.centerx - 8, top_r.y + 2, 16, 6)
-                    pygame.draw.rect(surface, (40, 40, 50), pot, border_radius=3)
-                    pygame.draw.rect(surface, outline, pot, 1, border_radius=3)
+                    # Pixel-style pot.
+                    pygame.draw.rect(surface, outline, pot.inflate(2, 2))
+                    pygame.draw.rect(surface, (40, 40, 50), pot)
                     pygame.draw.line(surface, steel2, (pot.x + 2, pot.y + 2), (pot.right - 3, pot.y + 2), 1)
 
                     # Subtle shelf/rack cue above the counter.
@@ -15848,16 +15925,18 @@ class HardcoreSurvivalState(State):
                             t_done.add((int(x) + int(dx), int(y) + int(dy)))
                     br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
                     top = br.inflate(-6, -10)
-                    sh = pygame.Surface((top.w, top.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=4)
-                    surface.blit(sh, (top.x + 2, top.y + 3))
-                    pygame.draw.rect(surface, wood, top, border_radius=4)
-                    pygame.draw.rect(surface, outline, top, 1, border_radius=4)
+                    # Pixel-style outline.
+                    sh = pygame.Surface((top.w + 4, top.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect())
+                    surface.blit(sh, (top.x + 1, top.y + 2))
+                    pygame.draw.rect(surface, outline, top.inflate(2, 2))
+                    pygame.draw.rect(surface, wood, top)
                     pygame.draw.rect(surface, wood2, pygame.Rect(top.x + 1, top.y + 1, top.w - 2, 4))
                     # Small TV / radio-like decoration.
                     screen = pygame.Rect(top.centerx - 10, top.y + 5, 20, 10)
-                    pygame.draw.rect(surface, (36, 38, 44), screen, border_radius=3)
-                    pygame.draw.rect(surface, steel2, screen, 1, border_radius=3)
+                    pygame.draw.rect(surface, outline, screen.inflate(2, 2))
+                    pygame.draw.rect(surface, (36, 38, 44), screen)
+                    pygame.draw.rect(surface, steel2, screen, 1)
                     pygame.draw.rect(surface, (120, 200, 240), pygame.Rect(screen.x + 3, screen.y + 3, 7, 4))
                     # Table legs (front-view cue).
                     floor_y = int(br.bottom - 3)
@@ -15900,9 +15979,10 @@ class HardcoreSurvivalState(State):
                     br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
                     # Keep cabinets tall enough even when the block is only 1 tile high (e.g., the bottom-left cabinet).
                     obj = br.inflate(-6, -4)
-                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=4)
-                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+                    # Pixel-style outline.
+                    sh = pygame.Surface((obj.w + 4, obj.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect())
+                    surface.blit(sh, (obj.x + 1, obj.y + 2))
                     # Wardrobe / cabinet: draw top + front face (two visible planes).
                     cab_top = self._tint(wood, add=(14, 12, 10))
                     cab_front = self._tint(wood2, add=(2, 2, 2))
@@ -15914,20 +15994,22 @@ class HardcoreSurvivalState(State):
                     top_r = pygame.Rect(obj.x, obj.y, obj.w, top_h)
                     front_r = pygame.Rect(obj.x, obj.y + top_h - 1, obj.w, obj.h - (top_h - 1))
 
-                    pygame.draw.rect(surface, cab_front, front_r, border_radius=6)
-                    pygame.draw.rect(surface, outline, front_r, 1, border_radius=6)
+                    # Pixel-style outline for front face.
+                    pygame.draw.rect(surface, outline, front_r.inflate(2, 2))
+                    pygame.draw.rect(surface, cab_front, front_r)
                     pygame.draw.rect(surface, cab_front2, pygame.Rect(front_r.x + 1, front_r.y + 2, front_r.w - 2, 3))
 
-                    pygame.draw.rect(surface, cab_top, top_r, border_radius=6)
-                    pygame.draw.rect(surface, outline, top_r, 1, border_radius=6)
+                    # Pixel-style outline for top.
+                    pygame.draw.rect(surface, outline, top_r.inflate(2, 2))
+                    pygame.draw.rect(surface, cab_top, top_r)
                     pygame.draw.line(surface, hi, (top_r.x + 2, top_r.y + 1), (top_r.right - 3, top_r.y + 1), 1)
                     pygame.draw.line(surface, outline, (top_r.x + 2, top_r.bottom - 1), (top_r.right - 3, top_r.bottom - 1), 1)
 
                     # Inset doors live on the front face (keeps the top readable).
                     door_area = front_r.inflate(-4, -6)
                     if door_area.w > 6 and door_area.h > 8:
-                        pygame.draw.rect(surface, self._tint(cab_front, add=(-8, -6, -4)), door_area, border_radius=4)
-                        pygame.draw.rect(surface, outline, door_area, 1, border_radius=4)
+                        pygame.draw.rect(surface, outline, door_area.inflate(2, 2))
+                        pygame.draw.rect(surface, self._tint(cab_front, add=(-8, -6, -4)), door_area)
                     else:
                         door_area = pygame.Rect(front_r)
 
@@ -15952,8 +16034,9 @@ class HardcoreSurvivalState(State):
                     if is_open:
                         inner = door_area.inflate(-10, -10)
                         if inner.w > 4 and inner.h > 4:
-                            pygame.draw.rect(surface, (20, 20, 24), inner, border_radius=3)
-                            pygame.draw.rect(surface, outline, inner, 1, border_radius=3)
+                            # Pixel-style cabinet interior.
+                            pygame.draw.rect(surface, outline, inner.inflate(2, 2))
+                            pygame.draw.rect(surface, (20, 20, 24), inner)
                             # Inside top surface + shelves.
                             pygame.draw.line(surface, self._tint(cab_front2, add=(18, 18, 18)), (inner.x + 2, inner.y + 2), (inner.right - 3, inner.y + 2), 1)
                             step = max(6, int(inner.h // 3))
@@ -15968,17 +16051,17 @@ class HardcoreSurvivalState(State):
                             surface.fill((90, 140, 190), jar)
                             pygame.draw.rect(surface, outline, jar, 1)
 
-                        # Doors "slid open" to sides.
+                        # Doors "slid open" to sides. Pixel-style.
                         door_w = max(6, int(door_area.w // 5))
                         ld = pygame.Rect(door_area.x + 1, door_area.y + 3, door_w, door_area.h - 6)
                         rd = pygame.Rect(door_area.right - door_w - 1, door_area.y + 3, door_w, door_area.h - 6)
                         for d in (ld, rd):
-                            pygame.draw.rect(surface, cab_front, d, border_radius=3)
-                            pygame.draw.rect(surface, outline, d, 1, border_radius=3)
+                            pygame.draw.rect(surface, outline, d.inflate(2, 2))
+                            pygame.draw.rect(surface, cab_front, d)
                             inset = d.inflate(-2, -4)
                             if inset.w > 2 and inset.h > 2:
-                                pygame.draw.rect(surface, self._tint(cab_front, add=(-8, -8, -8)), inset, border_radius=2)
-                                pygame.draw.rect(surface, outline, inset, 1, border_radius=2)
+                                pygame.draw.rect(surface, outline, inset.inflate(2, 2))
+                                pygame.draw.rect(surface, self._tint(cab_front, add=(-8, -8, -8)), inset)
                                 pygame.draw.line(surface, hi, (inset.x + 1, inset.y + 1), (inset.right - 2, inset.y + 1), 1)
                         for d in (ld, rd):
                             hy = int(d.y + d.h * 0.55)
@@ -16000,8 +16083,9 @@ class HardcoreSurvivalState(State):
                             x1 = int(door_area.x + (door_area.w * (i + 1)) / doors)
                             panel = pygame.Rect(x0 + 2, y_top + 1, (x1 - x0) - 4, max(2, int(y_bot - y_top - 2)))
                             if panel.w > 3 and panel.h > 3:
-                                pygame.draw.rect(surface, self._tint(cab_front, add=(-6, -6, -6)), panel, border_radius=2)
-                                pygame.draw.rect(surface, outline, panel, 1, border_radius=2)
+                                # Pixel-style cabinet panel.
+                                pygame.draw.rect(surface, outline, panel.inflate(2, 2))
+                                pygame.draw.rect(surface, self._tint(cab_front, add=(-6, -6, -6)), panel)
                                 pygame.draw.line(surface, hi, (panel.x + 1, panel.y + 1), (panel.right - 2, panel.y + 1), 1)
 
                             hx = int(door_area.x + (door_area.w * (i + 0.5)) / doors)
@@ -16036,9 +16120,10 @@ class HardcoreSurvivalState(State):
 
                     br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
                     obj = br.inflate(-4, -4)
-                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=4)
-                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+                    # Pixel-style outline.
+                    sh = pygame.Surface((obj.w + 4, obj.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect())
+                    surface.blit(sh, (obj.x + 1, obj.y + 2))
 
                     fridge_top = (238, 240, 246)
                     fridge_front = (210, 214, 224)
@@ -16049,12 +16134,13 @@ class HardcoreSurvivalState(State):
                     top_r = pygame.Rect(obj.x, obj.y, obj.w, top_h)
                     front_r = pygame.Rect(obj.x, obj.y + top_h - 1, obj.w, obj.h - (top_h - 1))
 
-                    pygame.draw.rect(surface, fridge_front, front_r, border_radius=6)
-                    pygame.draw.rect(surface, outline, front_r, 1, border_radius=6)
+                    # Pixel-style outline for fridge.
+                    pygame.draw.rect(surface, outline, front_r.inflate(2, 2))
+                    pygame.draw.rect(surface, fridge_front, front_r)
                     pygame.draw.rect(surface, fridge_front2, pygame.Rect(front_r.x + 1, front_r.y + 2, front_r.w - 2, 3))
 
-                    pygame.draw.rect(surface, fridge_top, top_r, border_radius=6)
-                    pygame.draw.rect(surface, outline, top_r, 1, border_radius=6)
+                    pygame.draw.rect(surface, outline, top_r.inflate(2, 2))
+                    pygame.draw.rect(surface, fridge_top, top_r)
                     pygame.draw.line(surface, hi, (top_r.x + 2, top_r.y + 1), (top_r.right - 3, top_r.y + 1), 1)
                     pygame.draw.line(surface, outline, (top_r.x + 2, top_r.bottom - 1), (top_r.right - 3, top_r.bottom - 1), 1)
 
@@ -16072,8 +16158,9 @@ class HardcoreSurvivalState(State):
                     if is_open:
                         inner = door_area.inflate(-8, -8)
                         if inner.w > 4 and inner.h > 4:
-                            pygame.draw.rect(surface, (20, 20, 24), inner, border_radius=3)
-                            pygame.draw.rect(surface, outline, inner, 1, border_radius=3)
+                            # Pixel-style fridge interior.
+                            pygame.draw.rect(surface, outline, inner.inflate(2, 2))
+                            pygame.draw.rect(surface, (20, 20, 24), inner)
                             for sy in range(inner.y + 4, inner.bottom - 2, 6):
                                 pygame.draw.line(surface, (44, 44, 52), (inner.x + 2, sy), (inner.right - 3, sy), 1)
                             bottle = pygame.Rect(inner.x + 3, inner.bottom - 9, 4, 7)
@@ -16083,17 +16170,17 @@ class HardcoreSurvivalState(State):
                             surface.fill((220, 70, 80), can)
                             pygame.draw.rect(surface, outline, can, 1)
 
-                        # Doors slid to sides.
+                        # Doors slid to sides. Pixel-style.
                         door_w = max(6, int(door_area.w // 5))
                         ld = pygame.Rect(door_area.x + 1, door_area.y + 3, door_w, door_area.h - 6)
                         rd = pygame.Rect(door_area.right - door_w - 1, door_area.y + 3, door_w, door_area.h - 6)
                         for d in (ld, rd):
-                            pygame.draw.rect(surface, fridge_front, d, border_radius=3)
-                            pygame.draw.rect(surface, outline, d, 1, border_radius=3)
+                            pygame.draw.rect(surface, outline, d.inflate(2, 2))
+                            pygame.draw.rect(surface, fridge_front, d)
                             inset = d.inflate(-2, -4)
                             if inset.w > 2 and inset.h > 2:
-                                pygame.draw.rect(surface, self._tint(fridge_front, add=(-8, -8, -8)), inset, border_radius=2)
-                                pygame.draw.rect(surface, outline, inset, 1, border_radius=2)
+                                pygame.draw.rect(surface, outline, inset.inflate(2, 2))
+                                pygame.draw.rect(surface, self._tint(fridge_front, add=(-8, -8, -8)), inset)
                                 pygame.draw.line(surface, hi, (inset.x + 1, inset.y + 1), (inset.right - 2, inset.y + 1), 1)
                     else:
                         # Freezer split line + handle + magnets.
@@ -16150,26 +16237,29 @@ class HardcoreSurvivalState(State):
                     obj = br.inflate(-6, -10)
                     if obj.w <= 0 or obj.h <= 0:
                         continue
-                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect(), border_radius=5)
-                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+                    # Pixel-style outline.
+                    sh = pygame.Surface((obj.w + 4, obj.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect())
+                    surface.blit(sh, (obj.x + 1, obj.y + 2))
 
                     stand_h = int(clamp(int(obj.h * 0.36), 6, 12))
                     stand = pygame.Rect(int(obj.x + 2), int(obj.bottom - stand_h), int(obj.w - 4), int(stand_h))
-                    pygame.draw.rect(surface, wood2, stand, border_radius=4)
-                    pygame.draw.rect(surface, outline, stand, 1, border_radius=4)
-                    pygame.draw.rect(surface, self._tint(wood2, add=(18, 18, 18)), pygame.Rect(stand.x + 2, stand.y + 2, max(1, stand.w - 4), 3), border_radius=2)
+                    pygame.draw.rect(surface, outline, stand.inflate(2, 2))
+                    pygame.draw.rect(surface, wood2, stand)
+                    pygame.draw.rect(surface, self._tint(wood2, add=(18, 18, 18)), pygame.Rect(stand.x + 2, stand.y + 2, max(1, stand.w - 4), 3))
 
                     tv_w = int(clamp(int(obj.w * 0.72), 20, max(20, obj.w - 2)))
                     tv_h = int(clamp(int(obj.h * 0.58), 12, 22))
                     tv = pygame.Rect(0, 0, tv_w, tv_h)
                     tv.midtop = (obj.centerx, obj.y + 1)
                     frame = tv.inflate(4, 4)
-                    pygame.draw.rect(surface, (34, 36, 44), frame, border_radius=5)
-                    pygame.draw.rect(surface, outline, frame, 1, border_radius=5)
+                    # Pixel-style outline for TV.
+                    pygame.draw.rect(surface, outline, frame.inflate(2, 2))
+                    pygame.draw.rect(surface, (34, 36, 44), frame)
                     screen = tv.inflate(-2, -2)
-                    pygame.draw.rect(surface, (14, 14, 18), screen, border_radius=4)
-                    pygame.draw.rect(surface, steel2, screen, 1, border_radius=4)
+                    pygame.draw.rect(surface, outline, screen.inflate(2, 2))
+                    pygame.draw.rect(surface, (14, 14, 18), screen)
+                    pygame.draw.rect(surface, steel2, screen, 1)
                     if tv_on:
                         # Simple animated "show" on the TV.
                         surface.fill((18, 20, 28), screen)
@@ -16185,12 +16275,12 @@ class HardcoreSurvivalState(State):
                         pygame.draw.rect(surface, (140, 160, 190), pygame.Rect(px - 1, py + 5, 4, 1))
                     else:
                         glow = pygame.Rect(screen.x + 4, screen.y + 4, max(5, int(screen.w * 0.25)), max(4, int(screen.h * 0.22)))
-                        pygame.draw.rect(surface, (120, 200, 240), glow, border_radius=2)
+                        pygame.draw.rect(surface, (120, 200, 240), glow)
                     pygame.draw.line(surface, steel2, (screen.x + 2, screen.bottom - 3), (screen.right - 3, screen.bottom - 3), 1)
-                    # Game console / set-top box.
+                    # Game console / set-top box. Pixel-style.
                     box = pygame.Rect(int(stand.centerx - 10), int(stand.y + 3), 20, 6)
-                    pygame.draw.rect(surface, (26, 26, 32), box, border_radius=2)
-                    pygame.draw.rect(surface, outline, box, 1, border_radius=2)
+                    pygame.draw.rect(surface, outline, box.inflate(2, 2))
+                    pygame.draw.rect(surface, (26, 26, 32), box)
                     pygame.draw.circle(surface, (120, 200, 140), (box.right - 4, box.centery), 1)
                     continue
 
@@ -16220,45 +16310,47 @@ class HardcoreSurvivalState(State):
                     obj = br.inflate(-6, -10)
                     if obj.w <= 0 or obj.h <= 0:
                         continue
-                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect(), border_radius=5)
-                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+                    # Pixel-style outline.
+                    sh = pygame.Surface((obj.w + 4, obj.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 70), sh.get_rect())
+                    surface.blit(sh, (obj.x + 1, obj.y + 2))
 
                     top_h = int(clamp(int(obj.h * 0.36), 10, 18))
                     top = pygame.Rect(int(obj.x), int(obj.y), int(obj.w), int(top_h))
                     front = pygame.Rect(int(obj.x), int(obj.y + top_h - 1), int(obj.w), int(obj.h - (top_h - 1)))
                     desk_top = self._tint(wood, add=(10, 8, 6))
                     desk_front = self._tint(wood2, add=(6, 4, 2))
-                    pygame.draw.rect(surface, desk_front, front, border_radius=6)
-                    pygame.draw.rect(surface, outline, front, 1, border_radius=6)
-                    pygame.draw.rect(surface, desk_top, top, border_radius=6)
-                    pygame.draw.rect(surface, outline, top, 1, border_radius=6)
+                    # Pixel-style outline for desk.
+                    pygame.draw.rect(surface, outline, front.inflate(2, 2))
+                    pygame.draw.rect(surface, desk_front, front)
+                    pygame.draw.rect(surface, outline, top.inflate(2, 2))
+                    pygame.draw.rect(surface, desk_top, top)
                     pygame.draw.line(surface, self._tint(desk_top, add=(26, 26, 26)), (top.x + 2, top.y + 1), (top.right - 3, top.y + 1), 1)
 
-                    # Monitor + keyboard.
+                    # Monitor + keyboard. Pixel-style.
                     mon_w = int(clamp(int(top.w * 0.42), 14, 30))
                     mon_h = int(clamp(int(top.h * 0.70), 10, 16))
                     mon = pygame.Rect(0, 0, mon_w, mon_h)
                     mon.center = (int(top.centerx - top.w * 0.12), int(top.centery + 1))
-                    pygame.draw.rect(surface, (32, 34, 40), mon, border_radius=3)
-                    pygame.draw.rect(surface, outline, mon, 1, border_radius=3)
+                    pygame.draw.rect(surface, outline, mon.inflate(2, 2))
+                    pygame.draw.rect(surface, (32, 34, 40), mon)
                     # Give the monitor a tiny "thickness" so it reads 3D.
                     side = pygame.Rect(mon.right - 1, mon.y + 1, 2, max(1, mon.h - 2))
-                    pygame.draw.rect(surface, (22, 22, 28), side, border_radius=2)
+                    pygame.draw.rect(surface, (22, 22, 28), side)
                     pygame.draw.line(surface, outline, (side.x, side.y + 1), (side.x, side.bottom - 2), 1)
                     scr = mon.inflate(-3, -3)
-                    pygame.draw.rect(surface, (14, 14, 18), scr, border_radius=2)
-                    pygame.draw.rect(surface, (120, 200, 240), pygame.Rect(scr.x + 2, scr.y + 2, max(3, scr.w // 3), max(3, scr.h // 3)), border_radius=2)
+                    pygame.draw.rect(surface, (14, 14, 18), scr)
+                    pygame.draw.rect(surface, (120, 200, 240), pygame.Rect(scr.x + 2, scr.y + 2, max(3, scr.w // 3), max(3, scr.h // 3)))
                     kb = pygame.Rect(int(mon.right + 3), int(top.bottom - 6), max(12, int(top.w * 0.30)), 4)
-                    pygame.draw.rect(surface, (36, 36, 44), kb, border_radius=2)
-                    pygame.draw.rect(surface, outline, kb, 1, border_radius=2)
+                    pygame.draw.rect(surface, outline, kb.inflate(2, 2))
+                    pygame.draw.rect(surface, (36, 36, 44), kb)
                     for xx in range(int(kb.x + 2), int(kb.right - 2), 3):
                         surface.fill((60, 60, 72), pygame.Rect(int(xx), int(kb.y + 1), 1, 1))
 
-                    # PC tower.
+                    # PC tower. Pixel-style.
                     tower = pygame.Rect(int(top.right - 10), int(front.y + 4), 8, max(10, int(front.h - 8)))
-                    pygame.draw.rect(surface, (28, 28, 34), tower, border_radius=2)
-                    pygame.draw.rect(surface, outline, tower, 1, border_radius=2)
+                    pygame.draw.rect(surface, outline, tower.inflate(2, 2))
+                    pygame.draw.rect(surface, (28, 28, 34), tower)
                     surface.fill((18, 18, 22), pygame.Rect(tower.right - 2, tower.y + 1, 1, max(1, tower.h - 2)))
                     surface.fill((56, 56, 66), pygame.Rect(tower.x + 1, tower.y + 2, max(1, tower.w - 3), 1))
                     pygame.draw.circle(surface, (120, 200, 140), (tower.centerx, tower.y + 5), 1)
@@ -16290,15 +16382,16 @@ class HardcoreSurvivalState(State):
                     obj = br.inflate(-6, -10)
                     if obj.w <= 0 or obj.h <= 0:
                         continue
-                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect(), border_radius=6)
-                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+                    # Pixel-style outline.
+                    sh = pygame.Surface((obj.w + 4, obj.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect())
+                    surface.blit(sh, (obj.x + 1, obj.y + 2))
 
                     tray = obj.inflate(-2, -2)
                     tray_col = (214, 216, 222)
                     tray_hi = (232, 232, 238)
-                    pygame.draw.rect(surface, tray_col, tray, border_radius=6)
-                    pygame.draw.rect(surface, outline, tray, 1, border_radius=6)
+                    pygame.draw.rect(surface, outline, tray.inflate(2, 2))
+                    pygame.draw.rect(surface, tray_col, tray)
                     pygame.draw.rect(surface, tray_hi, pygame.Rect(tray.x + 2, tray.y + 2, tray.w - 4, 3), border_radius=3)
                     drain = pygame.Rect(tray.centerx + 4, tray.centery + 3, 4, 4)
                     pygame.draw.ellipse(surface, (40, 40, 48), drain)
@@ -16308,7 +16401,8 @@ class HardcoreSurvivalState(State):
                     if glass.w > 6 and glass.h > 6:
                         gs = pygame.Surface((glass.w, glass.h), pygame.SRCALPHA)
                         gs.fill((90, 140, 190, 55))
-                        pygame.draw.rect(gs, (210, 220, 235, 80), gs.get_rect(), 1, border_radius=4)
+                        # Pixel-style glass frame.
+                        pygame.draw.rect(gs, (210, 220, 235, 80), gs.get_rect(), 1)
                         surface.blit(gs, glass.topleft)
                         pygame.draw.line(surface, outline, (glass.centerx, glass.y + 2), (glass.centerx, glass.bottom - 3), 1)
                     # Showerhead hint.
@@ -16319,23 +16413,25 @@ class HardcoreSurvivalState(State):
                 if ch == "U":
                     base = r.inflate(-6, -8)
                     if base.w > 0 and base.h > 0:
+                        # Pixel-style bathroom vanity.
                         cab = pygame.Rect(base.x, base.y + 4, base.w, max(6, base.h - 4))
-                        pygame.draw.rect(surface, wood2, cab, border_radius=4)
-                        pygame.draw.rect(surface, outline, cab, 1, border_radius=4)
+                        pygame.draw.rect(surface, outline, cab.inflate(2, 2))
+                        pygame.draw.rect(surface, wood2, cab)
                         basin = pygame.Rect(base.x + 2, base.y + 1, base.w - 4, 6)
-                        pygame.draw.rect(surface, (238, 238, 244), basin, border_radius=3)
-                        pygame.draw.rect(surface, outline, basin, 1, border_radius=3)
+                        pygame.draw.rect(surface, outline, basin.inflate(2, 2))
+                        pygame.draw.rect(surface, (238, 238, 244), basin)
                         pygame.draw.circle(surface, steel2, (basin.right - 4, basin.y + 2), 1)
                         pygame.draw.line(surface, steel2, (basin.right - 4, basin.y + 2), (basin.right - 4, basin.y + 5), 1)
                     continue
 
                 if ch == "O":
+                    # Pixel-style toilet (second rendering path).
                     bowl = pygame.Rect(r.x + 6, r.y + 9, r.w - 12, r.h - 10)
                     tank = pygame.Rect(r.centerx - 5, r.y + 5, 10, 6)
                     pygame.draw.ellipse(surface, (238, 238, 244), bowl)
                     pygame.draw.ellipse(surface, outline, bowl, 1)
-                    pygame.draw.rect(surface, (238, 238, 244), tank, border_radius=2)
-                    pygame.draw.rect(surface, outline, tank, 1, border_radius=2)
+                    pygame.draw.rect(surface, outline, tank.inflate(2, 2))
+                    pygame.draw.rect(surface, (238, 238, 244), tank)
                     seat = bowl.inflate(-4, -4)
                     pygame.draw.ellipse(surface, (210, 210, 218), seat)
                     pygame.draw.ellipse(surface, outline, seat, 1)
@@ -16366,35 +16462,38 @@ class HardcoreSurvivalState(State):
 
                     br = pygame.Rect(map_x + int(x) * tile, map_y + int(y) * tile, int(bw) * tile, int(bh) * tile)
                     obj = br.inflate(-6, -10)
-                    sh = pygame.Surface((obj.w, obj.h), pygame.SRCALPHA)
-                    pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect(), border_radius=5)
-                    surface.blit(sh, (obj.x + 2, obj.y + 3))
+                    # Pixel-style outline.
+                    sh = pygame.Surface((obj.w + 4, obj.h + 4), pygame.SRCALPHA)
+                    pygame.draw.rect(sh, (0, 0, 0, 60), sh.get_rect())
+                    surface.blit(sh, (obj.x + 1, obj.y + 2))
 
                     is_sofa = bool(mode == "home" and (int(bw) >= 3 or int(bh) >= 2))
                     if is_sofa:
                         back_h = int(clamp(int(obj.h // 3), 7, 12))
                         back = pygame.Rect(obj.x + 1, obj.y + 1, obj.w - 2, back_h)
                         seat_r = pygame.Rect(obj.x, obj.y + back_h - 1, obj.w, obj.h - back_h + 1)
-                        pygame.draw.rect(surface, seat, seat_r, border_radius=6)
-                        pygame.draw.rect(surface, outline, seat_r, 1, border_radius=6)
-                        pygame.draw.rect(surface, seat2, back, border_radius=5)
-                        pygame.draw.rect(surface, outline, back, 1, border_radius=5)
+                        # Pixel-style outline for sofa.
+                        pygame.draw.rect(surface, outline, seat_r.inflate(2, 2))
+                        pygame.draw.rect(surface, seat, seat_r)
+                        pygame.draw.rect(surface, outline, back.inflate(2, 2))
+                        pygame.draw.rect(surface, seat2, back)
                         arm_w = int(clamp(int(obj.w // 10), 4, 8))
                         arm_l = pygame.Rect(seat_r.x, back.bottom - 2, arm_w, seat_r.h - 2)
                         arm_r = pygame.Rect(seat_r.right - arm_w, back.bottom - 2, arm_w, seat_r.h - 2)
-                        pygame.draw.rect(surface, seat2, arm_l, border_radius=5)
-                        pygame.draw.rect(surface, seat2, arm_r, border_radius=5)
-                        pygame.draw.rect(surface, outline, arm_l, 1, border_radius=5)
-                        pygame.draw.rect(surface, outline, arm_r, 1, border_radius=5)
+                        pygame.draw.rect(surface, outline, arm_l.inflate(2, 2))
+                        pygame.draw.rect(surface, seat2, arm_l)
+                        pygame.draw.rect(surface, outline, arm_r.inflate(2, 2))
+                        pygame.draw.rect(surface, seat2, arm_r)
                         for i in (1, 2):
                             xline = int(seat_r.x + (seat_r.w * i) / 3)
                             pygame.draw.line(surface, outline, (xline, seat_r.y + 3), (xline, seat_r.bottom - 4), 1)
                         if back.w >= 24:
+                            # Pixel-style sofa cushions.
                             p_w = int(clamp(int(back.w // 3), 10, 18))
                             for px in (back.x + 6, back.right - p_w - 6):
                                 p = pygame.Rect(int(px), back.y + 3, int(p_w), max(4, int(back.h - 5)))
-                                pygame.draw.rect(surface, self._tint(seat, add=(18, 18, 18)), p, border_radius=3)
-                                pygame.draw.rect(surface, outline, p, 1, border_radius=3)
+                                pygame.draw.rect(surface, outline, p.inflate(2, 2))
+                                pygame.draw.rect(surface, self._tint(seat, add=(18, 18, 18)), p)
                         floor_y = int(br.bottom - 3)
                         leg_y0 = int(seat_r.bottom - 1)
                         leg_h = int(floor_y - leg_y0)
@@ -16405,14 +16504,15 @@ class HardcoreSurvivalState(State):
                                 surface.fill(leg_col, leg)
                                 pygame.draw.rect(surface, outline, leg, 1)
                     else:
-                        pygame.draw.rect(surface, seat, obj, border_radius=5)
-                        pygame.draw.rect(surface, outline, obj, 1, border_radius=5)
+                        # Pixel-style outline for chair.
+                        pygame.draw.rect(surface, outline, obj.inflate(2, 2))
+                        pygame.draw.rect(surface, seat, obj)
                         back = pygame.Rect(obj.x + 2, obj.y + 2, obj.w - 4, int(clamp(int(obj.h * 0.45), 5, 10)))
-                        pygame.draw.rect(surface, seat2, back, border_radius=4)
-                        pygame.draw.rect(surface, outline, back, 1, border_radius=4)
+                        pygame.draw.rect(surface, outline, back.inflate(2, 2))
+                        pygame.draw.rect(surface, seat2, back)
                         seat_r = pygame.Rect(obj.x + 2, back.bottom - 1, obj.w - 4, obj.bottom - (back.bottom - 1))
-                        pygame.draw.rect(surface, self._tint(seat, add=(12, 12, 12)), seat_r, border_radius=4)
-                        pygame.draw.rect(surface, outline, seat_r, 1, border_radius=4)
+                        pygame.draw.rect(surface, outline, seat_r.inflate(2, 2))
+                        pygame.draw.rect(surface, self._tint(seat, add=(12, 12, 12)), seat_r)
                         floor_y = int(br.bottom - 3)
                         leg_y0 = int(seat_r.bottom - 1)
                         leg_h = int(floor_y - leg_y0)
@@ -16590,15 +16690,17 @@ class HardcoreSurvivalState(State):
                     py = int(lr.bottom + 6)
                 panel = pygame.Rect(int(px), int(py), int(panel_w), int(panel_h))
                 panel.clamp_ip(map_rect.inflate(-2, -2))
-                pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=6)
-                pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=6)
+                # Pixel-style panel (no border_radius).
+                pygame.draw.rect(surface, (90, 90, 110), panel.inflate(2, 2))
+                pygame.draw.rect(surface, (18, 18, 22), panel)
 
                 x0 = int(panel.x + 5)
                 y0 = int(panel.y + 5)
                 for i, (label, action, payload) in enumerate(opts):
                     br = pygame.Rect(int(x0 + i * (btn_w + gap)), int(y0), int(btn_w), int(btn_h))
-                    pygame.draw.rect(surface, (28, 28, 34), br, border_radius=5)
-                    pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=5)
+                    # Pixel-style button (no border_radius).
+                    pygame.draw.rect(surface, (160, 160, 180), br.inflate(2, 2))
+                    pygame.draw.rect(surface, (28, 28, 34), br)
                     draw_text(surface, font, str(label), (br.centerx, br.centery - 1), pygame.Color(230, 230, 240), anchor="center")
                     self._hr_int_ui_buttons.append((str(action), str(room_id), pygame.Rect(br), payload))
 
@@ -22428,6 +22530,20 @@ class HardcoreSurvivalState(State):
         return r, g, b
 
     @staticmethod
+    def _pixel_outline_rect(
+        surface: pygame.Surface,
+        rect: pygame.Rect,
+        fill_color: tuple[int, int, int] | tuple[int, int, int, int],
+        outline_color: tuple[int, int, int] = (10, 10, 12),
+    ) -> None:
+        """Draw a filled rectangle with 1-pixel outline (no border_radius, pure pixel style)."""
+        # Draw outline first (1 pixel larger on each side).
+        outline_rect = rect.inflate(2, 2)
+        pygame.draw.rect(surface, outline_color, outline_rect)
+        # Draw fill on top.
+        pygame.draw.rect(surface, fill_color, rect)
+
+    @staticmethod
     def _smoothstep(edge0: float, edge1: float, x: float) -> float:
         if edge0 == edge1:
             return 0.0
@@ -22621,7 +22737,7 @@ class HardcoreSurvivalState(State):
             return
 
         cfg = getattr(self.app, "config", None)
-        radius_tiles = int(getattr(cfg, "lamp_world_radius_tiles", 5)) if cfg is not None else 5
+        radius_tiles = int(getattr(cfg, "lamp_world_radius_tiles", 3)) if cfg is not None else 3
         radius_tiles = int(clamp(int(radius_tiles), 2, 18))
         intensity = float(getattr(cfg, "lamp_world_intensity", 1.0)) if cfg is not None else 1.0
         intensity = float(clamp(float(intensity), 0.0, 3.0))
@@ -22662,6 +22778,17 @@ class HardcoreSurvivalState(State):
         }
 
         for lx, ly, restrict_home in lamps:
+            base_rect = self._world_tile_screen_rect(int(lx), int(ly), int(cam_x), int(cam_y))
+            cx, cy = int(base_rect.centerx), int(base_rect.centery)
+            ox = int(cx - radius_px)
+            oy = int(cy - radius_px)
+
+            # Streetlamps (restrict_home=False) use simple circle without wall occlusion for performance.
+            if not bool(restrict_home):
+                overlay.blit(hole, (int(ox), int(oy)), special_flags=pygame.BLEND_RGBA_SUB)
+                continue
+
+            # Home lamps use BFS for wall occlusion.
             seen: set[tuple[int, int]] = set()
             lit: list[tuple[int, int]] = []
             stack = [(int(lx), int(ly))]
@@ -22677,7 +22804,7 @@ class HardcoreSurvivalState(State):
                 dy = int(y - int(ly))
                 if int(dx * dx + dy * dy) > int(r2):
                     continue
-                if bool(restrict_home) and not self._tile_in_home_world(int(x), int(y)):
+                if not self._tile_in_home_world(int(x), int(y)):
                     continue
                 tid = int(self.world.peek_tile(int(x), int(y)))
                 if int(tid) in door_blocks:
@@ -22686,11 +22813,6 @@ class HardcoreSurvivalState(State):
                     continue
                 lit.append((int(x), int(y)))
                 stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
-
-            base_rect = self._world_tile_screen_rect(int(lx), int(ly), int(cam_x), int(cam_y))
-            cx, cy = int(base_rect.centerx), int(base_rect.centery)
-            ox = int(cx - radius_px)
-            oy = int(cy - radius_px)
 
             mask = pygame.Surface(hole.get_size(), pygame.SRCALPHA)
             mask.fill((0, 0, 0, 0))
@@ -22791,7 +22913,7 @@ class HardcoreSurvivalState(State):
             return
 
         cfg = getattr(self.app, "config", None)
-        radius_tiles = int(getattr(cfg, "lamp_world_radius_tiles", 6)) if cfg is not None else 6
+        radius_tiles = int(getattr(cfg, "lamp_world_radius_tiles", 3)) if cfg is not None else 3
         radius_tiles = int(clamp(int(radius_tiles), 2, 18))
         intensity = float(getattr(cfg, "lamp_world_intensity", 1.0)) if cfg is not None else 1.0
         intensity = float(clamp(float(intensity), 0.0, 3.0))
@@ -22827,7 +22949,17 @@ class HardcoreSurvivalState(State):
         }
 
         for lx, ly, restrict_home in lamps:
-            # BFS mask: light doesn't propagate through walls/solid tiles.
+            base_rect = self._world_tile_screen_rect(int(lx), int(ly), int(cam_x), int(cam_y))
+            cx, cy = int(base_rect.centerx), int(base_rect.centery)
+            ox = int(cx - radius_px)
+            oy = int(cy - radius_px)
+
+            # Streetlamps (restrict_home=False) use simple glow without wall occlusion for performance.
+            if not bool(restrict_home):
+                self._blit_screen(surface, glow, pos=(int(ox), int(oy)), alpha=int(halo_alpha))
+                continue
+
+            # Home lamps use BFS for wall occlusion.
             seen: set[tuple[int, int]] = set()
             lit: list[tuple[int, int]] = []
             stack = [(int(lx), int(ly))]
@@ -22843,7 +22975,7 @@ class HardcoreSurvivalState(State):
                 dy = int(y - int(ly))
                 if int(dx * dx + dy * dy) > int(r2):
                     continue
-                if bool(restrict_home) and not self._tile_in_home_world(int(x), int(y)):
+                if not self._tile_in_home_world(int(x), int(y)):
                     continue
 
                 tid = int(self.world.peek_tile(int(x), int(y)))
@@ -22855,10 +22987,6 @@ class HardcoreSurvivalState(State):
                 stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
 
             # Build a local mask surface (white where visible tiles exist).
-            base_rect = self._world_tile_screen_rect(int(lx), int(ly), int(cam_x), int(cam_y))
-            cx, cy = int(base_rect.centerx), int(base_rect.centery)
-            ox = int(cx - radius_px)
-            oy = int(cy - radius_px)
             mask = pygame.Surface(glow.get_size()).convert()
             mask.fill((0, 0, 0))
             mask_bounds = mask.get_rect()
