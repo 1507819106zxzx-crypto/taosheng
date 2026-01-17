@@ -10469,7 +10469,7 @@ class HardcoreSurvivalState(State):
             if event.key in (pygame.K_F3,):
                 self._debug = not self._debug
                 return
-            if event.key in (pygame.K_F7, pygame.K_F8, pygame.K_F9, pygame.K_F10):
+            if event.key in (pygame.K_F7, pygame.K_F8, pygame.K_F9, pygame.K_F10, pygame.K_F11, pygame.K_F12):
                 if self._adjust_lamp_settings_key(int(event.key)):
                     return
 
