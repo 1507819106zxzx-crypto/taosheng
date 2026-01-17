@@ -325,8 +325,10 @@ class GameConfig:
     # Lighting (tile radius + intensity/opacity scale).
     lamp_world_radius_tiles: int = 5
     lamp_world_intensity: float = 1.0
+    lamp_world_opacity: float = 1.2
     lamp_hr_radius_tiles: int = 5
     lamp_hr_intensity: float = 1.0
+    lamp_hr_opacity: float = 1.0
 
     @classmethod
     def load(cls) -> "GameConfig":
@@ -338,8 +340,10 @@ class GameConfig:
                 show_grid=bool(data.get("show_grid", True)),
                 lamp_world_radius_tiles=int(data.get("lamp_world_radius_tiles", 5)),
                 lamp_world_intensity=float(data.get("lamp_world_intensity", 1.0)),
+                lamp_world_opacity=float(data.get("lamp_world_opacity", 1.2)),
                 lamp_hr_radius_tiles=int(data.get("lamp_hr_radius_tiles", 5)),
                 lamp_hr_intensity=float(data.get("lamp_hr_intensity", 1.0)),
+                lamp_hr_opacity=float(data.get("lamp_hr_opacity", 1.0)),
             )
         except Exception:
             return cls()
@@ -353,8 +357,10 @@ class GameConfig:
                     "show_grid": bool(self.show_grid),
                     "lamp_world_radius_tiles": int(self.lamp_world_radius_tiles),
                     "lamp_world_intensity": float(self.lamp_world_intensity),
+                    "lamp_world_opacity": float(self.lamp_world_opacity),
                     "lamp_hr_radius_tiles": int(self.lamp_hr_radius_tiles),
                     "lamp_hr_intensity": float(self.lamp_hr_intensity),
+                    "lamp_hr_opacity": float(self.lamp_hr_opacity),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -1642,6 +1648,8 @@ class App:
         self.config.lamp_hr_radius_tiles = int(clamp(int(self.config.lamp_hr_radius_tiles), 2, 18))
         self.config.lamp_world_intensity = float(clamp(float(self.config.lamp_world_intensity), 0.0, 3.0))
         self.config.lamp_hr_intensity = float(clamp(float(self.config.lamp_hr_intensity), 0.0, 3.0))
+        self.config.lamp_world_opacity = float(clamp(float(self.config.lamp_world_opacity), 0.2, 3.0))
+        self.config.lamp_hr_opacity = float(clamp(float(self.config.lamp_hr_opacity), 0.2, 3.0))
 
         self.clock = pygame.time.Clock()
         self.render = pygame.Surface((INTERNAL_W, INTERNAL_H))
@@ -4781,6 +4789,7 @@ class HardcoreSurvivalState(State):
         "WKKKKK...............W,,RR,,,,W",
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
     ]
+    _HR_INT_HOME_LAYOUT_VERSION = 2
     _HR_INT_W = 31
     _HR_INT_H = 15
     _HR_INT_TILE_SIZE = 20
@@ -12486,7 +12495,12 @@ class HardcoreSurvivalState(State):
             # Home room was pre-filled in on_enter(); still bind with populate=True so
             # we can also initialize the visible floor loot once.
             self._hr_room_storages_bind(home_room, populate=True)
-        if not isinstance(getattr(self, "hr_home_layout", None), list):  
+        want_ver = int(getattr(self, "_HR_INT_HOME_LAYOUT_VERSION", 0))
+        cur_ver = int(getattr(self, "hr_home_layout_version", 0))
+        if cur_ver != want_ver:
+            self.hr_home_layout = [str(r) for r in self._HR_INT_HOME_LAYOUT]
+            self.hr_home_layout_version = int(want_ver)
+        elif not isinstance(getattr(self, "hr_home_layout", None), list):
             self.hr_home_layout = [str(r) for r in self._HR_INT_HOME_LAYOUT]
         self._hr_int_set_layout(getattr(self, "hr_home_layout", self._HR_INT_HOME_LAYOUT))
         if home_room:
@@ -14778,12 +14792,15 @@ class HardcoreSurvivalState(State):
         radius_tiles = int(clamp(int(radius_tiles), 2, 18))
         intensity = float(getattr(cfg, "lamp_hr_intensity", 1.0)) if cfg is not None else 1.0
         intensity = float(clamp(float(intensity), 0.0, 3.0))
-        if intensity <= 0.01:
+        opacity = float(getattr(cfg, "lamp_hr_opacity", 1.0)) if cfg is not None else 1.0
+        opacity = float(clamp(float(opacity), 0.2, 3.0))
+        glow_intensity = float(clamp(float(intensity) * float(opacity), 0.0, 3.0))
+        if glow_intensity <= 0.01:
             return
 
         # Warm glow (additive), blocked by walls/windows.
         radius_px = int(tile * radius_tiles)
-        glow_key = (int(tile), int(radius_px), int(round(float(intensity) * 100)))
+        glow_key = (int(tile), int(radius_px), int(round(float(glow_intensity) * 100)))
         glow = getattr(self, "_hr_lamp_glow_cache", {}).get(glow_key) if hasattr(self, "_hr_lamp_glow_cache") else None
         if glow is None:
             g = pygame.Surface((radius_px * 2 + 1, radius_px * 2 + 1), pygame.SRCALPHA)
@@ -14795,11 +14812,11 @@ class HardcoreSurvivalState(State):
             ):
                 if r <= 0:
                     continue
-                aa = int(clamp(int(round(float(a) * float(intensity))), 0, 255))
+                aa = int(clamp(int(round(float(a) * float(glow_intensity))), 0, 255))
                 if aa <= 0:
                     continue
                 pygame.draw.circle(g, (255, 240, 200, int(aa)), (radius_px, radius_px), int(r))
-            core_a = int(clamp(int(round(44.0 * float(intensity))), 0, 255))
+            core_a = int(clamp(int(round(44.0 * float(glow_intensity))), 0, 255))
             if core_a > 0:
                 pygame.draw.circle(g, (255, 250, 220, int(core_a)), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
             cache = getattr(self, "_hr_lamp_glow_cache", {})
@@ -18368,9 +18385,11 @@ class HardcoreSurvivalState(State):
         if in_hr:
             radius_name = "lamp_hr_radius_tiles"
             inten_name = "lamp_hr_intensity"
+            op_name = "lamp_hr_opacity"
         else:
             radius_name = "lamp_world_radius_tiles"
             inten_name = "lamp_world_intensity"
+            op_name = "lamp_world_opacity"
 
         if key in (pygame.K_F7, pygame.K_F8):
             delta = -1 if key == pygame.K_F7 else 1
@@ -18389,6 +18408,16 @@ class HardcoreSurvivalState(State):
             setattr(cfg, inten_name, float(cur))
             cfg.save()
             self._set_hint(f"灯强度 {cur:.2f}", seconds=0.9)
+            return True
+
+        if key in (pygame.K_F11, pygame.K_F12):
+            delta = -0.1 if key == pygame.K_F11 else 0.1
+            cur = float(getattr(cfg, op_name, 1.0))
+            cur = float(clamp(float(cur) + float(delta), 0.2, 3.0))
+            cur = float(round(cur, 2))
+            setattr(cfg, op_name, float(cur))
+            cfg.save()
+            self._set_hint(f"灯透明度 {cur:.2f}", seconds=0.9)
             return True
 
         return False
@@ -21962,11 +21991,15 @@ class HardcoreSurvivalState(State):
         radius_tiles = int(clamp(int(radius_tiles), 2, 18))
         intensity = float(getattr(cfg, "lamp_world_intensity", 1.0)) if cfg is not None else 1.0
         intensity = float(clamp(float(intensity), 0.0, 3.0))
+        opacity = float(getattr(cfg, "lamp_world_opacity", 1.2)) if cfg is not None else 1.2
+        opacity = float(clamp(float(opacity), 0.2, 3.0))
         if intensity <= 0.01:
             return
 
         radius_px = int(max(int(ts) * 2, int(ts) * int(radius_tiles)))
-        max_sub_alpha = int(clamp(int(round(float(night_a) * 0.85 * float(intensity))), 0, int(night_a)))
+        max_sub_alpha = int(
+            clamp(int(round(float(night_a) * 0.85 * float(intensity) * float(opacity))), 0, int(night_a))
+        )
         if max_sub_alpha <= 0:
             return
 
@@ -22099,9 +22132,11 @@ class HardcoreSurvivalState(State):
         radius_tiles = int(clamp(int(radius_tiles), 2, 18))
         intensity = float(getattr(cfg, "lamp_world_intensity", 1.0)) if cfg is not None else 1.0
         intensity = float(clamp(float(intensity), 0.0, 3.0))
+        opacity = float(getattr(cfg, "lamp_world_opacity", 1.2)) if cfg is not None else 1.2
+        opacity = float(clamp(float(opacity), 0.2, 3.0))
         # Daylight still keeps a subtle halo.
         day_factor = float(clamp(0.2 + 0.8 * (1.0 - float(daylight)), 0.12, 1.0))
-        glow_intensity = float(clamp(float(intensity) * float(day_factor), 0.0, 3.0))
+        glow_intensity = float(clamp(float(intensity) * float(opacity) * float(day_factor), 0.0, 3.0))
         if glow_intensity <= 0.01:
             return
 
