@@ -4766,16 +4766,16 @@ class HardcoreSurvivalState(State):
     ]
     _HR_INT_HOME_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
-        "WVVV........VVVW.......VVV....W",
-        "W....SSS.......W.......SSS....W",
-        "W.BBBB.........W..BBBB........W",
-        "W.BBBB.........W..BBBB........W",
-        "W..............W........CPPP..W",
-        "WWWWWWWW.WWWWWWWWWWWWWW.WWWWWWW",
+        "WVVV....VVV....VVV....VVV.....W",
+        "W..SSS.......W...W...SSS......W",
+        "W.BBBB.......W...W....BBBB....W",
+        "W.BBBB.......W...W....BBBB....W",
+        "W....SSS.....W...W....PPP.....W",
+        "WWWWWW.WWWWWWW...WWWWWWW.WWWWWW",
         "W.............................W",
         "W..........L..XXX.............I",
         "W.............CCC.............D",
-        "W....................WWWWWWWWWW",
+        "W.............................W",
         "WKKKKK..FF............,,,,,,,,W",
         "WTTT.................WU,RR,,O,W",
         "WKKKKK...............W,,RR,,,,W",
@@ -12644,7 +12644,7 @@ class HardcoreSurvivalState(State):
         chosen: tuple[int, int, str] | None = None
         interact = {"D", "E", "H", "A", "B", "^", "v"}
         if mode == "home":
-            interact.update({"S", "F", "C", "P", "X", "I"})
+            interact.update({"S", "F", "C", "P", "X", "I", "O"})
         for cx, cy in candidates:
             ch = self._hr_int_char_at(cx, cy)
             if ch in interact:
@@ -12782,14 +12782,28 @@ class HardcoreSurvivalState(State):
                 self.hr_int_facing = pygame.Vector2(1 if int(dx) > 0 else -1 if int(dx) < 0 else 0, 0)
             else:
                 self.hr_int_facing = pygame.Vector2(0, 1 if int(dy) > 0 else -1 if int(dy) < 0 else 0)
-            self.player.morale = float(clamp(float(self.player.morale) + 4.0, 0.0, 100.0))
-            self.inv_open = False
-            self.world_map_open = False
-            self.rv_ui_open = False
-            self.home_ui_open = False
-            self._gallery_page = 0
-            self._gallery_open = True
-            self._set_hint("看电视", seconds=1.0)
+            room_id = str(getattr(self, "hr_current_room", "")).strip()
+            tv_states = getattr(self, "hr_room_tvs", None)
+            if not isinstance(tv_states, dict):
+                tv_states = {}
+                self.hr_room_tvs = tv_states
+            if room_id:
+                tv_states[room_id] = not bool(tv_states.get(room_id, False))
+            tv_now = bool(tv_states.get(room_id, False)) if room_id else False
+            if tv_now:
+                self.player.morale = float(clamp(float(self.player.morale) + 2.0, 0.0, 100.0))
+            self._gallery_open = False
+            self._set_hint("电视：开" if tv_now else "电视：关", seconds=1.0)
+            return
+        if ch == "O" and mode == "home":
+            mods = pygame.key.get_mods()
+            is_shift = bool(int(mods) & int(pygame.KMOD_SHIFT))
+            if is_shift:
+                self.player.morale = float(clamp(float(self.player.morale) + 1.0, 0.0, 100.0))
+                self._set_hint("拉屎完成", seconds=1.0)
+            else:
+                self.player.morale = float(clamp(float(self.player.morale) + 0.5, 0.0, 100.0))
+                self._set_hint("小便完成（Shift+E 拉屎）", seconds=1.2)
             return
         if ch == "C" and mode == "home":
             if str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "hr":
@@ -12825,6 +12839,35 @@ class HardcoreSurvivalState(State):
             else:
                 ax = (float(_cx) + 0.5) * float(tile)
                 ay = (float(_cy) + 0.5) * float(tile)
+            # Prefer a nearby walkable tile so sitting never snaps into walls/outside.
+            prefer = pygame.Vector2(self.hr_int_pos)
+            cand: list[tuple[float, int, int]] = []
+            for sx, sy in (cells if cells else [(int(_cx), int(_cy))]):
+                for dx2, dy2 in (
+                    (1, 0),
+                    (-1, 0),
+                    (0, 1),
+                    (0, -1),
+                    (1, 1),
+                    (1, -1),
+                    (-1, 1),
+                    (-1, -1),
+                ):
+                    nx = int(sx) + int(dx2)
+                    ny = int(sy) + int(dy2)
+                    if not (0 <= int(nx) < int(w) and 0 <= int(ny) < int(h)):
+                        continue
+                    if self._hr_int_solid_tile(self._hr_int_char_at(int(nx), int(ny))):
+                        continue
+                    cxp = (float(nx) + 0.5) * float(tile)
+                    cyp = (float(ny) + 0.5) * float(tile)
+                    d2 = float((cxp - prefer.x) ** 2 + (cyp - prefer.y) ** 2)
+                    cand.append((d2, int(nx), int(ny)))
+            if cand:
+                cand.sort(key=lambda v: v[0])
+                nx, ny = int(cand[0][1]), int(cand[0][2])
+                ax = (float(nx) + 0.5) * float(tile)
+                ay = (float(ny) + 0.5) * float(tile)
             self._set_player_pose("sit", space="hr", anchor=(ax, ay), seconds=0.0)
             self._set_hint("坐下休息：移动键起身", seconds=1.4)
             return
@@ -14838,6 +14881,12 @@ class HardcoreSurvivalState(State):
         if mode == "home" and room_id:
             light_on = bool(lights.get(str(room_id), True))
 
+        tv_states = getattr(self, "hr_room_tvs", None)
+        if not isinstance(tv_states, dict):
+            tv_states = {}
+            self.hr_room_tvs = tv_states
+        tv_on = bool(tv_states.get(str(room_id), False)) if (mode == "home" and room_id) else False
+
         title = "高层住宅"
         home_room = str(getattr(self, "home_highrise_room", "")).strip()
         cur_room = str(getattr(self, "hr_current_room", "")).strip()
@@ -15115,6 +15164,27 @@ class HardcoreSurvivalState(State):
                         1,
                     )
                     pygame.draw.circle(surface, bulb_col, (int(r.centerx), int(shade.bottom - 1)), 2)
+                    continue
+
+                if ch == "O":
+                    # Toilet.
+                    porcelain = (230, 232, 238)
+                    porcelain2 = (206, 210, 220)
+                    bowl = pygame.Rect(r.x + 4, r.y + 6, r.w - 8, r.h - 10)
+                    tank = pygame.Rect(r.x + 6, r.y + 2, r.w - 12, 5)
+                    base = pygame.Rect(r.x + 5, r.bottom - 6, r.w - 10, 4)
+                    sh = pygame.Surface((bowl.w, bowl.h), pygame.SRCALPHA)
+                    pygame.draw.ellipse(sh, (0, 0, 0, 80), sh.get_rect())
+                    surface.blit(sh, (bowl.x + 1, bowl.y + 2))
+                    pygame.draw.ellipse(surface, porcelain, bowl)
+                    pygame.draw.ellipse(surface, outline, bowl, 1)
+                    pygame.draw.rect(surface, porcelain2, tank, border_radius=2)
+                    pygame.draw.rect(surface, outline, tank, 1, border_radius=2)
+                    pygame.draw.rect(surface, porcelain2, base, border_radius=2)
+                    pygame.draw.rect(surface, outline, base, 1, border_radius=2)
+                    hole = bowl.inflate(-6, -6)
+                    pygame.draw.ellipse(surface, (30, 30, 36), hole)
+                    pygame.draw.ellipse(surface, outline, hole, 1)
                     continue
 
                 if ch == "E":
@@ -15658,8 +15728,22 @@ class HardcoreSurvivalState(State):
                     screen = tv.inflate(-2, -2)
                     pygame.draw.rect(surface, (14, 14, 18), screen, border_radius=4)
                     pygame.draw.rect(surface, steel2, screen, 1, border_radius=4)
-                    glow = pygame.Rect(screen.x + 4, screen.y + 4, max(5, int(screen.w * 0.25)), max(4, int(screen.h * 0.22)))
-                    pygame.draw.rect(surface, (120, 200, 240), glow, border_radius=2)
+                    if tv_on:
+                        # Simple animated "show" on the TV.
+                        surface.fill((18, 20, 28), screen)
+                        for iy in range(screen.y + 2, screen.bottom - 2, 4):
+                            col = (28, 32, 44) if ((iy // 4) % 2) == 0 else (22, 26, 36)
+                            surface.fill(col, pygame.Rect(screen.x + 2, iy, screen.w - 4, 1))
+                        phase = int(float(self.world_time_s) * 3.0)
+                        span = max(1, int(screen.w - 8))
+                        px = int(screen.x + 4 + (phase * 2) % span)
+                        py = int(screen.y + screen.h // 2 - 2)
+                        pygame.draw.rect(surface, (200, 220, 240), pygame.Rect(px, py, 2, 2))
+                        pygame.draw.rect(surface, (170, 190, 210), pygame.Rect(px, py + 2, 2, 3))
+                        pygame.draw.rect(surface, (140, 160, 190), pygame.Rect(px - 1, py + 5, 4, 1))
+                    else:
+                        glow = pygame.Rect(screen.x + 4, screen.y + 4, max(5, int(screen.w * 0.25)), max(4, int(screen.h * 0.22)))
+                        pygame.draw.rect(surface, (120, 200, 240), glow, border_radius=2)
                     pygame.draw.line(surface, steel2, (screen.x + 2, screen.bottom - 3), (screen.right - 3, screen.bottom - 3), 1)
                     # Game console / set-top box.
                     box = pygame.Rect(int(stand.centerx - 10), int(stand.y + 3), 20, 6)
@@ -15956,7 +16040,7 @@ class HardcoreSurvivalState(State):
 
             tx, ty = self._hr_int_player_tile()
             candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
-            interact = {"D", "B", "S", "F", "C"}
+            interact = {"D", "B", "S", "F", "C", "O"}
             for cx, cy in candidates:
                 ch = self._hr_int_char_at(cx, cy)
                 if ch not in interact:
@@ -19259,6 +19343,43 @@ class HardcoreSurvivalState(State):
         ax = (float(min_x + max_x + 1) * float(self.TILE_SIZE)) * 0.5
         ay = (float(min_y + max_y + 1) * float(self.TILE_SIZE)) * 0.5
 
+        # Prefer an adjacent walkable tile so sitting never snaps into walls/outside.
+        prefer = pygame.Vector2(self.player.pos)
+        seat_building = self._peek_building_at_tile(int(cx), int(cy))
+        need_home = bool(self._tile_in_home_world(int(cx), int(cy)))
+        cand: list[tuple[float, int, int]] = []
+        for sx, sy in cells:
+            for dx2, dy2 in (
+                (1, 0),
+                (-1, 0),
+                (0, 1),
+                (0, -1),
+                (1, 1),
+                (1, -1),
+                (-1, 1),
+                (-1, -1),
+            ):
+                nx = int(sx) + int(dx2)
+                ny = int(sy) + int(dy2)
+                if need_home and not self._tile_in_home_world(int(nx), int(ny)):
+                    continue
+                if seat_building is not None:
+                    nb = self._peek_building_at_tile(int(nx), int(ny))
+                    if nb is None or tuple(nb[:4]) != tuple(seat_building[:4]):
+                        continue
+                tid2 = int(self.world.get_tile(int(nx), int(ny)))
+                if bool(self._tile_solid(int(tid2))):
+                    continue
+                cxp = (float(nx) + 0.5) * float(self.TILE_SIZE)
+                cyp = (float(ny) + 0.5) * float(self.TILE_SIZE)
+                d2 = float((cxp - prefer.x) ** 2 + (cyp - prefer.y) ** 2)
+                cand.append((d2, int(nx), int(ny)))
+        if cand:
+            cand.sort(key=lambda v: v[0])
+            nx, ny = int(cand[0][1]), int(cand[0][2])
+            ax = (float(nx) + 0.5) * float(self.TILE_SIZE)
+            ay = (float(ny) + 0.5) * float(self.TILE_SIZE)
+
         dx = int(cx) - int(tx)
         dy = int(cy) - int(ty)
         if abs(int(dx)) >= abs(int(dy)):
@@ -21931,13 +22052,14 @@ class HardcoreSurvivalState(State):
         end_ty: int,
     ) -> None:
         overlay = self._make_day_night_overlay_surface(in_rv=False)
-        if overlay is None:
-            return
-        try:
-            self._carve_world_lamps_from_night_overlay(overlay, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
-        except Exception:
-            pass
-        surface.blit(overlay, (0, 0))
+        if overlay is not None:
+            try:
+                self._carve_world_lamps_from_night_overlay(overlay, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
+            except Exception:
+                pass
+            surface.blit(overlay, (0, 0))
+        # Always allow a soft halo, even during the day.
+        self._draw_world_lamp_glows(surface, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
 
     def _draw_world_lamp_glows(
         self,
@@ -21955,8 +22077,6 @@ class HardcoreSurvivalState(State):
             return
 
         daylight, _tday = self._daylight_amount()
-        if float(daylight) >= 0.98:
-            return
 
         ts = int(self.TILE_SIZE)
         if ts <= 0:
@@ -21979,12 +22099,15 @@ class HardcoreSurvivalState(State):
         radius_tiles = int(clamp(int(radius_tiles), 2, 18))
         intensity = float(getattr(cfg, "lamp_world_intensity", 1.0)) if cfg is not None else 1.0
         intensity = float(clamp(float(intensity), 0.0, 3.0))
-        if intensity <= 0.01:
+        # Daylight still keeps a subtle halo.
+        day_factor = float(clamp(0.2 + 0.8 * (1.0 - float(daylight)), 0.12, 1.0))
+        glow_intensity = float(clamp(float(intensity) * float(day_factor), 0.0, 3.0))
+        if glow_intensity <= 0.01:
             return
 
         # Lamp glow (additive) with wall-blocked mask.
         radius_px = int(max(int(ts) * 2, int(ts) * int(radius_tiles)))
-        glow_key = (int(ts), int(radius_px), int(round(float(intensity) * 100)))
+        glow_key = (int(ts), int(radius_px), int(round(float(glow_intensity) * 100)))
         glow = getattr(self, "_lamp_glow_cache", {}).get(glow_key) if hasattr(self, "_lamp_glow_cache") else None
         if glow is None:
             g = pygame.Surface((radius_px * 2 + 1, radius_px * 2 + 1), pygame.SRCALPHA)
@@ -21997,11 +22120,11 @@ class HardcoreSurvivalState(State):
             ):
                 if r <= 0:
                     continue
-                aa = int(clamp(int(round(float(a) * float(intensity))), 0, 255))
+                aa = int(clamp(int(round(float(a) * float(glow_intensity))), 0, 255))
                 if aa <= 0:
                     continue
                 pygame.draw.circle(g, (255, 240, 180, int(aa)), (radius_px, radius_px), int(r))
-            core_a = int(clamp(int(round(60.0 * float(intensity))), 0, 255))
+            core_a = int(clamp(int(round(60.0 * float(glow_intensity))), 0, 255))
             if core_a > 0:
                 pygame.draw.circle(g, (255, 250, 210, core_a), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
             cache = getattr(self, "_lamp_glow_cache", {})
