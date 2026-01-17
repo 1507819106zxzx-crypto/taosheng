@@ -14882,7 +14882,7 @@ class HardcoreSurvivalState(State):
 
             tmp = glow.copy()
             tmp.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            surface.blit(tmp, (int(ox), int(oy)), special_flags=pygame.BLEND_RGBA_ADD)
+            self._blit_screen(surface, tmp, pos=(int(ox), int(oy)))
 
     def _draw_hr_interior_scene(self, surface: pygame.Surface) -> None:  
         surface.fill((10, 10, 14))
@@ -21966,6 +21966,34 @@ class HardcoreSurvivalState(State):
             return
         surface.blit(overlay, (0, 0))
 
+    def _blit_screen(self, surface: pygame.Surface, src: pygame.Surface, *, pos: tuple[int, int]) -> None:
+        src_rect = src.get_rect(topleft=(int(pos[0]), int(pos[1])))
+        clip = src_rect.clip(surface.get_rect())
+        if clip.w <= 0 or clip.h <= 0:
+            return
+        dx = int(clip.x - src_rect.x)
+        dy = int(clip.y - src_rect.y)
+        src_sub = src.subsurface(pygame.Rect(int(dx), int(dy), int(clip.w), int(clip.h)))
+        dst_sub = surface.subsurface(clip)
+
+        cache = getattr(self, "_screen_white_cache", {})
+        white = cache.get((int(clip.w), int(clip.h)))
+        if white is None:
+            white = pygame.Surface((int(clip.w), int(clip.h))).convert()
+            white.fill((255, 255, 255))
+            cache[(int(clip.w), int(clip.h))] = white
+            self._screen_white_cache = cache
+
+        inv_dst = white.copy()
+        inv_dst.blit(dst_sub, (0, 0), special_flags=pygame.BLEND_RGB_SUB)
+        inv_src = white.copy()
+        inv_src.blit(src_sub, (0, 0), special_flags=pygame.BLEND_RGB_SUB)
+        inv_dst.blit(inv_src, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+
+        out = white.copy()
+        out.blit(inv_dst, (0, 0), special_flags=pygame.BLEND_RGB_SUB)
+        surface.blit(out, clip.topleft)
+
     def _carve_world_lamps_from_night_overlay(
         self,
         overlay: pygame.Surface,
@@ -22237,7 +22265,7 @@ class HardcoreSurvivalState(State):
 
             tmp = glow.copy()
             tmp.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            surface.blit(tmp, (int(ox), int(oy)), special_flags=pygame.BLEND_RGBA_ADD)
+            self._blit_screen(surface, tmp, pos=(int(ox), int(oy)))
 
     def _season_index_for_day(self, day: int) -> int:
         return ((int(day) - 1) // max(1, int(self.SEASON_LENGTH_DAYS))) % len(self.SEASONS)
