@@ -2265,6 +2265,7 @@ class HardcoreSurvivalState(State):
     T_TOILET = 35
     T_CABINET = 36
     T_SINK = 37
+    T_DOOR_BROKEN = 38
 
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
@@ -2331,6 +2332,7 @@ class HardcoreSurvivalState(State):
         T_TOILET: _TileDef("toilet", (240, 240, 245), solid=True),
         T_CABINET: _TileDef("cabinet", (92, 72, 54), solid=True),
         T_SINK: _TileDef("sink", (184, 188, 196), solid=True),
+        T_DOOR_BROKEN: _TileDef("door_broken", (120, 96, 52), solid=False),
     }
 
     _PLAYER_PAL = {
@@ -10071,6 +10073,8 @@ class HardcoreSurvivalState(State):
         self.inventory = HardcoreSurvivalState._Inventory(slots=[None] * 16)
         self.inv_open = False
         self.inv_index = 0
+        self.pause_open = False
+        self.pause_rects: list[tuple[pygame.Rect, str]] = []
         self.rv_storage = HardcoreSurvivalState._Inventory(slots=[None] * 24, cols=6)
         self.rv_ui_open = False
         self.rv_ui_focus: str = "map"  # map | player | storage
@@ -10161,6 +10165,12 @@ class HardcoreSurvivalState(State):
         self.cam_y = 0
         self._reload_lock_dir: pygame.Vector2 | None = None
         self.rv_interior = False
+        # RV "interior" (world-map camera, NOT full-screen panel).
+        self.rv_world_interior = False
+        self._rv_world_return_pos: pygame.Vector2 | None = None
+        self._rv_world_int_key = (9000, 9000, 10, 8)  # tx0, ty0, w, h (tiles)
+        self._rv_world_int_exit_tile: tuple[int, int] | None = None
+        self._rv_world_int_setup_done = False
         self.rv_int_pos = pygame.Vector2(0, 0)
         self.rv_int_vel = pygame.Vector2(0, 0)
         self.rv_int_facing = pygame.Vector2(0, 1)
@@ -10199,6 +10209,9 @@ class HardcoreSurvivalState(State):
         self.world_ctx_idle_s = 0.0
         self.world_ctx_idle_target = None
         self.world_ctx_suppressed = None
+        self.lamp_cfg_open = False
+        self.lamp_cfg_target: tuple[int, int] | None = None
+        self.lamp_cfg_rects: list[tuple[pygame.Rect, str]] = []
         self._last_cam_draw = (0, 0)
         self.world_tv_states: dict[tuple[int, int], bool] = {}
 
@@ -10357,6 +10370,8 @@ class HardcoreSurvivalState(State):
         self.speech_left = 0.0
         # Timed "use toilet" action (world-map home).
         self.toilet_task: dict[str, object] | None = None
+        # Simple "held in hand" item (for carrying tools like cups).
+        self.held_item: HardcoreSurvivalState._ItemStack | None = None
         self.muzzle_flash_left = 0.0
         self.noise_left = 0.0
         self.noise_radius = 0.0
@@ -10406,19 +10421,25 @@ class HardcoreSurvivalState(State):
         self.world_map_drag_center: tuple[int, int] = (0, 0)
 
     def handle_event(self, event: pygame.event.Event) -> None:
-        if event.type == pygame.KEYDOWN:
-            if event.key in (
-                pygame.K_F7,
-                pygame.K_F8,
-                pygame.K_F9,
-                pygame.K_F10,
-                pygame.K_F11,
-                pygame.K_F12,
-                pygame.K_LEFTBRACKET,
-                pygame.K_RIGHTBRACKET,
-            ):
-                if self._adjust_lamp_settings_key(int(event.key)):
-                    return
+        if bool(getattr(self, "pause_open", False)):
+            if event.type == pygame.KEYDOWN and int(event.key) in (pygame.K_ESCAPE,):
+                self._pause_close_menu()
+                return
+            if event.type == pygame.KEYDOWN and int(event.key) in (pygame.K_RETURN, pygame.K_SPACE):
+                self._pause_activate("resume")
+                return
+            if event.type == pygame.MOUSEBUTTONDOWN and int(getattr(event, "button", 0)) == 1:
+                self._handle_pause_menu_mouse(event)
+                return
+            return
+
+        if bool(getattr(self, "lamp_cfg_open", False)):
+            if event.type == pygame.KEYDOWN and int(event.key) in (pygame.K_ESCAPE,):
+                self._lamp_cfg_close()
+                return
+            if event.type == pygame.MOUSEBUTTONDOWN and int(getattr(event, "button", 0)) == 1:
+                self._handle_lamp_cfg_mouse(event)
+                return
 
         if getattr(self, "world_map_open", False):
             if event.type == pygame.KEYDOWN:
@@ -10632,7 +10653,7 @@ class HardcoreSurvivalState(State):
                 if self.inv_open:
                     self.inv_open = False
                 else:
-                    self.app.set_state(MainMenuState(self.app))
+                    self._pause_open_menu()
                 return
             if event.key in (pygame.K_TAB,):
                 self.inv_open = not self.inv_open
@@ -10655,7 +10676,11 @@ class HardcoreSurvivalState(State):
                 self._toggle_barricade()
                 return
             if not self.inv_open and event.key in (pygame.K_h,):
-                self._teleport_to_bathroom()
+                # H: near RV -> enter/exit RV interior; elsewhere -> quick home teleport.
+                if bool(getattr(self, "rv_world_interior", False)) or self._can_access_rv():
+                    self._rv_world_interior_toggle()
+                else:
+                    self._teleport_to_bathroom()
                 return
             if not self.inv_open and event.key in (pygame.K_g,):
                 self._rv_interior_toggle()
@@ -10953,6 +10978,100 @@ class HardcoreSurvivalState(State):
         if self.mount == "rv":
             return True
         return (self.player.pos - self.rv.pos).length_squared() <= (22.0 * 22.0)
+
+    def _ensure_rv_world_interior_built(self) -> None:
+        if bool(getattr(self, "_rv_world_int_setup_done", False)):
+            return
+        key = getattr(self, "_rv_world_int_key", None)
+        if not (isinstance(key, tuple) and len(key) == 4):
+            return
+        tx0, ty0, w, h = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+        if int(w) < 6 or int(h) < 6:
+            return
+
+        # Simple tiny RV room: walls + floor + 1 bed + an "exit tile".
+        for yy in range(int(h)):
+            for xx in range(int(w)):
+                wx = int(tx0 + xx)
+                wy = int(ty0 + yy)
+                if xx == 0 or yy == 0 or xx == int(w) - 1 or yy == int(h) - 1:
+                    self._world_set_tile(int(wx), int(wy), int(self.T_WALL))
+                else:
+                    self._world_set_tile(int(wx), int(wy), int(self.T_FLOOR))
+
+        # Exit marker tile (press E/H to leave).
+        exit_tx = int(tx0 + (w // 2))
+        exit_ty = int(ty0 + h - 2)
+        self._rv_world_int_exit_tile = (int(exit_tx), int(exit_ty))
+        self._world_set_tile(int(exit_tx), int(exit_ty), int(self.T_DOOR))
+
+        # Single bed.
+        bed_tx = int(tx0 + 2)
+        bed_ty = int(ty0 + 2)
+        self._world_set_tile(int(bed_tx), int(bed_ty), int(self.T_BED))
+
+        self._rv_world_int_setup_done = True
+
+    def _rv_world_interior_toggle(self) -> None:
+        if bool(getattr(self, "rv_world_interior", False)):
+            self._rv_world_interior_exit()
+            return
+        if not self._can_access_rv():
+            self._set_hint("靠近房车再按H", seconds=1.2)
+            return
+        if self.mount == "rv" and abs(float(getattr(self.rv, "speed", 0.0))) > 1.0:
+            self._set_hint("先停好车再进去", seconds=1.2)
+            return
+        self._rv_world_interior_enter()
+
+    def _rv_world_interior_enter(self) -> None:
+        self.inv_open = False
+        self.world_map_open = False
+        self._gallery_open = False
+        self.rv_ui_open = False
+        self._clear_player_pose()
+        self.player.vel.update(0, 0)
+        self.player.walk_phase *= 0.85
+
+        self._rv_world_return_pos = pygame.Vector2(self.player.pos)
+        self.mount = None
+        self.rv.vel.update(0, 0)
+        self.bike.vel.update(0, 0)
+
+        self._ensure_rv_world_interior_built()
+        key = getattr(self, "_rv_world_int_key", None)
+        if not (isinstance(key, tuple) and len(key) == 4):
+            return
+        tx0, ty0, w, h = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+        spawn_tx = int(tx0 + (w // 2))
+        spawn_ty = int(ty0 + h - 3)
+        self.player.pos.update((float(spawn_tx) + 0.5) * float(self.TILE_SIZE), (float(spawn_ty) + 0.5) * float(self.TILE_SIZE))
+        self.rv_world_interior = True
+        self._set_hint("房车内部：E互动 / H退出", seconds=1.4)
+
+    def _rv_world_interior_exit(self) -> None:
+        if not bool(getattr(self, "rv_world_interior", False)):
+            return
+        self._clear_player_pose()
+        self.rv_world_interior = False
+        self.player.vel.update(0, 0)
+        ret = getattr(self, "_rv_world_return_pos", None)
+        if isinstance(ret, pygame.Vector2):
+            self.player.pos.update(ret)
+        self._rv_world_return_pos = None
+        self._set_hint("离开房车", seconds=0.9)
+
+    def _try_exit_rv_world_interior(self) -> bool:
+        if not bool(getattr(self, "rv_world_interior", False)):
+            return False
+        ex = getattr(self, "_rv_world_int_exit_tile", None)
+        if not (isinstance(ex, tuple) and len(ex) == 2):
+            return False
+        tx, ty = self._player_tile()
+        if abs(int(tx) - int(ex[0])) <= 1 and abs(int(ty) - int(ex[1])) <= 1:
+            self._rv_world_interior_exit()
+            return True
+        return False
 
     def _rv_int_find(self, ch: str) -> tuple[int, int] | None:
         ch = str(ch)[:1]
@@ -18484,6 +18603,9 @@ class HardcoreSurvivalState(State):
         if float(getattr(self, "world_ctx_cooldown_left", 0.0)) > 0.0:
             self.world_ctx_cooldown_left = max(0.0, float(getattr(self, "world_ctx_cooldown_left", 0.0)) - dt)
 
+        if bool(getattr(self, "pause_open", False)):
+            return
+
         # Auto-dismiss the in-world context bubble if it stays up without clicks.
         try:
             if bool(getattr(self, "world_ctx_open", False)) and isinstance(getattr(self, "world_ctx_target", None), tuple):
@@ -19065,6 +19187,210 @@ class HardcoreSurvivalState(State):
     def _set_hint(self, text: str, *, seconds: float = 1.2) -> None:    
         self.hint_text = str(text)
         self.hint_left = float(seconds)
+
+    def _pause_open_menu(self) -> None:
+        self.pause_open = True
+        self.pause_rects = []
+        self.inv_open = False
+        self.world_map_open = False
+        self.rv_ui_open = False
+        self.home_ui_open = False
+        self.world_elevator_ui_open = False
+        self.hr_elevator_ui_open = False
+        self.sch_elevator_ui_open = False
+        self._gallery_open = False
+        self.lamp_cfg_open = False
+        self.lamp_cfg_target = None
+        self.lamp_cfg_rects = []
+        # Close any world context bubble so it doesn't overlap the menu.
+        self.world_ctx_open = False
+        self.world_ctx_target = None
+        self.world_ctx_rects = []
+
+    def _pause_close_menu(self) -> None:
+        self.pause_open = False
+        self.pause_rects = []
+
+    def _pause_activate(self, action: str) -> None:
+        action = str(action)
+        if action == "resume":
+            self._pause_close_menu()
+            return
+        if action == "menu":
+            self._pause_close_menu()
+            self.app.set_state(MainMenuState(self.app))
+            return
+        if action == "quit":
+            self._pause_close_menu()
+            try:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            except Exception:
+                pass
+            return
+
+    def _handle_pause_menu_mouse(self, event: pygame.event.Event) -> bool:
+        if not bool(getattr(self, "pause_open", False)):
+            return False
+        if not hasattr(event, "pos"):
+            return False
+        mp = self.app.screen_to_internal(event.pos)
+        if mp is None:
+            return False
+        mx, my = int(mp[0]), int(mp[1])
+        for r, act in list(getattr(self, "pause_rects", []) or []):
+            if isinstance(r, pygame.Rect) and r.collidepoint(mx, my):
+                self._pause_activate(str(act))
+                return True
+        return True
+
+    def _draw_pause_menu(self, surface: pygame.Surface) -> None:
+        if not bool(getattr(self, "pause_open", False)):
+            return
+
+        overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 170))
+        surface.blit(overlay, (0, 0))
+
+        panel_w = 240
+        panel_h = 140
+        panel = pygame.Rect(0, 0, panel_w, panel_h)
+        panel.center = (INTERNAL_W // 2, INTERNAL_H // 2)
+        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=10)
+        pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=10)
+
+        draw_text(surface, self.app.font_m, "暂停", (panel.centerx, panel.top + 18), pygame.Color(240, 240, 240), anchor="center")
+
+        buttons = [("继续", "resume"), ("回到主菜单", "menu"), ("退出游戏", "quit")]
+        btn_w = panel.w - 40
+        btn_h = 22
+        gap = 8
+        x0 = panel.x + 20
+        y0 = panel.y + 38
+
+        rects: list[tuple[pygame.Rect, str]] = []
+        for i, (label, act) in enumerate(buttons):
+            br = pygame.Rect(int(x0), int(y0 + i * (btn_h + gap)), int(btn_w), int(btn_h))
+            pygame.draw.rect(surface, (28, 28, 34), br, border_radius=8)
+            pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=8)
+            draw_text(surface, self.app.font_s, label, (br.centerx, br.centery - 1), pygame.Color(230, 230, 240), anchor="center")
+            rects.append((br, str(act)))
+        self.pause_rects = rects
+
+    def _lamp_cfg_close(self) -> None:
+        self.lamp_cfg_open = False
+        self.lamp_cfg_target = None
+        self.lamp_cfg_rects = []
+
+    def _lamp_cfg_activate(self, action: str) -> None:
+        action = str(action)
+        if action == "close":
+            self._lamp_cfg_close()
+            return
+        cfg = getattr(self.app, "config", None)
+        if not isinstance(cfg, GameConfig):
+            return
+
+        if action in ("r-", "r+"):
+            delta = -1 if action == "r-" else 1
+            cur = int(getattr(cfg, "lamp_world_radius_tiles", 3))
+            cur = int(clamp(int(cur) + int(delta), 2, 18))
+            cfg.lamp_world_radius_tiles = int(cur)
+            cfg.save()
+            self._set_hint(f"灯范围: {cur}", seconds=0.8)
+            return
+        if action in ("i-", "i+"):
+            delta = -0.1 if action == "i-" else 0.1
+            cur = float(getattr(cfg, "lamp_world_intensity", 1.0))
+            cur = float(clamp(float(cur) + float(delta), 0.0, 3.0))
+            cur = float(round(cur, 2))
+            cfg.lamp_world_intensity = float(cur)
+            cfg.save()
+            self._set_hint(f"灯亮度: {cur:.2f}", seconds=0.8)
+            return
+        if action in ("h-", "h+"):
+            delta = -0.05 if action == "h-" else 0.05
+            cur = float(getattr(cfg, "lamp_world_halo", 0.35))
+            cur = float(clamp(float(cur) + float(delta), 0.0, 1.5))
+            cur = float(round(cur, 2))
+            cfg.lamp_world_halo = float(cur)
+            cfg.save()
+            self._set_hint(f"光晕: {cur:.2f}", seconds=0.8)
+            return
+
+    def _handle_lamp_cfg_mouse(self, event: pygame.event.Event) -> bool:
+        if not bool(getattr(self, "lamp_cfg_open", False)):
+            return False
+        if not hasattr(event, "pos"):
+            return False
+        mp = self.app.screen_to_internal(event.pos)
+        if mp is None:
+            return False
+        mx, my = int(mp[0]), int(mp[1])
+        rects = list(getattr(self, "lamp_cfg_rects", []) or [])
+        for r, act in rects:
+            if isinstance(r, pygame.Rect) and r.collidepoint(mx, my):
+                self._lamp_cfg_activate(str(act))
+                return True
+        # Click outside closes it.
+        self._lamp_cfg_close()
+        return True
+
+    def _draw_lamp_cfg_ui(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        if not bool(getattr(self, "lamp_cfg_open", False)):
+            return
+        if bool(getattr(self, "pause_open", False)):
+            return
+        tgt = getattr(self, "lamp_cfg_target", None)
+        if not (isinstance(tgt, tuple) and len(tgt) == 2):
+            return
+        cfg = getattr(self.app, "config", None)
+        if not isinstance(cfg, GameConfig):
+            return
+
+        tx, ty = int(tgt[0]), int(tgt[1])
+        tile_rect = self._world_tile_screen_rect(int(tx), int(ty), int(cam_x), int(cam_y))
+
+        panel_w = 220
+        panel_h = 96
+        px = int(tile_rect.centerx - panel_w // 2)
+        py = int(tile_rect.top - panel_h - 8)
+        if py < 4:
+            py = int(tile_rect.bottom + 8)
+        px = int(clamp(int(px), 4, int(INTERNAL_W - 4 - panel_w)))
+        py = int(clamp(int(py), 4, int(INTERNAL_H - 4 - panel_h)))
+        panel = pygame.Rect(px, py, panel_w, panel_h)
+        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=10)
+        pygame.draw.rect(surface, (90, 90, 110), panel, 1, border_radius=10)
+
+        draw_text(surface, self.app.font_s, "灯设置", (panel.centerx, panel.y + 10), pygame.Color(230, 230, 240), anchor="center")
+
+        rows = [
+            ("范围", int(getattr(cfg, "lamp_world_radius_tiles", 3)), "r-", "r+"),
+            ("亮度", float(getattr(cfg, "lamp_world_intensity", 1.0)), "i-", "i+"),
+            ("光晕", float(getattr(cfg, "lamp_world_halo", 0.35)), "h-", "h+"),
+        ]
+        rects: list[tuple[pygame.Rect, str]] = []
+        y = panel.y + 24
+        for name, val, a_dec, a_inc in rows:
+            draw_text(surface, self.app.font_s, f"{name}: {val}", (panel.x + 10, y + 8), pygame.Color(200, 200, 210), anchor="midleft")
+            bw = 26
+            bh = 18
+            dec = pygame.Rect(panel.right - 10 - bw * 2 - 6, y, bw, bh)
+            inc = pygame.Rect(panel.right - 10 - bw, y, bw, bh)
+            for br, lbl, act in ((dec, "-", a_dec), (inc, "+", a_inc)):
+                pygame.draw.rect(surface, (28, 28, 34), br, border_radius=6)
+                pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=6)
+                draw_text(surface, self.app.font_s, lbl, (br.centerx, br.centery - 1), pygame.Color(230, 230, 240), anchor="center")
+                rects.append((br, str(act)))
+            y += 24
+
+        close = pygame.Rect(panel.right - 28, panel.y + 6, 20, 16)
+        pygame.draw.rect(surface, (28, 28, 34), close, border_radius=6)
+        pygame.draw.rect(surface, (160, 160, 180), close, 1, border_radius=6)
+        draw_text(surface, self.app.font_s, "x", (close.centerx, close.centery - 1), pygame.Color(230, 230, 240), anchor="center")
+        rects.append((close, "close"))
+
+        self.lamp_cfg_rects = rects
 
     def _adjust_lamp_settings_key(self, key: int) -> bool:
         cfg = getattr(self.app, "config", None)
@@ -20289,6 +20615,16 @@ class HardcoreSurvivalState(State):
             t = int(self.world.get_tile(int(cx), int(cy)))
             if t not in (int(self.T_DOOR_LOCKED), int(self.T_DOOR_HOME_LOCKED)):
                 continue
+
+            # Door rules:
+            # - The green home door: key_house only.
+            # - Other locked doors: can't be unlocked here (unless they're broken).
+            if int(t) == int(self.T_DOOR_LOCKED):
+                self._set_hint("别人的门锁住了", seconds=1.2)
+                return True
+            if int(self.inventory.count("key_house")) <= 0:
+                self._set_hint("需要我家的钥匙", seconds=1.1)
+                return True
             has_key = int(self.inventory.count("key_house")) > 0
             has_crowbar = int(self.inventory.count("crowbar")) > 0
             if not (has_key or has_crowbar):
@@ -20383,6 +20719,8 @@ class HardcoreSurvivalState(State):
                 return
             self._clear_player_pose()
             self._set_hint("起身", seconds=0.8)
+            return
+        if self._try_exit_rv_world_interior():
             return
         if self._try_use_highrise_elevator():
             return
@@ -20628,6 +20966,15 @@ class HardcoreSurvivalState(State):
         if action == "light":
             self._try_toggle_home_light_world()
             return
+        if action == "lamp_cfg":
+            self.lamp_cfg_open = True
+            self.lamp_cfg_target = (int(tx), int(ty))
+            self.lamp_cfg_rects = []
+            # Close the context menu so it doesn't overlap.
+            self.world_ctx_open = False
+            self.world_ctx_target = None
+            self.world_ctx_rects = []
+            return
         if action == "tv":
             self._try_watch_tv_world()
             return
@@ -20765,6 +21112,13 @@ class HardcoreSurvivalState(State):
             return False
         if int(self.world.get_tile(int(tx), int(ty))) != int(self.T_SINK):
             return False
+
+        held = getattr(self, "held_item", None)
+        if isinstance(held, HardcoreSurvivalState._ItemStack) and str(getattr(held, "item_id", "")) == "cup":
+            held.item_id = "cup_water"
+            held.qty = 1
+            self._speech_say("接了一杯水", seconds=1.1)
+            return True
 
         inv = getattr(self, "inventory", None)
         if not isinstance(inv, HardcoreSurvivalState._Inventory):
@@ -20953,26 +21307,20 @@ class HardcoreSurvivalState(State):
                 chosen = (int(cx), int(cy), int(t))
                 break
         if chosen is None:
-            for cx, cy in candidates:
-                t = int(self.world.get_tile(int(cx), int(cy)))
-                if t in (int(self.T_DOOR), int(self.T_DOOR_LOCKED)):
-                    chosen = (int(cx), int(cy), int(t))
-                    break
-        if chosen is None:
-            self._set_hint("附近没门", seconds=1.0)
+            self._set_hint("附近没有我家的门", seconds=1.0)
             return
         cx, cy, t = chosen
 
-        if t in (int(self.T_DOOR), int(self.T_DOOR_LOCKED)):
-            group = (int(self.T_DOOR), int(self.T_DOOR_LOCKED))
-            lock_tid = int(self.T_DOOR_LOCKED)
-            unlock_tid = int(self.T_DOOR)
-            is_locked = int(t) == int(self.T_DOOR_LOCKED)
-        else:
-            group = (int(self.T_DOOR_HOME), int(self.T_DOOR_HOME_LOCKED))
-            lock_tid = int(self.T_DOOR_HOME_LOCKED)
-            unlock_tid = int(self.T_DOOR_HOME)
-            is_locked = int(t) == int(self.T_DOOR_HOME_LOCKED)
+        home_tiles = getattr(self, "home_highrise_world_home_door_tiles", None)
+        if isinstance(home_tiles, list) and home_tiles:
+            home_set = {(int(p[0]), int(p[1])) for p in home_tiles if isinstance(p, tuple) and len(p) == 2}
+            if home_set and (int(cx), int(cy)) not in home_set:
+                self._set_hint("不是我家的门", seconds=1.0)
+                return
+        group = (int(self.T_DOOR_HOME), int(self.T_DOOR_HOME_LOCKED))
+        lock_tid = int(self.T_DOOR_HOME_LOCKED)
+        unlock_tid = int(self.T_DOOR_HOME)
+        is_locked = int(t) == int(self.T_DOOR_HOME_LOCKED)
 
         seen: set[tuple[int, int]] = set()
         stack = [(int(cx), int(cy))]
@@ -21208,15 +21556,81 @@ class HardcoreSurvivalState(State):
             return
         internal_doors.sort(key=lambda p: (int(p[0]), int(p[1])))
 
-        unit = int(getattr(self, "home_highrise_unit", 1))
-        unit = int(clamp(int(unit), 1, int(len(internal_doors))))
-        dx, dy = internal_doors[int(unit - 1)]
+        # Doorways can be 1-2 tiles wide; group contiguous door tiles so we
+        # pick a whole doorway as a "unit door".
+        door_set = {(int(x), int(y)) for (x, y) in internal_doors}
+        seen_doors: set[tuple[int, int]] = set()
+        door_clusters: list[list[tuple[int, int]]] = []
+        for p in internal_doors:
+            px, py = int(p[0]), int(p[1])
+            if (px, py) in seen_doors:
+                continue
+            stack = [(int(px), int(py))]
+            comp: list[tuple[int, int]] = []
+            while stack:
+                sx, sy = stack.pop()
+                sx = int(sx)
+                sy = int(sy)
+                if (sx, sy) in seen_doors:
+                    continue
+                if (sx, sy) not in door_set:
+                    continue
+                seen_doors.add((sx, sy))
+                comp.append((sx, sy))
+                stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
+            if comp:
+                comp.sort(key=lambda q: (int(q[0]), int(q[1])))
+                door_clusters.append(comp)
+        if not door_clusters:
+            return
+        door_clusters.sort(
+            key=lambda comp: (
+                min(int(q[0]) for q in comp),
+                min(int(q[1]) for q in comp),
+                int(len(comp)),
+            )
+        )
 
-        # Mark the home door as green (matches the guidance dialog text).
-        set_t(int(dx), int(dy), int(self.T_DOOR_HOME))
+        unit = int(getattr(self, "home_highrise_unit", 1))
+        unit = int(clamp(int(unit), 1, int(len(door_clusters))))
+        home_cluster = door_clusters[int(unit - 1)]
+        dx, dy = home_cluster[0]
+
+        # Mark the home door as green. Default to *locked* so only the
+        # matching key can open it.
+        if not already:
+            for hx2, hy2 in home_cluster:
+                set_t(int(hx2), int(hy2), int(self.T_DOOR_HOME_LOCKED))
+        else:
+            # Don't re-lock existing saves; just ensure the tile is a home door.
+            for hx2, hy2 in home_cluster:
+                cur_home_door = int(get(int(hx2), int(hy2)))
+                if cur_home_door == int(self.T_DOOR):
+                    set_t(int(hx2), int(hy2), int(self.T_DOOR_HOME))
         self.home_highrise_world_key = (int(tx0), int(ty0), int(w), int(h))
         self.home_highrise_world_floor = int(home_floor)
         self.home_highrise_world_home_door = (int(tx0 + dx), int(ty0 + dy))
+        self.home_highrise_world_home_door_tiles = [(int(tx0 + x), int(ty0 + y)) for (x, y) in home_cluster]
+
+        # Lock other unit-entry doors; a few are randomly broken (enterable).
+        # IMPORTANT: these are the doors from the *base building plan* (unit doors),
+        # not the interior bedroom/bath doors we add later.
+        try:
+            seed_base = int(self.seed) ^ 0x6B8B4567
+            for comp in door_clusters:
+                if comp is home_cluster:
+                    continue
+                # Only patch untouched unit doors; preserve any player changes.
+                if any(int(get(int(ux), int(uy))) != int(self.T_DOOR) for (ux, uy) in comp):
+                    continue
+                ax0, ay0 = comp[0]
+                hh = int(self._hash2_u32(int(tx0 + ax0), int(ty0 + ay0), int(seed_base)))
+                # ~18% broken doors.
+                tid = int(self.T_DOOR_BROKEN) if int(hh % 100) < 18 else int(self.T_DOOR_LOCKED)
+                for ux, uy in comp:
+                    set_t(int(ux), int(uy), int(tid))
+        except Exception:
+            pass
 
         # Flood-fill the apartment region above the door (skip the elevator lobby below).
         start: tuple[int, int] | None = (int(dx), int(dy - 1))
@@ -22541,6 +22955,23 @@ class HardcoreSurvivalState(State):
         if idef is None:
             self._set_hint("未知物品")
             return True
+
+        # If it's a small tool (like a cup) and the hand is empty, carry it in-hand.
+        held = getattr(self, "held_item", None)
+        if held is None and str(getattr(idef, "kind", "")) == "tool":
+            take = int(clamp(int(getattr(it, "qty", 1)), 0, 1))
+            if take > 0:
+                self.held_item = HardcoreSurvivalState._ItemStack(item_id=str(it.item_id), qty=int(take))
+                left2 = int(getattr(it, "qty", 1)) - int(take)
+                if left2 <= 0:
+                    try:
+                        chunk.items.remove(it)
+                    except ValueError:
+                        pass
+                else:
+                    it.qty = int(left2)
+                self._set_hint(f"拿在手上 {idef.name}")
+                return True
         left = self.inventory.add(it.item_id, int(it.qty), self._ITEMS)
         taken = int(it.qty) - int(left)
         if taken <= 0:
@@ -22762,6 +23193,26 @@ class HardcoreSurvivalState(State):
                 stack.qty -= 1
                 if stack.qty <= 0:
                     self.inventory.slots[int(self.inv_index)] = None     
+                return
+
+            if str(getattr(idef, "kind", "")) == "tool":
+                # Toggle "held in hand" for small tools (e.g. cup).
+                held = getattr(self, "held_item", None)
+                if isinstance(held, HardcoreSurvivalState._ItemStack):
+                    left = int(self.inventory.add(str(held.item_id), int(held.qty), self._ITEMS))
+                    if left > 0:
+                        self._set_hint("背包满了")
+                        return
+                    self.held_item = None
+
+                take = int(min(int(getattr(stack, "qty", 1)), 1))
+                if take <= 0:
+                    return
+                stack.qty -= int(take)
+                if int(stack.qty) <= 0:
+                    self.inventory.slots[int(self.inv_index)] = None
+                self.held_item = HardcoreSurvivalState._ItemStack(item_id=str(stack.item_id), qty=int(take))
+                self._set_hint(f"拿在手上 {idef.name}")
                 return
             self._set_hint("不能使用/装备")
             return
@@ -24209,6 +24660,7 @@ class HardcoreSurvivalState(State):
         inten = float(clamp(float(getattr(self, "weather_intensity", 0.0)), 0.0, 1.0))
         if inten <= 0.01:
             return
+        suppress_precip = bool(getattr(self, "rv_world_interior", False))
         layer: pygame.Surface = getattr(self, "_weather_layer", None) or pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
         self._weather_layer = layer
         layer.fill((0, 0, 0, 0))
@@ -24338,7 +24790,7 @@ class HardcoreSurvivalState(State):
             pygame.draw.rect(layer, (180, 190, 210, a), layer.get_rect())
 
         # Precipitation.
-        if kind in ("rain", "storm") and self._rain_drops:
+        if (not suppress_precip) and kind in ("rain", "storm") and self._rain_drops:
             alpha = int(round((120 if kind == "rain" else 160) * inten))
             alpha = int(clamp(alpha, 20, 210))
             dx = int(round(clamp(float(self.weather_wind) * 0.05, -4.0, 4.0)))
@@ -24356,7 +24808,7 @@ class HardcoreSurvivalState(State):
                     xi = int(x)
                     yi = int(y)
                     pygame.draw.line(layer, (drop_col[0], drop_col[1], drop_col[2], alpha), (xi, yi), (xi + dx, yi + ln), 1)
-        elif kind == "snow" and self._snow_flakes:
+        elif (not suppress_precip) and kind == "snow" and self._snow_flakes:
             alpha = int(round(170.0 * inten))
             alpha = int(clamp(alpha, 30, 230))
             if precip_clips:
@@ -24416,6 +24868,7 @@ class HardcoreSurvivalState(State):
             int(self.T_DOOR_HOME),
             int(self.T_DOOR_LOCKED),
             int(self.T_DOOR_HOME_LOCKED),
+            int(self.T_DOOR_BROKEN),
             int(self.T_STAIRS_UP),
             int(self.T_STAIRS_DOWN),
             int(self.T_TABLE),
@@ -24555,6 +25008,7 @@ class HardcoreSurvivalState(State):
                 int(self.T_DOOR_HOME),
                 int(self.T_DOOR_LOCKED),
                 int(self.T_DOOR_HOME_LOCKED),
+                int(self.T_DOOR_BROKEN),
                 int(self.T_ELEVATOR),
                 int(self.T_STAIRS_UP),
                 int(self.T_STAIRS_DOWN),
@@ -24587,6 +25041,45 @@ class HardcoreSurvivalState(State):
                                 tile_id = int(self.T_WALL)
                 except Exception:
                     pass
+
+        # When inside a building, only show the reachable connected area.
+        # This keeps neighbor apartments hidden unless you can actually enter.
+        try:
+            inside_key = getattr(self, "_inside_building_key", None)
+            visible = getattr(self, "_inside_building_visible", None)
+            if isinstance(inside_key, tuple) and len(inside_key) == 4 and isinstance(visible, set) and visible:
+                tx0, ty0, w, h = (int(inside_key[0]), int(inside_key[1]), int(inside_key[2]), int(inside_key[3]))
+                if int(tx0) <= int(tx) < int(tx0) + int(w) and int(ty0) <= int(ty) < int(ty0) + int(h):
+                    if (int(tx), int(ty)) not in visible:
+                        if tile_id in (
+                            int(self.T_FLOOR),
+                            int(self.T_DOOR),
+                            int(self.T_DOOR_HOME),
+                            int(self.T_DOOR_LOCKED),
+                            int(self.T_DOOR_HOME_LOCKED),
+                            int(self.T_DOOR_BROKEN),
+                            int(self.T_ELEVATOR),
+                            int(self.T_STAIRS_UP),
+                            int(self.T_STAIRS_DOWN),
+                            int(self.T_TABLE),
+                            int(self.T_SHELF),
+                            int(self.T_CABINET),
+                            int(self.T_BED),
+                            int(self.T_SOFA),
+                            int(self.T_FRIDGE),
+                            int(self.T_TV),
+                            int(self.T_CHAIR),
+                            int(self.T_PC),
+                            int(self.T_LAMP),
+                            int(self.T_SWITCH),
+                            int(self.T_TOILET),
+                            int(self.T_SINK),
+                        ):
+                            # Never mask the outer border so doors/walls read correctly.
+                            if int(tx) not in (int(tx0), int(tx0) + int(w) - 1) and int(ty) not in (int(ty0), int(ty0) + int(h) - 1):
+                                tile_id = int(self.T_WALL)
+        except Exception:
+            pass
         col = self._tile_color(tile_id)
         surface.fill(col, rect)
 
@@ -24812,10 +25305,12 @@ class HardcoreSurvivalState(State):
             self.T_DOOR_HOME,
             self.T_DOOR_LOCKED,
             self.T_DOOR_HOME_LOCKED,
+            self.T_DOOR_BROKEN,
             self.T_PC,
             self.T_LAMP,
             self.T_SWITCH,
             self.T_TOILET,
+            self.T_SINK,
         ):
             outline = (10, 10, 12)
             hi = self._tint(col, add=(24, 24, 26))
@@ -24823,7 +25318,7 @@ class HardcoreSurvivalState(State):
 
             # Furniture tiles should read as objects sitting on top of the floor,
             # not as full-tile colored blocks.
-            if tile_id not in (self.T_DOOR, self.T_DOOR_HOME, self.T_DOOR_LOCKED, self.T_DOOR_HOME_LOCKED):
+            if tile_id not in (self.T_DOOR, self.T_DOOR_HOME, self.T_DOOR_LOCKED, self.T_DOOR_HOME_LOCKED, self.T_DOOR_BROKEN):
                 try:
                     floor_col = self._tile_color(int(self.T_FLOOR))
                     floor2 = self._tint(floor_col, add=(-6, -6, -8))
@@ -24833,15 +25328,31 @@ class HardcoreSurvivalState(State):
                 except Exception:
                     pass
 
-            if tile_id in (self.T_DOOR, self.T_DOOR_LOCKED):
+            if tile_id in (self.T_DOOR, self.T_DOOR_LOCKED, self.T_DOOR_BROKEN):
                 inner = pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2)
                 pygame.draw.rect(surface, outline, inner, 1)
                 panel = inner.inflate(-2, -2)
                 if panel.w > 0 and panel.h > 0:
-                    surface.fill(col, panel)
-                    surface.fill(hi, pygame.Rect(panel.x, panel.y, panel.w, 1))
-                    surface.fill(lo, pygame.Rect(panel.x, panel.bottom - 1, panel.w, 1))
-                    surface.fill(lo, pygame.Rect(panel.centerx, panel.y + 1, 1, max(1, panel.h - 2)))
+                    if tile_id == self.T_DOOR_BROKEN:
+                        # Broken doorway: show a dark gap + splinters (passable).
+                        gap = panel.inflate(-2, -2)
+                        if gap.w > 0 and gap.h > 0:
+                            surface.fill((10, 10, 12), gap)
+                            surface.fill((24, 24, 30), pygame.Rect(gap.x + 1, gap.y + 1, max(1, gap.w - 2), 1))
+                        # Remaining wood strips.
+                        surface.fill(col, pygame.Rect(panel.x, panel.y, panel.w, 1))
+                        surface.fill(col, pygame.Rect(panel.x, panel.bottom - 1, panel.w, 1))
+                        surface.fill(col, pygame.Rect(panel.x, panel.y, 1, panel.h))
+                        surface.fill(col, pygame.Rect(panel.right - 1, panel.y, 1, panel.h))
+                        # Splinters.
+                        surface.fill(lo, pygame.Rect(panel.centerx - 1, panel.y + 2, 1, max(1, panel.h - 4)))
+                        surface.fill(hi, pygame.Rect(panel.centerx, panel.y + 3, 1, max(1, panel.h - 6)))
+                        surface.fill(outline, pygame.Rect(panel.centerx - 1, panel.y + 2, 1, 1))
+                    else:
+                        surface.fill(col, panel)
+                        surface.fill(hi, pygame.Rect(panel.x, panel.y, panel.w, 1))
+                        surface.fill(lo, pygame.Rect(panel.x, panel.bottom - 1, panel.w, 1))
+                        surface.fill(lo, pygame.Rect(panel.centerx, panel.y + 1, 1, max(1, panel.h - 2)))
                 surface.fill((30, 30, 34), pygame.Rect(inner.right - 2, inner.centery, 1, 1))
                 if tile_id == self.T_DOOR_LOCKED:
                     lock = pygame.Rect(inner.centerx - 1, inner.centery - 1, 3, 3)
@@ -25410,6 +25921,8 @@ class HardcoreSurvivalState(State):
         self.world_ctx_open = False
         self.world_ctx_target = None
         self.world_ctx_rects = []
+        if bool(getattr(self, "lamp_cfg_open", False)):
+            return
         if bool(getattr(self, "home_move_mode", False)):
             return
         if isinstance(getattr(self, "home_move_carry", None), dict):
@@ -25552,9 +26065,9 @@ class HardcoreSurvivalState(State):
             tv_on = bool(getattr(self, "world_tv_states", {}).get((int(cx), int(cy)), False))
             opts = [("关电视" if tv_on else "开电视", "tv"), ("搬运", "move")]
         elif int(tid) == int(self.T_LAMP):
-            opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("搬运", "move")]
+            opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("设置", "lamp_cfg"), ("搬运", "move")]
         elif int(tid) == int(self.T_SWITCH):
-            opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light")]
+            opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("设置", "lamp_cfg")]
         elif int(tid) == int(self.T_TOILET):
             opts = [("小便", "pee"), ("大便", "poop")]
         if not opts:
@@ -28078,6 +28591,7 @@ class HardcoreSurvivalState(State):
         self._inside_highrise_floor_overlay = None
         self._inside_highrise_facade_slice = None
         self._inside_building_key = None
+        self._inside_building_visible = None
         self._draw_player_tile_xy = None
         try:
             ptx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
@@ -28201,7 +28715,48 @@ class HardcoreSurvivalState(State):
             self._inside_highrise_floor_overlay = None
             self._inside_highrise_facade_slice = None
             self._inside_building_key = None
+            self._inside_building_visible = None
             self._draw_player_tile_xy = None
+
+        # When inside a cutaway building, only reveal the connected area the
+        # player can actually reach (prevents seeing neighbors through roofs).
+        try:
+            inside_key = getattr(self, "_inside_building_key", None)
+            pt = getattr(self, "_draw_player_tile_xy", None)
+            if isinstance(inside_key, tuple) and len(inside_key) == 4 and isinstance(pt, tuple) and len(pt) == 2:
+                tx0, ty0, w, h = (int(inside_key[0]), int(inside_key[1]), int(inside_key[2]), int(inside_key[3]))
+                ptx, pty = int(pt[0]), int(pt[1])
+                if int(w) > 0 and int(h) > 0 and int(tx0) <= int(ptx) < int(tx0) + int(w) and int(ty0) <= int(pty) < int(ty0) + int(h):
+                    passable: set[tuple[int, int]] = set()
+                    stack = [(int(ptx), int(pty))]
+                    seen: set[tuple[int, int]] = set()
+                    while stack and len(passable) < int(w) * int(h):
+                        sx, sy = stack.pop()
+                        sx = int(sx)
+                        sy = int(sy)
+                        if (sx, sy) in seen:
+                            continue
+                        seen.add((sx, sy))
+                        if not (int(tx0) <= int(sx) < int(tx0) + int(w) and int(ty0) <= int(sy) < int(ty0) + int(h)):
+                            continue
+                        tid = int(self.world.peek_tile(int(sx), int(sy)))
+                        if bool(self._tile_solid(int(tid))):
+                            continue
+                        passable.add((sx, sy))
+                        stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
+
+                    visible: set[tuple[int, int]] = set(passable)
+                    # Include adjacent furniture/doors so rooms look complete.
+                    for sx, sy in tuple(passable):
+                        for ox, oy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+                            nx, ny = int(sx + ox), int(sy + oy)
+                            if not (int(tx0) <= int(nx) < int(tx0) + int(w) and int(ty0) <= int(ny) < int(ty0) + int(h)):
+                                continue
+                            visible.add((nx, ny))
+
+                    self._inside_building_visible = visible
+        except Exception:
+            self._inside_building_visible = None
 
         # High-rise upper floors: shift the camera up slightly so the elevated
         # interior/player doesn't leave the screen on very high floors.
@@ -28349,6 +28904,7 @@ class HardcoreSurvivalState(State):
 
         self._draw_world_furniture_carry_preview(surface, cam_x, cam_y_draw)
         self._draw_world_context_menu(surface, cam_x, cam_y_draw)
+        self._draw_lamp_cfg_ui(surface, cam_x, cam_y_draw)
         self._draw_toilet_task_ui(surface)
         self._draw_hover_tooltip(surface)
         self._draw_speech_bubble(surface)
@@ -28362,6 +28918,8 @@ class HardcoreSurvivalState(State):
             self._draw_inventory_ui(surface)
         if getattr(self, "_gallery_open", False):
             self._draw_sprite_gallery_ui(surface)
+
+        self._draw_pause_menu(surface)
 
     def _occlude_mounted_vehicle_with_facades(
         self,
@@ -28425,6 +28983,43 @@ class HardcoreSurvivalState(State):
             )
         finally:
             surface.set_clip(prev_clip)
+
+    def _draw_player_held_item(self, surface: pygame.Surface, player_rect: pygame.Rect) -> None:
+        held = getattr(self, "held_item", None)
+        if not isinstance(held, HardcoreSurvivalState._ItemStack):
+            return
+        if int(getattr(held, "qty", 0)) <= 0:
+            return
+        if self.gun is not None:
+            return
+        if getattr(self, "mount", None) is not None:
+            return
+
+        item_id = str(getattr(held, "item_id", ""))
+        if not item_id:
+            return
+
+        self._ensure_item_visuals(item_id)
+        spr = self._ITEM_SPRITES_WORLD.get(item_id) or self._ITEM_SPRITES.get(item_id)
+        if spr is None:
+            return
+
+        img = spr
+        if spr.get_width() <= 10 and spr.get_height() <= 10 and spr.get_width() * 2 <= 26 and spr.get_height() * 2 <= 26:
+            img = pygame.transform.scale(spr, (spr.get_width() * 2, spr.get_height() * 2))
+
+        d = str(getattr(self.player, "dir", "down"))
+        r = img.get_rect()
+        if d == "left":
+            r.midright = (int(player_rect.left + 2), int(player_rect.centery + 4))
+        elif d == "right":
+            r.midleft = (int(player_rect.right - 2), int(player_rect.centery + 4))
+        elif d == "up":
+            r.midbottom = (int(player_rect.centerx), int(player_rect.top + 6))
+        else:
+            r.midtop = (int(player_rect.centerx), int(player_rect.bottom - 2))
+
+        surface.blit(img, r)
 
     def _draw_player(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         p = self.player.pos - pygame.Vector2(cam_x, cam_y)
@@ -28521,6 +29116,7 @@ class HardcoreSurvivalState(State):
         rect.midbottom = (px, iround(float(p.y) + float(self.player.h) / 2.0))
         surface.blit(spr, rect)
         self._last_player_screen_rect = pygame.Rect(rect)
+        self._draw_player_held_item(surface, rect)
 
         if self.gun is not None:
             aim = pygame.Vector2(self.aim_dir)
