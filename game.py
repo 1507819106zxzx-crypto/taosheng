@@ -19214,7 +19214,17 @@ class HardcoreSurvivalState(State):
             return False
 
         tx, ty = self._player_tile()
-        candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+        candidates = [
+            (tx, ty),
+            (tx + 1, ty),
+            (tx - 1, ty),
+            (tx, ty + 1),
+            (tx, ty - 1),
+            (tx + 1, ty + 1),
+            (tx + 1, ty - 1),
+            (tx - 1, ty + 1),
+            (tx - 1, ty - 1),
+        ]
         chosen: tuple[int, int, int] | None = None
         for cx, cy in candidates:
             tid = int(self.world.get_tile(int(cx), int(cy)))
@@ -19399,13 +19409,13 @@ class HardcoreSurvivalState(State):
             return
         if self._try_pickup(quiet=True):
             return
-        if self._try_use_pc_world():
-            return
-        if self._try_watch_tv_world():
-            return
         if self._try_sit_world():
             return
         if self._try_rest_world_bed():
+            return
+        if self._try_use_pc_world():
+            return
+        if self._try_watch_tv_world():
             return
         self._try_pickup(quiet=False)
 
@@ -21762,12 +21772,12 @@ class HardcoreSurvivalState(State):
             return 1.0, tday
         return float(1.0 - self._smoothstep(dusk_start, dusk_end, tday)), tday
 
-    def _draw_day_night_overlay(self, surface: pygame.Surface, *, in_rv: bool) -> None:
+    def _make_day_night_overlay_surface(self, *, in_rv: bool) -> pygame.Surface | None:
         daylight, tday = self._daylight_amount()
         max_alpha = 160 if not in_rv else 120
         a = int(round(float(max_alpha) * (1.0 - float(daylight))))
         if a <= 0:
-            return
+            return None
 
         if 0.0 < daylight < 1.0:
             col = (36, 26, 64) if tday < 0.5 else (64, 34, 26)  # dawn / dusk
@@ -21776,6 +21786,157 @@ class HardcoreSurvivalState(State):
 
         overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
         overlay.fill((int(col[0]), int(col[1]), int(col[2]), int(a)))
+        return overlay
+
+    def _draw_day_night_overlay(self, surface: pygame.Surface, *, in_rv: bool) -> None:
+        overlay = self._make_day_night_overlay_surface(in_rv=in_rv)
+        if overlay is None:
+            return
+        surface.blit(overlay, (0, 0))
+
+    def _carve_world_lamps_from_night_overlay(
+        self,
+        overlay: pygame.Surface,
+        cam_x: int,
+        cam_y: int,
+        start_tx: int,
+        end_tx: int,
+        start_ty: int,
+        end_ty: int,
+    ) -> None:
+        if not bool(getattr(self, "home_light_on", True)):
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return
+
+        daylight, _tday = self._daylight_amount()
+        max_alpha = 160
+        night_a = int(round(float(max_alpha) * (1.0 - float(daylight))))
+        if night_a <= 0:
+            return
+
+        ts = int(self.TILE_SIZE)
+        if ts <= 0:
+            return
+
+        # Only light inside the real home (world-map interior).
+        lamps: list[tuple[int, int]] = []
+        for ty in range(int(start_ty), int(end_ty) + 1):
+            for tx in range(int(start_tx), int(end_tx) + 1):
+                if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_LAMP):
+                    continue
+                if not self._tile_in_home_world(int(tx), int(ty)):
+                    continue
+                lamps.append((int(tx), int(ty)))
+        if not lamps:
+            return
+
+        cfg = getattr(self.app, "config", None)
+        radius_tiles = int(getattr(cfg, "lamp_world_radius_tiles", 5)) if cfg is not None else 5
+        radius_tiles = int(clamp(int(radius_tiles), 2, 18))
+        intensity = float(getattr(cfg, "lamp_world_intensity", 1.0)) if cfg is not None else 1.0
+        intensity = float(clamp(float(intensity), 0.0, 3.0))
+        if intensity <= 0.01:
+            return
+
+        radius_px = int(max(int(ts) * 2, int(ts) * int(radius_tiles)))
+        max_sub_alpha = int(clamp(int(round(float(night_a) * 0.85 * float(intensity))), 0, int(night_a)))
+        if max_sub_alpha <= 0:
+            return
+
+        hole_key = (int(ts), int(radius_px), int(max_sub_alpha))
+        hole = getattr(self, "_lamp_hole_cache", {}).get(hole_key) if hasattr(self, "_lamp_hole_cache") else None
+        if hole is None:
+            g = pygame.Surface((radius_px * 2 + 1, radius_px * 2 + 1), pygame.SRCALPHA)
+            rings = 18
+            for i in range(rings):
+                t = float(i) / float(max(1, rings - 1))
+                r = int(round(float(radius_px) * (1.0 - t)))
+                if r <= 0:
+                    continue
+                a = int(round(float(max_sub_alpha) * ((1.0 - t) ** 2)))
+                a = int(clamp(int(a), 0, 255))
+                if a <= 0:
+                    continue
+                pygame.draw.circle(g, (0, 0, 0, int(a)), (radius_px, radius_px), int(r))
+            cache = getattr(self, "_lamp_hole_cache", {})
+            cache[hole_key] = g
+            self._lamp_hole_cache = cache
+            hole = g
+
+        solid_blocks = {
+            int(self.T_DOOR),
+            int(self.T_DOOR_HOME),
+            int(self.T_DOOR_LOCKED),
+            int(self.T_DOOR_HOME_LOCKED),
+        }
+
+        for lx, ly in lamps:
+            seen: set[tuple[int, int]] = set()
+            lit: list[tuple[int, int]] = []
+            stack = [(int(lx), int(ly))]
+            r2 = int(radius_tiles) * int(radius_tiles)
+            while stack and len(lit) < 1600:
+                x, y = stack.pop()
+                x = int(x)
+                y = int(y)
+                if (x, y) in seen:
+                    continue
+                seen.add((x, y))
+                dx = int(x - int(lx))
+                dy = int(y - int(ly))
+                if int(dx * dx + dy * dy) > int(r2):
+                    continue
+                if not self._tile_in_home_world(int(x), int(y)):
+                    continue
+                lit.append((int(x), int(y)))
+
+                tid = int(self.world.peek_tile(int(x), int(y)))
+                if bool(self._tile_solid(int(tid))) and int(tid) not in solid_blocks:
+                    continue
+                stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+
+            base_rect = self._world_tile_screen_rect(int(lx), int(ly), int(cam_x), int(cam_y))
+            cx, cy = int(base_rect.centerx), int(base_rect.centery)
+            ox = int(cx - radius_px)
+            oy = int(cy - radius_px)
+
+            mask = pygame.Surface(hole.get_size(), pygame.SRCALPHA)
+            mask.fill((0, 0, 0, 0))
+            mask_bounds = mask.get_rect()
+            for tx, ty in lit:
+                r = self._world_tile_screen_rect(int(tx), int(ty), int(cam_x), int(cam_y))
+                lr = r.move(-int(ox), -int(oy))
+                lr = lr.clip(mask_bounds)
+                if lr.w > 0 and lr.h > 0:
+                    mask.fill((255, 255, 255, 255), lr)
+
+            tmp = hole.copy()
+            tmp.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            overlay.blit(tmp, (int(ox), int(oy)), special_flags=pygame.BLEND_RGBA_SUB)
+
+    def _draw_world_lighting(
+        self,
+        surface: pygame.Surface,
+        cam_x: int,
+        cam_y: int,
+        start_tx: int,
+        end_tx: int,
+        start_ty: int,
+        end_ty: int,
+    ) -> None:
+        overlay = self._make_day_night_overlay_surface(in_rv=False)
+        if overlay is None:
+            return
+        try:
+            self._carve_world_lamps_from_night_overlay(overlay, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
+        except Exception:
+            pass
         surface.blit(overlay, (0, 0))
 
     def _draw_world_lamp_glows(
@@ -25991,8 +26152,7 @@ class HardcoreSurvivalState(State):
             except Exception:
                 pass
         self._draw_roofs(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
-        self._draw_day_night_overlay(surface, in_rv=False)
-        self._draw_world_lamp_glows(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
+        self._draw_world_lighting(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_weather_effects(surface, in_rv=False)
         self._draw_home_move_mode_overlay(surface, cam_x, cam_y_draw)
         self._draw_survival_ui(surface)
