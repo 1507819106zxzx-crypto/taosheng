@@ -20765,8 +20765,10 @@ class HardcoreSurvivalState(State):
                 chunk.tiles[int(row_off + xx)] = int(tiles[int(src_off + xx)])
 
     def _setup_home_highrise_world(self) -> None:
-        if bool(getattr(self, "_home_highrise_world_setup_done", False)):
-            return
+        # One-time furnishing for the player's high-rise home on the world map.
+        # If an existing save predates features (e.g. toilet), we patch in the
+        # missing pieces without re-randomizing the whole layout.
+        already = bool(getattr(self, "_home_highrise_world_setup_done", False))
         home = getattr(self, "home_highrise_door", None)
         if not isinstance(home, tuple) or len(home) != 2:
             return
@@ -20825,6 +20827,9 @@ class HardcoreSurvivalState(State):
         def set_t(x: int, y: int, tid: int) -> None:
             tiles[int(y) * int(w) + int(x)] = int(tid)
 
+        def has_toilet() -> bool:
+            return any(int(t) == int(self.T_TOILET) for t in tiles)
+
         # Internal apartment doors (exclude building border doors).
         internal_doors: list[tuple[int, int]] = []
         for yy in range(1, int(h) - 1):
@@ -20877,6 +20882,46 @@ class HardcoreSurvivalState(State):
             region.add((int(x), int(y)))
             stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
         if not region:
+            return
+
+        # Patch pass: if this home was already set up previously, avoid changing
+        # walls/furniture; only ensure critical fixtures exist.
+        if already:
+            if not has_toilet():
+                # Place a toilet at the deepest available corner inside the apartment.
+                # Prefer the southeast area (commonly the bathroom corner), but keep it reachable.
+                def passable_tid(tid: int) -> bool:
+                    tdef = self._TILES.get(int(tid))
+                    return bool(tdef is not None and not bool(getattr(tdef, "solid", False)))
+
+                best: tuple[int, int] | None = None
+                best_key: tuple[int, int] | None = None
+                for x, y in list(region):
+                    if int(get(int(x), int(y))) != int(self.T_FLOOR):
+                        continue
+                    # Require at least one adjacent passable tile (so teleport can spawn nearby).
+                    ok_adj = False
+                    for ox, oy in ((0, -1), (-1, 0), (1, 0), (0, 1)):
+                        nx, ny = int(x + ox), int(y + oy)
+                        if not (0 <= int(nx) < int(w) and 0 <= int(ny) < int(h)):
+                            continue
+                        if passable_tid(int(get(int(nx), int(ny)))):
+                            ok_adj = True
+                            break
+                    if not ok_adj:
+                        continue
+                    key = (int(y), int(x))
+                    if best_key is None or key > best_key:
+                        best_key = key
+                        best = (int(x), int(y))
+                if best is not None:
+                    bx, by = best
+                    set_t(int(bx), int(by), int(self.T_TOILET))
+                    try:
+                        self._multi_house_apply_floor(chunk, mh)
+                    except Exception:
+                        pass
+            self._home_highrise_world_setup_done = True
             return
 
         min_x = min(int(p[0]) for p in region)
@@ -21269,15 +21314,27 @@ class HardcoreSurvivalState(State):
             # Bathroom: toilet + shelf as sink/cabinet.
             if bath_box is not None:
                 bx0, by0, bx1, by1 = bath_box
-                # Place toilet first (priority)
-                place_in_rect(
-                    int(self.T_TOILET),
-                    [(0, 0)],
-                    x0=int(bx1 - 1),
-                    y0=int(by0),
-                    x1=int(bx1),
-                    y1=int(by1),
-                )
+                # Place toilet first (priority) — avoid blocking the bathroom door
+                # (the tile right behind the door is bx0/by0).
+                placed_toilet = False
+                for ty3 in range(int(by1), int(by0) - 1, -1):
+                    for tx3 in range(int(bx1), int(bx0) - 1, -1):
+                        if int(tx3) == int(bx0) and int(ty3) == int(by0):
+                            continue
+                        if set_if_clear(int(tx3), int(ty3), int(self.T_TOILET)):
+                            placed_toilet = True
+                            break
+                    if placed_toilet:
+                        break
+                if not placed_toilet:
+                    place_in_rect(
+                        int(self.T_TOILET),
+                        [(0, 0)],
+                        x0=int(bx0),
+                        y0=int(by0),
+                        x1=int(bx1),
+                        y1=int(by1),
+                    )
                 # Then place sink/cabinet
                 place_in_rect(
                     int(self.T_SHELF),
@@ -21339,6 +21396,47 @@ class HardcoreSurvivalState(State):
                 (lamp_cx, lamp_cy - 1),
             ],
         )
+
+        # Ensure the home always has a toilet (older layouts or tight shapes can miss it).
+        if not has_toilet():
+            avoid: set[tuple[int, int]] = set()
+            for _dx2, _dy2, adj2 in list(door_clear):
+                for ax2, ay2 in adj2:
+                    avoid.add((int(ax2), int(ay2)))
+
+            def passable_tid(tid: int) -> bool:
+                tdef = self._TILES.get(int(tid))
+                return bool(tdef is not None and not bool(getattr(tdef, "solid", False)))
+
+            placed = False
+            for px, py in sorted(region, key=lambda p: (int(p[1]), int(p[0])), reverse=True):
+                if (int(px), int(py)) in avoid or (int(px), int(py)) in reserved:
+                    continue
+                if int(get(int(px), int(py))) != int(self.T_FLOOR):
+                    continue
+                ok_adj = False
+                for ox, oy in ((0, -1), (-1, 0), (1, 0), (0, 1)):
+                    nx, ny = int(px + ox), int(py + oy)
+                    if not (0 <= int(nx) < int(w) and 0 <= int(ny) < int(h)):
+                        continue
+                    if passable_tid(int(get(int(nx), int(ny)))):
+                        ok_adj = True
+                        break
+                if not ok_adj:
+                    continue
+                set_t(int(px), int(py), int(self.T_TOILET))
+                placed = True
+                break
+
+            # Last resort: drop it anywhere walkable in the apartment.
+            if not placed:
+                for px, py in sorted(region, key=lambda p: (int(p[1]), int(p[0])), reverse=True):
+                    if (int(px), int(py)) in avoid or (int(px), int(py)) in reserved:
+                        continue
+                    if int(get(int(px), int(py))) != int(self.T_FLOOR):
+                        continue
+                    set_t(int(px), int(py), int(self.T_TOILET))
+                    break
 
         # Guarantee doors are usable: clear solid tiles right next to each interior door we placed.
         def clear_passage_cell(x: int, y: int) -> None:
