@@ -6976,8 +6976,9 @@ class HardcoreSurvivalState(State):
             self.compound_ty1 = (int(self.compound_cy1) + 1) * int(state.CHUNK_SIZE) - 1
 
             # Internal road stripes (local coords within each chunk).
-            self.compound_road_v_x0 = 14
-            self.compound_road_v_x1 = 17
+            # Keep roads a bit narrower so towers can be wider (bigger apartments).
+            self.compound_road_v_x0 = 15
+            self.compound_road_v_x1 = 16
             self.compound_road_h_y0 = 24
             self.compound_road_h_y1 = 26
 
@@ -7071,7 +7072,7 @@ class HardcoreSurvivalState(State):
 
             # One tower per inner chunk (7-8 total); keep the perimeter for the podium/skirt building.
             # Slightly larger towers so each apartment feels like a real home.
-            tower_w = 14
+            tower_w = 15
             tower_h = 24
             inner_cx0 = int(cx0) + 1
             inner_cx1 = int(cx1) - 1
@@ -7099,8 +7100,8 @@ class HardcoreSurvivalState(State):
 
             plan: dict[tuple[int, int], list[tuple[int, int, int, int, int, int]]] = {}
             for cx, cy in picked:
-                # Alternate left/right so we don't overwrite the internal road stripe at x=14..17.
-                x0 = 0 if ((int(cx) + int(cy)) % 2 == 0) else 18
+                # Alternate left/right so we don't overwrite the internal road stripe at x=15..16.
+                x0 = 0 if ((int(cx) + int(cy)) % 2 == 0) else 17
                 y0 = 0
                 base_tx = int(cx) * int(self.state.CHUNK_SIZE)
                 base_ty = int(cy) * int(self.state.CHUNK_SIZE)
@@ -7712,8 +7713,8 @@ class HardcoreSurvivalState(State):
             ty1 = int(getattr(self, "compound_ty1", 0))
             gate_x0 = int(getattr(self, "compound_gate_x0", 0))
             gate_x1 = int(getattr(self, "compound_gate_x1", -1))
-            rvx0 = int(getattr(self, "compound_road_v_x0", 14))
-            rvx1 = int(getattr(self, "compound_road_v_x1", 17))
+            rvx0 = int(getattr(self, "compound_road_v_x0", 15))
+            rvx1 = int(getattr(self, "compound_road_v_x1", 16))
             rhy0 = int(getattr(self, "compound_road_h_y0", 24))
             rhy1 = int(getattr(self, "compound_road_h_y1", 26))
 
@@ -20963,6 +20964,34 @@ class HardcoreSurvivalState(State):
                     bath_key = key
                     bath_comp = c
 
+            toilet_cells = {
+                (int(i) % int(w), int(i) // int(w))
+                for i, t in enumerate(tiles)
+                if int(t) == int(self.T_TOILET)
+            }
+            need_relocate = False
+            if not toilet_cells:
+                need_relocate = True
+            elif bath_comp is not None:
+                # If we can identify a bathroom room-component, keep the toilet there.
+                def toilet_in_bathroom(pos: tuple[int, int]) -> bool:
+                    x, y = pos
+                    if (int(x), int(y)) in bath_comp:
+                        return True
+                    for ox, oy in ((0, -1), (-1, 0), (1, 0), (0, 1)):
+                        if (int(x + ox), int(y + oy)) in bath_comp:
+                            return True
+                    return False
+
+                need_relocate = not any(toilet_in_bathroom(c) for c in toilet_cells)
+            else:
+                # No clear bathroom component: keep any existing toilet in the south half.
+                need_relocate = not any(int(y) > int(south_y) for (_x, y) in toilet_cells)
+
+            if not need_relocate:
+                self._home_highrise_world_setup_done = True
+                return
+
             target_room = bath_comp if bath_comp is not None else None
             candidates = list(target_room) if target_room is not None else [(int(x), int(y)) for (x, y) in floor_cells]
             candidates.sort(key=lambda p: (int(p[1]), int(p[0])), reverse=True)
@@ -24023,6 +24052,7 @@ class HardcoreSurvivalState(State):
             self.T_PC,
             self.T_LAMP,
             self.T_SWITCH,
+            self.T_TOILET,
         ):
             outline = (10, 10, 12)
             hi = self._tint(col, add=(24, 24, 26))
