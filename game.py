@@ -4775,21 +4775,21 @@ class HardcoreSurvivalState(State):
     _HR_INT_HOME_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
         "WVVV....VVV....VVV....VVV.....W",
-        "W..SSS.......W...W...SSS......W",
-        "W.BBBB.......W...W....BBBB....W",
-        "W.BBBB.......W...W....BBBB....W",
-        "W....SSS.....W...W....PPP.....W",
-        "WWWWWW.WWWWWWW...WWWWWWW.WWWWWW",
+        "W....SSS.....W...W.....SSS....W",
+        "W..BBBB......W...W..BBBB......W",
+        "W..BBBB......W...W..BBBB......W",
+        "W....SSS.....W...W....SSS.....W",
         "W.............................W",
-        "W..........L..XXX.............W",
-        "W.............CCC.............D",
+        "WWWWWWWWWWWWWW...WWWWWWWWWWWWWW",
         "W.............................W",
-        "WKKKKK..FF............,,,,,,,,W",
-        "WTTT.................WU,RR,,O,W",
-        "WKKKKK...............W,,RR,,,,W",
+        "W..PPP.....CCC..L..XXX........D",
+        "W...C.................WWWWWWWWW",
+        "WKKKKK.FF.............W,,,,,,,W",
+        "WKKKKK..TTT............,,,,,,,W",
+        "WKKKKK................W,,,O,,,W",
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
     ]
-    _HR_INT_HOME_LAYOUT_VERSION = 3
+    _HR_INT_HOME_LAYOUT_VERSION = 4
     _HR_INT_W = 31
     _HR_INT_H = 15
     _HR_INT_TILE_SIZE = 20
@@ -10418,6 +10418,8 @@ class HardcoreSurvivalState(State):
                 if self.minimap_rect.collidepoint(internal):
                     self._toggle_world_map(open=True)
                     return
+            if self._handle_hr_interior_ui_mouse(event):
+                return
 
         if getattr(self, "home_ui_open", False):
             if event.type == pygame.KEYDOWN:
@@ -11958,6 +11960,44 @@ class HardcoreSurvivalState(State):
 
         return False
 
+    def _handle_hr_interior_ui_mouse(self, event: pygame.event.Event) -> bool:
+        if not getattr(self, "hr_interior", False):
+            return False
+        if str(getattr(self, "hr_mode", "lobby")) != "home":
+            return False
+        if bool(getattr(self, "hr_edit_mode", False)):
+            return False
+        if event.type != pygame.MOUSEBUTTONDOWN or int(getattr(event, "button", 0)) != 1:
+            return False
+        if (
+            bool(getattr(self, "inv_open", False))
+            or bool(getattr(self, "home_ui_open", False))
+            or bool(getattr(self, "hr_elevator_ui_open", False))
+            or bool(getattr(self, "world_map_open", False))
+        ):
+            return False
+        if not hasattr(event, "pos"):
+            return False
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return False
+        mx, my = int(internal[0]), int(internal[1])
+        buttons = getattr(self, "_hr_int_ui_buttons", None)
+        if not isinstance(buttons, list) or not buttons:
+            return False
+        for entry in list(buttons):
+            if not isinstance(entry, tuple) or len(entry) < 3:
+                continue
+            action, room_id, rect = entry[0], entry[1], entry[2]
+            if not isinstance(rect, pygame.Rect):
+                continue
+            if not rect.collidepoint(mx, my):
+                continue
+            if str(action) == "toggle_lamp":
+                self._hr_room_toggle_light(str(room_id))
+                return True
+        return False
+
     def _hr_make_hall_layout(self, floor: int) -> list[str]:
         base = [str(r) for r in self._HR_INT_HALL_BASE]
         home_floor = int(getattr(self, "hr_home_floor", -1))
@@ -12795,6 +12835,21 @@ class HardcoreSurvivalState(State):
         self.player.pos.update(self.hr_world_return)
         self._set_hint("离开高层住宅", seconds=1.0)
 
+    def _hr_room_toggle_light(self, room_id: str) -> bool:
+        room_id = str(room_id).strip()
+        lights = getattr(self, "hr_room_lights", None)
+        if not isinstance(lights, dict):
+            lights = {}
+            self.hr_room_lights = lights
+        if room_id and room_id not in lights:
+            lights[room_id] = True
+        cur = bool(lights.get(room_id, True)) if room_id else True
+        if room_id:
+            lights[room_id] = (not cur)
+        new_state = bool(lights.get(room_id, True)) if room_id else cur
+        self._set_hint("灯：开" if new_state else "灯：关", seconds=0.9)
+        return bool(new_state)
+
     def _hr_interior_interact(self) -> None:
         if not getattr(self, "hr_interior", False):
             return
@@ -12867,17 +12922,7 @@ class HardcoreSurvivalState(State):
             self._hr_interior_exit()
             return
         if ch == "L" and mode == "home":
-            room_id = str(getattr(self, "hr_current_room", "")).strip()
-            lights = getattr(self, "hr_room_lights", None)
-            if not isinstance(lights, dict):
-                lights = {}
-                self.hr_room_lights = lights
-            if room_id and room_id not in lights:
-                lights[room_id] = True
-            cur = bool(lights.get(room_id, True)) if room_id else True
-            if room_id:
-                lights[room_id] = (not cur)
-            self._set_hint("灯：开" if (not cur) else "灯：关", seconds=0.9)
+            self._hr_room_toggle_light(str(getattr(self, "hr_current_room", "")).strip())
             return
         if ch in ("^", "v"):
             floor = int(getattr(self, "hr_floor", 1))
@@ -15292,6 +15337,7 @@ class HardcoreSurvivalState(State):
             )
 
         map_rect = pygame.Rect(int(map_x0), int(map_y0), int(map_w), int(map_h))
+        self._hr_int_ui_buttons = []
         floor_kind = "home" if mode == "home" else "stone"
         # Camera within the interior so layouts can be larger than the viewport.
         pose = str(getattr(self, "player_pose", "")).strip()
@@ -16395,22 +16441,93 @@ class HardcoreSurvivalState(State):
 
             tx, ty = self._hr_int_player_tile()
             candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
-            interact = {"D", "B", "S", "F", "C", "O"}
+            interact = {"D", "B", "S", "F", "C", "O", "L"}
+
+            def _draw_cells_outline(
+                cells: list[tuple[int, int]],
+                *,
+                rgb: tuple[int, int, int],
+                fill_alpha: int = 0,
+                edge_alpha: int = 200,
+            ) -> None:
+                if not cells:
+                    return
+                min_x = min(int(p[0]) for p in cells)
+                max_x = max(int(p[0]) for p in cells)
+                min_y = min(int(p[1]) for p in cells)
+                max_y = max(int(p[1]) for p in cells)
+                w_tiles = int(max_x - min_x + 1)
+                h_tiles = int(max_y - min_y + 1)
+                ov = pygame.Surface((int(w_tiles) * int(tile), int(h_tiles) * int(tile)), pygame.SRCALPHA)
+                cell_set = {(int(x), int(y)) for (x, y) in cells}
+                if int(fill_alpha) > 0:
+                    fill_col = (int(rgb[0]), int(rgb[1]), int(rgb[2]), int(clamp(int(fill_alpha), 0, 255)))
+                    for cx, cy in cell_set:
+                        rr = pygame.Rect(int((cx - min_x) * tile), int((cy - min_y) * tile), int(tile), int(tile))
+                        ov.fill(fill_col, rr)
+                edge_col = (int(rgb[0]), int(rgb[1]), int(rgb[2]), int(clamp(int(edge_alpha), 0, 255)))
+                for cx, cy in cell_set:
+                    rx = int((cx - min_x) * tile)
+                    ry = int((cy - min_y) * tile)
+                    left = int(rx)
+                    right = int(rx + tile - 1)
+                    top = int(ry)
+                    bottom = int(ry + tile - 1)
+                    if (int(cx) - 1, int(cy)) not in cell_set:
+                        pygame.draw.line(ov, edge_col, (left, top), (left, bottom), 1)
+                    if (int(cx) + 1, int(cy)) not in cell_set:
+                        pygame.draw.line(ov, edge_col, (right, top), (right, bottom), 1)
+                    if (int(cx), int(cy) - 1) not in cell_set:
+                        pygame.draw.line(ov, edge_col, (left, top), (right, top), 1)
+                    if (int(cx), int(cy) + 1) not in cell_set:
+                        pygame.draw.line(ov, edge_col, (left, bottom), (right, bottom), 1)
+                surface.blit(ov, (int(map_x + min_x * tile), int(map_y + min_y * tile)))
+
             for cx, cy in candidates:
                 ch = self._hr_int_char_at(cx, cy)
                 if ch not in interact:
                     continue
-                b = self._hr_int_block_bounds(cx, cy, ch)
-                if b is None:
-                    break
-                x0, y0, x1, y1 = b
-                rr = pygame.Rect(
-                    int(map_x + x0 * tile),
-                    int(map_y + y0 * tile),
-                    int((x1 - x0 + 1) * tile),
-                    int((y1 - y0 + 1) * tile),
-                )
-                pygame.draw.rect(surface, (0, 220, 80), rr, 2, border_radius=8)
+                w = int(self._HR_INT_W)
+                h = int(self._HR_INT_H)
+                seen: set[tuple[int, int]] = set()
+                stack = [(int(cx), int(cy))]
+                cells: list[tuple[int, int]] = []
+                while stack:
+                    sx, sy = stack.pop()
+                    if (int(sx), int(sy)) in seen:
+                        continue
+                    if not (0 <= int(sx) < int(w) and 0 <= int(sy) < int(h)):
+                        continue
+                    if str(self._hr_int_char_at(int(sx), int(sy)))[:1] != str(ch)[:1]:
+                        continue
+                    seen.add((int(sx), int(sy)))
+                    cells.append((int(sx), int(sy)))
+                    stack.extend([(int(sx) + 1, int(sy)), (int(sx) - 1, int(sy)), (int(sx), int(sy) + 1), (int(sx), int(sy) - 1)])
+                _draw_cells_outline(cells, rgb=(0, 220, 80), fill_alpha=0, edge_alpha=220)
+                if (
+                    str(ch)[:1] == "L"
+                    and not bool(getattr(self, "inv_open", False))
+                    and not bool(getattr(self, "home_ui_open", False))
+                    and not bool(getattr(self, "hr_elevator_ui_open", False))
+                    and not bool(getattr(self, "world_map_open", False))
+                    and not bool(getattr(self, "hr_edit_mode", False))
+                ):
+                    label = "关灯" if bool(light_on) else "开灯"
+                    font = self.app.font_s
+                    tw, th = font.size(str(label))
+                    pad_x = 6
+                    pad_y = 3
+                    bw = int(tw + pad_x * 2)
+                    bh = int(th + pad_y * 2)
+                    lr = pygame.Rect(int(map_x + int(cx) * tile), int(map_y + int(cy) * tile), int(tile), int(tile))
+                    btn = pygame.Rect(int(lr.centerx - bw // 2), int(lr.top - bh - 4), int(bw), int(bh))
+                    btn.clamp_ip(map_rect.inflate(-2, -2))
+                    bs = pygame.Surface((btn.w, btn.h), pygame.SRCALPHA)
+                    bs.fill((10, 10, 12, 210))
+                    pygame.draw.rect(bs, (255, 220, 140, 230), bs.get_rect(), 1)
+                    surface.blit(bs, btn.topleft)
+                    draw_text(surface, font, str(label), btn.center, pygame.Color(240, 240, 240), anchor="center")
+                    self._hr_int_ui_buttons.append(("toggle_lamp", str(room_id), pygame.Rect(btn)))
                 break
 
         if str(getattr(self, "hr_mode", "lobby")) == "home" and bool(getattr(self, "hr_edit_mode", False)):
@@ -16418,20 +16535,7 @@ class HardcoreSurvivalState(State):
             if isinstance(blocks, list) and blocks:
                 sel_i = int(getattr(self, "hr_edit_index", 0)) % len(blocks)
                 _ch, cells = blocks[sel_i]
-                min_x = min(int(p[0]) for p in cells)
-                max_x = max(int(p[0]) for p in cells)
-                min_y = min(int(p[1]) for p in cells)
-                max_y = max(int(p[1]) for p in cells)
-                sel = pygame.Rect(
-                    int(map_x + min_x * tile),
-                    int(map_y + min_y * tile),
-                    int((max_x - min_x + 1) * tile),
-                    int((max_y - min_y + 1) * tile),
-                )
-                ov = pygame.Surface((sel.w, sel.h), pygame.SRCALPHA)
-                ov.fill((255, 220, 140, 50))
-                pygame.draw.rect(ov, (255, 220, 140, 120), ov.get_rect(), 2, border_radius=8)
-                surface.blit(ov, sel.topleft)
+                _draw_cells_outline([(int(p[0]), int(p[1])) for p in cells], rgb=(255, 220, 140), fill_alpha=50, edge_alpha=180)
 
         # Draw player on top of the interior.
         face = pygame.Vector2(self.hr_int_facing)
@@ -16546,27 +16650,12 @@ class HardcoreSurvivalState(State):
                             cells.append((cx, cy))
                             stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
                         if cells:
+                            _draw_cells_outline(cells, rgb=(255, 220, 140), fill_alpha=18, edge_alpha=220)
+
                             min_x = min(int(p[0]) for p in cells)
                             max_x = max(int(p[0]) for p in cells)
                             min_y = min(int(p[1]) for p in cells)
                             max_y = max(int(p[1]) for p in cells)
-                            base_sel = pygame.Rect(
-                                int(map_x + min_x * tile),
-                                int(map_y + min_y * tile),
-                                int((max_x - min_x + 1) * tile),
-                                int((max_y - min_y + 1) * tile),
-                            )
-                            # Match highlight to the actual furniture silhouette (not the full tile box).
-                            sel = pygame.Rect(base_sel)
-                            if ch == "B":
-                                sel = base_sel.inflate(-4, -8)
-                            sel = sel.clip(map_rect)
-                            if sel.w > 0 and sel.h > 0:
-                                ov = pygame.Surface((sel.w, sel.h), pygame.SRCALPHA)
-                                ov.fill((255, 220, 140, 20))
-                                pygame.draw.rect(ov, (255, 220, 140, 150), ov.get_rect(), 2, border_radius=10)
-                                surface.blit(ov, sel.topleft)
-
                             bw = int(max_x - min_x + 1)
                             bh = int(max_y - min_y + 1)
                             name = "家具"
