@@ -14806,6 +14806,7 @@ class HardcoreSurvivalState(State):
         opacity = float(getattr(cfg, "lamp_hr_opacity", 0.8)) if cfg is not None else 0.8
         opacity = float(clamp(float(opacity), 0.05, 3.0))
         glow_intensity = float(clamp(float(intensity) * float(opacity), 0.0, 3.0))
+        glow_intensity = float(glow_intensity * 0.6)
         if glow_intensity <= 0.01:
             return
 
@@ -14816,20 +14817,20 @@ class HardcoreSurvivalState(State):
         if glow is None:
             g = pygame.Surface((radius_px * 2 + 1, radius_px * 2 + 1), pygame.SRCALPHA)
             for r, a in (
-                (radius_px, 6),
-                (int(radius_px * 0.78), 9),
-                (int(radius_px * 0.56), 12),
-                (int(radius_px * 0.36), 18),
+                (radius_px, 3),
+                (int(radius_px * 0.78), 4),
+                (int(radius_px * 0.56), 6),
+                (int(radius_px * 0.36), 9),
             ):
                 if r <= 0:
                     continue
                 aa = int(clamp(int(round(float(a) * float(glow_intensity))), 0, 255))
                 if aa <= 0:
                     continue
-                pygame.draw.circle(g, (238, 224, 196, int(aa)), (radius_px, radius_px), int(r))
-            core_a = int(clamp(int(round(26.0 * float(glow_intensity))), 0, 255))
+                pygame.draw.circle(g, (232, 220, 198, int(aa)), (radius_px, radius_px), int(r))
+            core_a = int(clamp(int(round(13.0 * float(glow_intensity))), 0, 255))
             if core_a > 0:
-                pygame.draw.circle(g, (246, 236, 210, int(core_a)), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
+                pygame.draw.circle(g, (242, 234, 212, int(core_a)), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
             cache = getattr(self, "_hr_lamp_glow_cache", {})
             cache[glow_key] = g
             self._hr_lamp_glow_cache = cache
@@ -22155,6 +22156,7 @@ class HardcoreSurvivalState(State):
         # Daylight still keeps a subtle halo.
         day_factor = float(clamp(0.2 + 0.8 * (1.0 - float(daylight)), 0.12, 1.0))
         glow_intensity = float(clamp(float(intensity) * float(opacity) * float(day_factor), 0.0, 3.0))
+        glow_intensity = float(glow_intensity * 0.55)
         if glow_intensity <= 0.01:
             return
 
@@ -22166,20 +22168,20 @@ class HardcoreSurvivalState(State):
             g = pygame.Surface((radius_px * 2 + 1, radius_px * 2 + 1), pygame.SRCALPHA)
             # Falloff rings; intensity scales alpha (acts like "opacity/brightness").
             for r, a in (
-                (radius_px, 8),
-                (int(radius_px * 0.78), 12),
-                (int(radius_px * 0.56), 16),
-                (int(radius_px * 0.36), 24),
+                (radius_px, 4),
+                (int(radius_px * 0.78), 6),
+                (int(radius_px * 0.56), 8),
+                (int(radius_px * 0.36), 12),
             ):
                 if r <= 0:
                     continue
                 aa = int(clamp(int(round(float(a) * float(glow_intensity))), 0, 255))
                 if aa <= 0:
                     continue
-                pygame.draw.circle(g, (240, 224, 186, int(aa)), (radius_px, radius_px), int(r))
-            core_a = int(clamp(int(round(34.0 * float(glow_intensity))), 0, 255))
+                pygame.draw.circle(g, (236, 222, 194, int(aa)), (radius_px, radius_px), int(r))
+            core_a = int(clamp(int(round(18.0 * float(glow_intensity))), 0, 255))
             if core_a > 0:
-                pygame.draw.circle(g, (248, 238, 205, core_a), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
+                pygame.draw.circle(g, (244, 234, 208, core_a), (radius_px, radius_px), max(1, int(radius_px * 0.14)))
             cache = getattr(self, "_lamp_glow_cache", {})
             cache[glow_key] = g
             self._lamp_glow_cache = cache
