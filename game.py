@@ -2262,6 +2262,7 @@ class HardcoreSurvivalState(State):
     T_PC = 32
     T_LAMP = 33
     T_SWITCH = 34
+    T_TOILET = 35
 
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
@@ -2325,6 +2326,7 @@ class HardcoreSurvivalState(State):
         T_PC: _TileDef("pc", (78, 68, 56), solid=True),
         T_LAMP: _TileDef("lamp", (196, 186, 120), solid=False),
         T_SWITCH: _TileDef("switch", (170, 170, 176), solid=False),
+        T_TOILET: _TileDef("toilet", (240, 240, 245), solid=True),
     }
 
     _PLAYER_PAL = {
@@ -10615,7 +10617,7 @@ class HardcoreSurvivalState(State):
                 self._toggle_barricade()
                 return
             if not self.inv_open and event.key in (pygame.K_h,):
-                self._rv_interior_toggle()
+                self._teleport_to_bathroom()
                 return
             if not self.inv_open and event.key in (pygame.K_f,):
                 self._toggle_vehicle()
@@ -21261,22 +21263,37 @@ class HardcoreSurvivalState(State):
                         y1=int(max_y - 2),
                     )
 
-            # Bathroom: a shelf as a sink/cabinet (inside the box if there's interior space).
+            # Bathroom: toilet + shelf as sink/cabinet.
             if bath_box is not None:
                 bx0, by0, bx1, by1 = bath_box
+                # Place toilet first (priority)
+                place_in_rect(
+                    int(self.T_TOILET),
+                    [(0, 0)],
+                    x0=int(bx1 - 1),
+                    y0=int(by0),
+                    x1=int(bx1),
+                    y1=int(by1),
+                )
+                # Then place sink/cabinet
                 place_in_rect(
                     int(self.T_SHELF),
                     [(0, 0)],
-                    x0=int(bx0 + 1),
-                    y0=int(by0 + 1),
-                    x1=int(bx1 - 1),
-                    y1=int(by1 - 1),
+                    x0=int(bx0),
+                    y0=int(by0),
+                    x1=int(bx1 - 2),
+                    y1=int(by1),
                 )
             elif service_wall_x is not None:
-                # Small layout: put a "sink/cabinet" into the bathroom corner.
+                # Small layout: put toilet + sink into the bathroom corner.
                 bx = int(max_x)
                 by = int(max_y)
-                for ox, oy in ((0, 0), (-1, 0), (0, -1), (-1, -1)):
+                # Try to place toilet
+                for ox, oy in ((0, 0), (-1, 0), (0, -1)):
+                    if set_if_clear(int(bx + ox), int(by + oy), int(self.T_TOILET)):
+                        break
+                # Then place sink nearby
+                for ox, oy in ((-1, 0), (0, -1), (-1, -1)):
                     if set_if_clear(int(bx + ox), int(by + oy), int(self.T_SHELF)):
                         break
         else:
@@ -21411,6 +21428,78 @@ class HardcoreSurvivalState(State):
         self.player.vel.update(0, 0)
         self.player.pos.update((float(sx) + 0.5) * float(self.TILE_SIZE), (float(sy) + 0.5) * float(self.TILE_SIZE))
         self._set_hint("传送到家(K)", seconds=1.0)
+        return True
+
+    def _teleport_to_bathroom(self) -> bool:
+        """Teleport to bathroom (toilet) in home on world map."""
+        if bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "house_interior", False)) or bool(getattr(self, "sch_interior", False)) or bool(getattr(self, "rv_interior", False)):
+            return False
+        home = getattr(self, "home_highrise_door", None)
+        if not isinstance(home, tuple) or len(home) != 2:
+            self._set_hint("未找到家", seconds=1.0)
+            return False
+        try:
+            hx, hy = int(home[0]), int(home[1])
+        except Exception:
+            return False
+
+        found = self._multi_house_at(int(hx), int(hy))
+        if found is None:
+            return False
+        chunk, mh = found
+
+        floors = int(max(1, int(getattr(mh, "floors", 1))))
+        floors = int(min(int(floors), int(getattr(self, "HIGHRISE_MAX_FLOORS", 10))))
+        home_floor = int(getattr(self, "home_highrise_floor", 1) or 1)
+        home_floor = int(clamp(int(home_floor), 1, int(floors)))
+        mh.cur_floor = int(home_floor)
+
+        self._setup_home_highrise_world()
+        self._multi_house_apply_floor(chunk, mh)
+
+        # Find toilet position
+        tx0 = int(getattr(mh, "tx0", 0))
+        ty0 = int(getattr(mh, "ty0", 0))
+        bw = int(getattr(mh, "w", 0))
+        bh = int(getattr(mh, "h", 0))
+
+        base_tiles = mh.floor_tiles.get(int(home_floor))
+        toilet_pos: tuple[int, int] | None = None
+        if isinstance(base_tiles, list) and len(base_tiles) == bw * bh:
+            for yy in range(bh):
+                for xx in range(bw):
+                    if int(base_tiles[yy * bw + xx]) == int(self.T_TOILET):
+                        toilet_pos = (tx0 + xx, ty0 + yy)
+                        break
+                if toilet_pos:
+                    break
+
+        if toilet_pos is None:
+            self._set_hint("未找到卫生间", seconds=1.0)
+            return False
+
+        # Find passable tile near toilet
+        tx, ty = toilet_pos
+        def passable(px: int, py: int) -> bool:
+            try:
+                tid = int(self.world.get_tile(int(px), int(py)))
+            except Exception:
+                return False
+            tdef = self._TILES.get(int(tid))
+            return bool(tdef is not None and not bool(getattr(tdef, "solid", False)))
+
+        spawn: tuple[int, int] | None = None
+        for dx, dy in ((0, -1), (-1, 0), (1, 0), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)):
+            if passable(tx + dx, ty + dy):
+                spawn = (tx + dx, ty + dy)
+                break
+        if spawn is None:
+            spawn = (tx, ty)
+
+        sx, sy = spawn
+        self.player.vel.update(0, 0)
+        self.player.pos.update((float(sx) + 0.5) * float(self.TILE_SIZE), (float(sy) + 0.5) * float(self.TILE_SIZE))
+        self._set_hint("卫生间", seconds=1.0)
         return True
 
     def _try_use_multi_house_stairs(self) -> bool:
@@ -23762,6 +23851,18 @@ class HardcoreSurvivalState(State):
                     glow = shade.inflate(-2, -2)
                     if glow.w > 0 and glow.h > 0:
                         surface.fill((255, 240, 180), glow)
+            elif tile_id == self.T_TOILET:
+                # Toilet bowl (pixel style)
+                bowl = pygame.Rect(rect.x + 2, rect.y + 4, rect.w - 4, rect.h - 5)
+                pygame.draw.rect(surface, outline, bowl.inflate(2, 2))
+                pygame.draw.rect(surface, (240, 240, 245), bowl)
+                # Tank
+                tank = pygame.Rect(rect.x + 3, rect.y + 1, rect.w - 6, 4)
+                pygame.draw.rect(surface, outline, tank.inflate(2, 2))
+                pygame.draw.rect(surface, (230, 230, 238), tank)
+                # Seat
+                seat = pygame.Rect(bowl.x + 1, bowl.y + 1, bowl.w - 2, bowl.h - 2)
+                pygame.draw.rect(surface, (200, 200, 210), seat)
             elif tile_id == self.T_PC:
                 # Simple 2-tile computer desk: left tile prefers monitor, right tile prefers tower.
                 left_is_pc = int(self.world.peek_tile(int(tx - 1), int(ty))) == int(self.T_PC)
