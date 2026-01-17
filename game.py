@@ -2263,6 +2263,7 @@ class HardcoreSurvivalState(State):
     T_LAMP = 33
     T_SWITCH = 34
     T_TOILET = 35
+    T_CABINET = 36
 
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
@@ -2327,6 +2328,7 @@ class HardcoreSurvivalState(State):
         T_LAMP: _TileDef("lamp", (196, 186, 120), solid=False),
         T_SWITCH: _TileDef("switch", (170, 170, 176), solid=False),
         T_TOILET: _TileDef("toilet", (240, 240, 245), solid=True),
+        T_CABINET: _TileDef("cabinet", (92, 72, 54), solid=True),
     }
 
     _PLAYER_PAL = {
@@ -6979,8 +6981,10 @@ class HardcoreSurvivalState(State):
             # Keep roads a bit narrower so towers can be wider (bigger apartments).
             self.compound_road_v_x0 = 15
             self.compound_road_v_x1 = 16
-            self.compound_road_h_y0 = 24
-            self.compound_road_h_y1 = 26
+            # Put the horizontal road at the very bottom so towers can be taller
+            # (bigger apartments) without eating into the internal road.
+            self.compound_road_h_y0 = 31
+            self.compound_road_h_y1 = 31
 
             # Gate opening (south wall) aligned with the central chunk column.
             gate_cx = int(self.compound_cx0) + int(self.compound_w_chunks // 2)
@@ -7073,7 +7077,7 @@ class HardcoreSurvivalState(State):
             # One tower per inner chunk (7-8 total); keep the perimeter for the podium/skirt building.
             # Slightly larger towers so each apartment feels like a real home.
             tower_w = 15
-            tower_h = 24
+            tower_h = 31
             inner_cx0 = int(cx0) + 1
             inner_cx1 = int(cx1) - 1
             inner_cy0 = int(cy0) + 1
@@ -7109,9 +7113,9 @@ class HardcoreSurvivalState(State):
                 ty0w = int(base_ty + int(y0))
                 rr = random.Random(self.state._hash2_u32(int(tx0w), int(ty0w), self.seed ^ 0xA17F1A2B))
                 roof_var = int(rr.randrange(0, 256))
-                max_f = int(max(2, int(getattr(self.state, "HIGHRISE_MAX_FLOORS", 10))))
-                min_f = int(max(2, min(6, int(max_f))))
-                floors = int(rr.randint(int(min_f), int(max_f)))
+                # Keep compound towers at 6F so the roof-cut doesn't shrink the
+                # walkable apartment area too much (home must be >= 100 tiles).
+                floors = 6
                 plan.setdefault((int(cx), int(cy)), []).append(
                     (int(x0), int(y0), int(tower_w), int(tower_h), int(roof_var), int(floors))
                 )
@@ -7715,8 +7719,8 @@ class HardcoreSurvivalState(State):
             gate_x1 = int(getattr(self, "compound_gate_x1", -1))
             rvx0 = int(getattr(self, "compound_road_v_x0", 15))
             rvx1 = int(getattr(self, "compound_road_v_x1", 16))
-            rhy0 = int(getattr(self, "compound_road_h_y0", 24))
-            rhy1 = int(getattr(self, "compound_road_h_y1", 26))
+            rhy0 = int(getattr(self, "compound_road_h_y0", 31))
+            rhy1 = int(getattr(self, "compound_road_h_y1", 31))
 
             ccx0 = int(getattr(self, "compound_cx0", cx))
             ccy0 = int(getattr(self, "compound_cy0", cy))
@@ -10165,6 +10169,7 @@ class HardcoreSurvivalState(State):
         self.world_ctx_open = False
         self.world_ctx_target = None
         self.world_ctx_rects = []
+        self.world_ctx_cooldown_left = 0.0
         self._last_cam_draw = (0, 0)
 
         self.hr_elevator_ui_open = False
@@ -10320,6 +10325,8 @@ class HardcoreSurvivalState(State):
         # Non-blocking speech bubble (doesn't swallow input).
         self.speech_text = ""
         self.speech_left = 0.0
+        # Timed "use toilet" action (world-map home).
+        self.toilet_task: dict[str, object] | None = None
         self.muzzle_flash_left = 0.0
         self.noise_left = 0.0
         self.noise_radius = 0.0
@@ -10856,11 +10863,15 @@ class HardcoreSurvivalState(State):
         self.home_ui_status_left = float(max(0.0, seconds))
 
     def _clear_player_pose(self) -> None:
+        prev_pose = str(getattr(self, "player_pose", "") or "")
+        prev_space = str(getattr(self, "player_pose_space", "") or "")
         self.player_pose = None
         self.player_pose_space = ""
         self.player_pose_left = 0.0
         self.player_pose_anchor = None
         self.player_pose_phase = 0.0
+        if prev_space == "world" and prev_pose in ("sleep", "sit"):
+            self.world_ctx_cooldown_left = max(float(getattr(self, "world_ctx_cooldown_left", 0.0)), 1.0)
 
     def _set_player_pose(
         self,
@@ -18443,6 +18454,9 @@ class HardcoreSurvivalState(State):
             if float(self.speech_left) <= 0.0:
                 self.speech_text = ""
 
+        if float(getattr(self, "world_ctx_cooldown_left", 0.0)) > 0.0:
+            self.world_ctx_cooldown_left = max(0.0, float(getattr(self, "world_ctx_cooldown_left", 0.0)) - dt)
+
         if getattr(self, "rv_ui_status_left", 0.0) > 0.0:
             self.rv_ui_status_left = max(0.0, float(self.rv_ui_status_left) - dt)
             if self.rv_ui_status_left <= 0.0:
@@ -18573,6 +18587,9 @@ class HardcoreSurvivalState(State):
                         self._clear_player_pose()
                     else:
                         move = pygame.Vector2(0, 0)
+
+        # Timed world actions (e.g. toilet) that rely on the sit pose.
+        self._update_toilet_task(float(dt))
 
         move_raw = pygame.Vector2(move)
         if move.length_squared() > 0.001:
@@ -19192,6 +19209,106 @@ class HardcoreSurvivalState(State):
         except Exception:
             return
 
+    def _draw_toilet_task_ui(self, surface: pygame.Surface) -> None:
+        task = getattr(self, "toilet_task", None)
+        if not isinstance(task, dict):
+            return
+        if getattr(self, "mount", None) is not None:
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return
+        if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "world":
+            return
+
+        total = float(task.get("total", 1.0))
+        left = float(task.get("left", 0.0))
+        if total <= 1e-4:
+            return
+        p = float(clamp((total - left) / total, 0.0, 1.0))
+        kind = str(task.get("kind", "pee"))
+
+        label = "大便中..." if kind == "poop" else "小便中..."
+        pct_text = f"{int(round(p * 100.0)):d}%"
+        lines = [label, pct_text]
+
+        try:
+            font = self.app.font_s
+            pad_x = 8
+            pad_y = 6
+            line_gap = 2
+            tail_h = 6
+            tail_w = 10
+            bubble_bg = (0, 0, 0, 160)
+            bubble_border = (220, 220, 235, 110)
+            bubble_hi = (240, 220, 140, 18)
+
+            font_h = int(font.get_height())
+            content_w = max(1, max(int(font.size(str(ln))[0]) for ln in lines))
+            bar_h = 6
+            bar_gap = 4
+            bubble_w = int(clamp(int(max(content_w + pad_x * 2, 84)), 84, INTERNAL_W - 12))
+            bubble_h = int(clamp(int(pad_y * 2 + font_h + bar_gap + bar_h + bar_gap + font_h), 34, 78))
+
+            anchor = getattr(self, "_last_player_screen_rect", None)
+            if not isinstance(anchor, pygame.Rect):
+                anchor = pygame.Rect(INTERNAL_W // 2 - 6, INTERNAL_H // 2 - 10, 12, 20)
+            mouth_x = int(anchor.centerx)
+            mouth_y = int(anchor.top + max(2, int(anchor.h) // 4))
+
+            tip_x = int(mouth_x)
+            tip_y = int(mouth_y - 12)
+
+            bubble_surf = pygame.Surface((bubble_w, bubble_h + tail_h), pygame.SRCALPHA)
+            panel = pygame.Surface((bubble_w, bubble_h), pygame.SRCALPHA)
+            panel.fill(bubble_bg)
+            pygame.draw.rect(panel, bubble_hi, panel.get_rect(), border_radius=10)
+            pygame.draw.rect(panel, bubble_border, panel.get_rect(), 2, border_radius=10)
+            bubble_surf.blit(panel, (0, 0))
+
+            out = bubble_surf.get_rect(centerx=tip_x, bottom=tip_y + 1)
+            out.left = int(clamp(int(out.left), 6, INTERNAL_W - out.w - 6))
+            out.top = int(clamp(int(out.top), 6, INTERNAL_H - out.h - 6))
+
+            tip_x_local = int(clamp(int(tip_x - out.left), 10, bubble_w - 11))
+            base_y = int(bubble_h - 1)
+            tip_y_local = int(bubble_h + tail_h - 1)
+            tail = [(tip_x_local - tail_w // 2, base_y), (tip_x_local + tail_w // 2, base_y), (tip_x_local, tip_y_local)]
+            pygame.draw.polygon(bubble_surf, bubble_bg, tail)
+            pygame.draw.polygon(bubble_surf, bubble_border, tail, 2)
+
+            text_col = pygame.Color(230, 230, 240)
+            bubble_surf.blit(font.render(str(label), False, text_col), (pad_x, pad_y))
+
+            bar_x = int(pad_x)
+            bar_y = int(pad_y + font_h + bar_gap)
+            bar_w = int(bubble_w - pad_x * 2)
+            bar_rect = pygame.Rect(bar_x, bar_y, bar_w, bar_h)
+            pygame.draw.rect(bubble_surf, (0, 0, 0, 130), bar_rect, border_radius=3)
+            pygame.draw.rect(bubble_surf, (220, 220, 235, 120), bar_rect, 1, border_radius=3)
+            inner = bar_rect.inflate(-2, -2)
+            if inner.w > 0 and inner.h > 0:
+                fill_w = int(clamp(int(round(float(inner.w) * p)), 0, inner.w))
+                if fill_w > 0:
+                    fill_col = (210, 180, 120, 210) if kind == "poop" else (120, 190, 230, 210)
+                    bubble_surf.fill(fill_col, pygame.Rect(inner.x, inner.y, fill_w, inner.h))
+                for i in range(1, 10):
+                    x = int(inner.x + (inner.w * i) / 10.0)
+                    if inner.x < x < inner.right:
+                        bubble_surf.fill((0, 0, 0, 60), pygame.Rect(x, inner.y, 1, inner.h))
+
+            pct_spr = font.render(str(pct_text), False, text_col)
+            pct_y = int(bar_rect.bottom + bar_gap - 1)
+            bubble_surf.blit(pct_spr, (int(bubble_w - pad_x - pct_spr.get_width()), pct_y))
+
+            surface.blit(bubble_surf, out.topleft)
+        except Exception:
+            return
+
     def _maybe_show_home_highrise_dialog(self) -> None:
         # Show a small home guidance dialog when the player walks up to their
         # home high-rise entrance on the world map.
@@ -19800,7 +19917,7 @@ class HardcoreSurvivalState(State):
             if tid == int(self.T_FRIDGE):
                 self._home_ui_open(storage_kind="fridge")
                 return True
-            if tid == int(self.T_SHELF):
+            if tid in (int(self.T_SHELF), int(self.T_CABINET)):
                 self._home_ui_open(storage_kind="cabinet")
                 return True
         return False
@@ -19880,6 +19997,7 @@ class HardcoreSurvivalState(State):
             return False
 
         tx, ty = self._player_tile()
+        sitting = str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "world"
         candidates = [
             (tx, ty),
             (tx + 1, ty),
@@ -19896,10 +20014,26 @@ class HardcoreSurvivalState(State):
             if int(self.world.get_tile(int(cx), int(cy))) == int(self.T_PC):
                 hit = (int(cx), int(cy))
                 break
+        if hit is None and sitting:
+            best = None
+            for dy2 in range(-2, 3):
+                for dx2 in range(-2, 3):
+                    if max(abs(int(dx2)), abs(int(dy2))) > 2:
+                        continue
+                    cx = int(tx + dx2)
+                    cy = int(ty + dy2)
+                    if int(self.world.get_tile(int(cx), int(cy))) != int(self.T_PC):
+                        continue
+                    key = (max(abs(int(dx2)), abs(int(dy2))), abs(int(dx2)) + abs(int(dy2)))
+                    if best is None or key < best[0]:
+                        best = (key, int(cx), int(cy))
+            if best is not None:
+                _key, cx, cy = best
+                hit = (int(cx), int(cy))
         if hit is None:
             return False
 
-        if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "world":
+        if not sitting:
             self._set_hint("坐下再用电脑", seconds=1.0)
             return True
 
@@ -19932,16 +20066,33 @@ class HardcoreSurvivalState(State):
             return False
 
         tx, ty = self._player_tile()
+        sitting = str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "world"
         candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
         hit: tuple[int, int] | None = None
         for cx, cy in candidates:
             if int(self.world.get_tile(int(cx), int(cy))) == int(self.T_TV):
                 hit = (int(cx), int(cy))
                 break
+        if hit is None and sitting:
+            best = None
+            for dy2 in range(-2, 3):
+                for dx2 in range(-2, 3):
+                    if max(abs(int(dx2)), abs(int(dy2))) > 2:
+                        continue
+                    cx = int(tx + dx2)
+                    cy = int(ty + dy2)
+                    if int(self.world.get_tile(int(cx), int(cy))) != int(self.T_TV):
+                        continue
+                    key = (max(abs(int(dx2)), abs(int(dy2))), abs(int(dx2)) + abs(int(dy2)))
+                    if best is None or key < best[0]:
+                        best = (key, int(cx), int(cy))
+            if best is not None:
+                _key, cx, cy = best
+                hit = (int(cx), int(cy))
         if hit is None:
             return False
 
-        if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "world":
+        if not sitting:
             self._set_hint("坐下再看电视", seconds=1.0)
             return True
 
@@ -20321,6 +20472,7 @@ class HardcoreSurvivalState(State):
         movable = {
             int(self.T_TABLE),
             int(self.T_SHELF),
+            int(self.T_CABINET),
             int(self.T_BED),
             int(self.T_SOFA),
             int(self.T_FRIDGE),
@@ -20445,9 +20597,13 @@ class HardcoreSurvivalState(State):
             self._try_toggle_home_light_world()
             return
         if action == "tv":
+            if not (str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "world"):
+                self._try_sit_world()
             self._try_watch_tv_world()
             return
         if action == "pc":
+            if not (str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "world"):
+                self._try_sit_world()
             self._try_use_pc_world()
             return
         if action == "pee":
@@ -20490,14 +20646,108 @@ class HardcoreSurvivalState(State):
             return False
 
         kind = str(kind)
+        if kind not in ("pee", "poop"):
+            kind = "pee"
+
+        # Already busy.
+        if isinstance(getattr(self, "toilet_task", None), dict):
+            return True
+
+        # Find a nearby walkable tile to sit (never snap outside the building).
+        toilet_building = self._peek_building_at_tile(int(tx), int(ty))
+        prefer = pygame.Vector2(self.player.pos)
+        best: tuple[float, int, int] | None = None
+        for dx2, dy2 in (
+            (0, 1),
+            (0, -1),
+            (1, 0),
+            (-1, 0),
+            (1, 1),
+            (1, -1),
+            (-1, 1),
+            (-1, -1),
+        ):
+            nx = int(tx + dx2)
+            ny = int(ty + dy2)
+            if not self._tile_in_home_world(int(nx), int(ny)):
+                continue
+            if toilet_building is not None:
+                nb = self._peek_building_at_tile(int(nx), int(ny))
+                if nb is None or tuple(nb[:4]) != tuple(toilet_building[:4]):
+                    continue
+            tid2 = int(self.world.get_tile(int(nx), int(ny)))
+            if bool(self._tile_solid(int(tid2))):
+                continue
+            cxp = (float(nx) + 0.5) * float(self.TILE_SIZE)
+            cyp = (float(ny) + 0.5) * float(self.TILE_SIZE)
+            d2 = float((cxp - prefer.x) ** 2 + (cyp - prefer.y) ** 2)
+            if best is None or d2 < float(best[0]):
+                best = (d2, int(nx), int(ny))
+        if best is None:
+            return False
+
+        _d2, sx, sy = best
+        ax = (float(sx) + 0.5) * float(self.TILE_SIZE)
+        ay = (float(sy) + 0.5) * float(self.TILE_SIZE)
+
+        # Face the toilet.
+        fdx = int(tx) - int(sx)
+        fdy = int(ty) - int(sy)
+        if abs(int(fdx)) >= abs(int(fdy)):
+            if int(fdx) > 0:
+                self.player.dir = "right"
+            elif int(fdx) < 0:
+                self.player.dir = "left"
+        else:
+            if int(fdy) > 0:
+                self.player.dir = "down"
+            elif int(fdy) < 0:
+                self.player.dir = "up"
+
+        self.player.vel.update(0, 0)
+        self._set_player_pose("sit", space="world", anchor=(ax, ay), seconds=0.0)
+
+        total = 4.0 if kind == "poop" else 2.4
+        self.toilet_task = {"kind": kind, "total": float(total), "left": float(total)}
+        return True
+
+    def _update_toilet_task(self, dt: float) -> None:
+        task = getattr(self, "toilet_task", None)
+        if not isinstance(task, dict):
+            return
+        if getattr(self, "mount", None) is not None:
+            self.toilet_task = None
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            self.toilet_task = None
+            return
+
+        if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "world":
+            # Cancelled (player moved / left pose).
+            self.toilet_task = None
+            return
+
+        left = float(task.get("left", 0.0))
+        left = max(0.0, left - float(dt))
+        task["left"] = float(left)
+        if left > 0.0:
+            return
+
+        kind = str(task.get("kind", "pee"))
+        self.toilet_task = None
+        self._clear_player_pose()
+
         if kind == "poop":
             self.player.morale = float(clamp(float(self.player.morale) + 1.0, 0.0, 100.0))
             self._speech_say("拉屎完成", seconds=1.2)
-            return True
-
-        self.player.morale = float(clamp(float(self.player.morale) + 0.5, 0.0, 100.0))
-        self._speech_say("小便完成", seconds=1.2)
-        return True
+        else:
+            self.player.morale = float(clamp(float(self.player.morale) + 0.5, 0.0, 100.0))
+            self._speech_say("小便完成", seconds=1.2)
 
     def _handle_world_context_menu_mouse(self, event: pygame.event.Event) -> bool:
         if bool(getattr(self, "home_move_mode", False)):
@@ -21138,6 +21388,8 @@ class HardcoreSurvivalState(State):
         # Home floorplan (world-map, NOT full-screen): 1 living + 2 bedrooms + 1 bath + 1 kitchen.
         rect_w = int(max_x - min_x + 1)
         rect_h = int(max_y - min_y + 1)
+        # Debug: helps validate that the home is actually >= 100 floor tiles.
+        self._home_highrise_world_debug = {"region": int(len(region)), "rect_w": int(rect_w), "rect_h": int(rect_h)}
 
         def set_if_clear(x: int, y: int, tid: int) -> bool:
             x = int(x)
@@ -21192,14 +21444,154 @@ class HardcoreSurvivalState(State):
         door_clear: list[tuple[int, int, list[tuple[int, int]]]] = []
 
         did_layout = False
+        layout_kind = "none"  # home_v2 | classic | classic_small | none
         bed_wall_y = None
         bed_div_x = None
         service_wall_x = None
-        bath_box: tuple[int, int, int, int] | None = None  # (x0,y0,x1,y1)
+        bath_box: tuple[int, int, int, int] | None = None  # (x0,y0,x1,y1) interior floor rect
+        kitchen_box: tuple[int, int, int, int] | None = None  # (x0,y0,x1,y1) interior floor rect
+        bed1_box: tuple[int, int, int, int] | None = None
+        bed2_box: tuple[int, int, int, int] | None = None
+        living_box: tuple[int, int, int, int] | None = None
+
+        # Prefer a "real home" plan for narrow but tall apartments.
+        min_home_tiles = 100
+        if int(rect_w) >= 7 and int(rect_h) >= 12 and len(region) >= int(min_home_tiles) and int(rect_w) <= 8:
+            layout_kind = "home_v2"
+            did_layout = True
+
+            # Allocate a living band at the bottom while guaranteeing space for
+            # 2 bedrooms + separator walls.
+            # Narrow apartments need a bit more living depth so the kitchen isn't
+            # a 2-row strip (we need room for fridge + counters).
+            min_living_h = 7
+            min_bed_total = 8  # 2 bedrooms (>=3 each) + 1 sep wall + 1 boundary wall
+            max_living_h = max(int(min_living_h), int(rect_h) - int(min_bed_total))
+            living_h = int(clamp(int(round(float(rect_h) * 0.42)), int(min_living_h), int(max_living_h)))
+            living_top_y = int(max_y - int(living_h) + 1)
+            bed_zone_wall_y = int(living_top_y - 1)  # wall row between bedrooms and living
+
+            # Corridor at x=min_x; bedrooms start after a wall at x=min_x+1.
+            corridor_wall_x = int(min_x + 1)
+            room_x0 = int(corridor_wall_x + 1)
+
+            bed_zone_h = int(bed_zone_wall_y - min_y)  # rows above the boundary wall
+            min_bed_h = 3
+
+            # Basic sanity: need at least a 3-tile wide bedroom side and enough height.
+            ok_home_v2 = not (
+                int(room_x0) >= int(max_x - 1)
+                or int(bed_zone_wall_y) <= int(min_y + 5)
+                or int(bed_zone_h) < int(min_bed_h * 2 + 1)
+            )
+            if not ok_home_v2:
+                did_layout = False
+                layout_kind = "none"
+            else:
+                bed1_h_max = int(bed_zone_h - (int(min_bed_h) + 1))
+                bed1_h = int(clamp(int(round(float(bed_zone_h) * 0.52)), int(min_bed_h), int(bed1_h_max)))
+                bed_sep_y = int(min_y + int(bed1_h))  # wall row between bedrooms
+                bed1_y0 = int(min_y)
+                bed1_y1 = int(bed_sep_y - 1)
+                bed2_y0 = int(bed_sep_y + 1)
+                bed2_y1 = int(bed_zone_wall_y - 1)
+                if int(bed2_y1 - bed2_y0 + 1) < int(min_bed_h):
+                    did_layout = False
+                    layout_kind = "none"
+                else:
+                    # Compute the living-side kitchen/bath strip.
+                    living_band_h = int(max_y - living_top_y + 1)
+                    service_w = 2 if int(rect_w) <= 7 else 3
+                    service_w = int(clamp(int(service_w), 2, max(2, int(rect_w) - 4)))
+                    service_x0 = int(max_x - int(service_w) + 1)
+                    service_wall = int(service_x0 - 1)
+
+                    # Keep at least a 4-tile living width.
+                    if int(service_wall - min_x) < 5:
+                        service_w = 2
+                        service_x0 = int(max_x - 1)
+                        service_wall = int(service_x0 - 1)
+
+                    kitchen_min_h = 3
+                    bath_target_h = 3
+                    max_bath_h = int(living_band_h) - int(kitchen_min_h) - 1  # leave 1 wall row
+                    max_bath_h = int(max(2, int(max_bath_h)))
+                    bath_h = int(clamp(int(bath_target_h), 2, int(max_bath_h)))
+                    bath_y0 = int(max_y - int(bath_h) + 1)
+                    bath_sep_y = int(bath_y0 - 1)
+                    kitchen_y0 = int(living_top_y)
+                    kitchen_y1 = int(bath_sep_y - 1)
+
+                    # Require a usable kitchen band.
+                    if int(kitchen_y1) < int(kitchen_y0) + int(kitchen_min_h - 1):
+                        did_layout = False
+                        layout_kind = "none"
+                    else:
+                        # Corridor wall (separates corridor from bedrooms).
+                        for yy in range(int(min_y), int(bed_zone_wall_y) + 1):
+                            wall_at(int(corridor_wall_x), int(yy))
+
+                        # Bedroom separator + boundary wall (bedroom side only; keep corridor open).
+                        for xx in range(int(room_x0), int(max_x) + 1):
+                            wall_at(int(xx), int(bed_sep_y))
+                            wall_at(int(xx), int(bed_zone_wall_y))
+
+                        def pick_door_y(y0: int, y1: int) -> int:
+                            y0 = int(y0)
+                            y1 = int(y1)
+                            if y1 - y0 < 3:
+                                return int(clamp(int(y0 + 1), int(y0), int(y1)))
+                            return int(clamp(int((y0 + y1) // 2), int(y0 + 1), int(y1 - 1)))
+
+                        for dy2 in (pick_door_y(int(bed1_y0), int(bed1_y1)), pick_door_y(int(bed2_y0), int(bed2_y1))):
+                            door_at(int(corridor_wall_x), int(dy2))
+                            door_clear.append(
+                                (
+                                    int(corridor_wall_x),
+                                    int(dy2),
+                                    [(int(corridor_wall_x - 1), int(dy2)), (int(corridor_wall_x + 1), int(dy2))],
+                                )
+                            )
+                            reserve_near(int(corridor_wall_x - 1), int(dy2))
+                            reserve_near(int(corridor_wall_x + 1), int(dy2))
+
+                        # Vertical wall between living and the service strip.
+                        for yy in range(int(living_top_y), int(max_y) + 1):
+                            wall_at(int(service_wall), int(yy))
+
+                        # Horizontal wall between kitchen and bathroom (service strip only).
+                        for xx in range(int(service_x0), int(max_x) + 1):
+                            wall_at(int(xx), int(bath_sep_y))
+
+                        # Doors into kitchen and bath (on the service wall).
+                        kitchen_door_y = int((int(kitchen_y0) + int(kitchen_y1)) // 2)
+                        bath_door_y = int((int(bath_y0) + int(max_y)) // 2)
+                        for dy2 in (int(kitchen_door_y), int(bath_door_y)):
+                            door_at(int(service_wall), int(dy2))
+                            door_clear.append(
+                                (
+                                    int(service_wall),
+                                    int(dy2),
+                                    [(int(service_wall - 1), int(dy2)), (int(service_wall + 1), int(dy2))],
+                                )
+                            )
+                            reserve_near(int(service_wall - 1), int(dy2))
+                            reserve_near(int(service_wall + 1), int(dy2))
+
+                        # Boxes for furnishing (interior floor rects).
+                        bed1_box = (int(room_x0), int(bed1_y0), int(max_x), int(bed1_y1))
+                        bed2_box = (int(room_x0), int(bed2_y0), int(max_x), int(bed2_y1))
+                        living_box = (int(min_x), int(living_top_y), int(service_wall - 1), int(max_y))
+                        kitchen_box = (int(service_x0), int(kitchen_y0), int(max_x), int(kitchen_y1))
+                        bath_box = (int(service_x0), int(bath_y0), int(max_x), int(max_y))
+                        # Keep the 1-tile corridor strip clear so bedrooms never get blocked by furniture.
+                        for yy in range(int(min_y), int(max_y) + 1):
+                            reserved.add((int(min_x), int(yy)))
 
         # Only attempt the room carve when there's enough space to walk.
-        if int(rect_w) >= 7 and int(rect_h) >= 6:
+        if (not did_layout) and int(rect_w) >= 7 and int(rect_h) >= 6:
             did_layout = True
+            layout_kind = "classic"
             # Bedrooms (north) vs living/kitchen/bath (south).
             max_bed = int(rect_h) - 4 if int(rect_h) >= 6 else int(rect_h) - 3
             max_bed = int(max(2, int(max_bed)))
@@ -21233,6 +21625,10 @@ class HardcoreSurvivalState(State):
             door_clear.append((int(right_door_x), int(bed_wall_y), [(int(right_door_x), int(bed_wall_y - 1)), (int(right_door_x), int(bed_wall_y + 1))]))
             reserve_near(int(left_door_x), int(bed_wall_y + 1))
             reserve_near(int(right_door_x), int(bed_wall_y + 1))
+            reserve_near(int(left_door_x), int(bed_wall_y - 1))
+            reserve_near(int(right_door_x), int(bed_wall_y - 1))
+            reserve_near(int(left_door_x), int(bed_wall_y - 1))
+            reserve_near(int(right_door_x), int(bed_wall_y - 1))
 
             south_top_y = int(bed_wall_y + 1)
             south_h = int(max_y - south_top_y + 1)
@@ -21285,10 +21681,12 @@ class HardcoreSurvivalState(State):
                     )
                 )
                 reserve_near(int(bath_door_x), int(bath_sep_y + 1))
+                reserve_near(int(bath_door_x), int(bath_sep_y - 1))
                 bath_box = (int(service_wall_x + 1), int(bath_sep_y + 1), int(max_x), int(max_y))
-        elif int(rect_w) >= 5 and int(rect_h) >= 6:
+        elif (not did_layout) and int(rect_w) >= 5 and int(rect_h) >= 6:
             # Small-unit fallback: still carve the same concept (1厅2室1卫1厨) in a compact way.
             did_layout = True
+            layout_kind = "classic_small"
             bed_wall_y = int(clamp(int(min_y + 2), int(min_y + 2), int(max_y - 2)))
             bed_div_x = int(clamp(int(min_x + (int(rect_w) // 2)), int(min_x + 2), int(max_x - 2)))
 
@@ -21341,6 +21739,7 @@ class HardcoreSurvivalState(State):
                 )
             )
             reserve_near(int(bath_door_x), int(bath_sep_y + 1))
+            reserve_near(int(bath_door_x), int(bath_sep_y - 1))
             bath_box = (int(service_wall_x + 1), int(bath_sep_y + 1), int(max_x), int(max_y))
 
         def place_in_rect(tid: int, shape: list[tuple[int, int]], *, x0: int, y0: int, x1: int, y1: int) -> bool:
@@ -21357,7 +21756,156 @@ class HardcoreSurvivalState(State):
                         return True
             return False
 
-        if did_layout and bed_wall_y is not None and bed_div_x is not None:
+        if (
+            did_layout
+            and str(layout_kind) == "home_v2"
+            and bed1_box is not None
+            and bed2_box is not None
+            and living_box is not None
+            and kitchen_box is not None
+            and bath_box is not None
+        ):
+            b1x0, b1y0, b1x1, b1y1 = (int(v) for v in bed1_box)
+            b2x0, b2y0, b2x1, b2y1 = (int(v) for v in bed2_box)
+            lvx0, lvy0, lvx1, lvy1 = (int(v) for v in living_box)
+            kx0, ky0, kx1, ky1 = (int(v) for v in kitchen_box)
+            bax0, bay0, bax1, bay1 = (int(v) for v in bath_box)
+
+            # Beds (2-tile connected).
+            bed_shape_h = [(0, 0), (1, 0)]
+            place_in_rect(int(self.T_BED), bed_shape_h, x0=int(b1x0), y0=int(b1y0 + 1), x1=int(b1x1 - 1), y1=int(b1y1))
+            place_in_rect(int(self.T_BED), bed_shape_h, x0=int(b2x0), y0=int(b2y0 + 1), x1=int(b2x1 - 1), y1=int(b2y1))
+
+            # Bedroom storage (wardrobe/bookshelf).
+            if not place_in_rect(int(self.T_SHELF), [(0, 0)], x0=int(b1x1), y0=int(b1y0 + 1), x1=int(b1x1), y1=int(b1y1)):
+                place_in_rect(int(self.T_SHELF), [(0, 0)], x0=int(b1x0), y0=int(b1y0), x1=int(b1x1), y1=int(b1y1))
+
+            # Study: PC desk near the top-right of bedroom 2.
+            pc_shape = [(0, 0), (1, 0)]
+            pc_anchor: tuple[int, int] | None = None
+            for yy in range(int(b2y0 + 1), int(b2y1) + 1):
+                for xx in range(int(b2x1 - 1), int(b2x0) - 1, -1):
+                    if place(int(self.T_PC), [(int(xx), int(yy)), (int(xx + 1), int(yy))]):
+                        pc_anchor = (int(xx), int(yy))
+                        break
+                if pc_anchor is not None:
+                    break
+            if pc_anchor is None:
+                # Fallback: any fit in the study bedroom.
+                for yy in range(int(b2y0), int(b2y1) + 1):
+                    for xx in range(int(b2x0), int(b2x1)):
+                        if place(int(self.T_PC), [(int(xx), int(yy)), (int(xx + 1), int(yy))]):
+                            pc_anchor = (int(xx), int(yy))
+                            break
+                    if pc_anchor is not None:
+                        break
+
+            # Chair in front of the desk (try a few cells).
+            if pc_anchor is not None:
+                dx, dy = pc_anchor
+                for sx, sy in (
+                    (dx, dy + 1),
+                    (dx + 1, dy + 1),
+                    (dx, dy + 2),
+                    (dx + 1, dy + 2),
+                    (dx - 1, dy + 1),
+                    (dx + 2, dy + 1),
+                ):
+                    if set_if_clear(int(sx), int(sy), int(self.T_CHAIR)):
+                        break
+
+            # Living room: sofa + TV + small table.
+            sofa_y = int(max(int(lvy0), int(lvy1 - 2)))
+            # Try to keep the far-right tile free for the TV by shortening the sofa run.
+            sofa_x1 = int(max(int(lvx0 + 1), int(lvx1 - 2)))
+            if not place_in_rect(int(self.T_SOFA), [(0, 0), (1, 0)], x0=int(lvx0 + 1), y0=int(sofa_y), x1=int(sofa_x1), y1=int(sofa_y)):
+                place_in_rect(int(self.T_SOFA), [(0, 0), (1, 0)], x0=int(lvx0 + 1), y0=int(sofa_y), x1=int(lvx1 - 1), y1=int(sofa_y))
+
+            tv_pos: tuple[int, int] | None = None
+            for ty3 in (int(sofa_y), int(sofa_y - 1), int(sofa_y + 1), int(lvy0 + 1), int(lvy1 - 1)):
+                if set_if_clear(int(lvx1), int(ty3), int(self.T_TV)):
+                    tv_pos = (int(lvx1), int(ty3))
+                    break
+
+            # Table near center with one chair.
+            cx2 = int((int(lvx0) + int(lvx1)) // 2)
+            cy2 = int((int(lvy0) + int(lvy1)) // 2)
+            table_pos: tuple[int, int] | None = None
+            for r in range(0, 6):
+                for dy2 in range(-int(r), int(r) + 1):
+                    for dx2 in range(-int(r), int(r) + 1):
+                        tx2 = int(cx2 + dx2)
+                        ty2 = int(cy2 + dy2)
+                        if (tx2, ty2) in reserved:
+                            continue
+                        if (tx2, ty2) not in region:
+                            continue
+                        if int(get(int(tx2), int(ty2))) != int(self.T_FLOOR):
+                            continue
+                        if place(int(self.T_TABLE), [(int(tx2), int(ty2))]):
+                            table_pos = (int(tx2), int(ty2))
+                            break
+                    if table_pos is not None:
+                        break
+                if table_pos is not None:
+                        break
+            if table_pos is not None:
+                tx2, ty2 = table_pos
+                for (sx, sy) in ((tx2, ty2 + 1), (tx2 + 1, ty2), (tx2 - 1, ty2), (tx2, ty2 - 1)):
+                    if set_if_clear(int(sx), int(sy), int(self.T_CHAIR)):
+                        break
+
+            # Kitchen: fridge + cabinets.
+            fridge_ok = False
+            for fx, fy in (
+                (int(kx1), int(ky0)),
+                (int(kx1), int(ky1)),
+                (int(kx0), int(ky0)),
+                (int(kx0), int(ky1)),
+                (int(kx1), int(ky0 + 1)),
+                (int(kx0), int(ky0 + 1)),
+            ):
+                if set_if_clear(int(fx), int(fy), int(self.T_FRIDGE)):
+                    fridge_ok = True
+                    break
+            if not fridge_ok:
+                place_in_rect(int(self.T_FRIDGE), [(0, 0)], x0=int(kx0), y0=int(ky0), x1=int(kx1), y1=int(ky1))
+
+            cab_count = 0
+            for sx, sy in (
+                (int(kx0), int(ky0)),
+                (int(kx0), int(ky1)),
+                (int(kx1), int(ky0)),
+                (int(kx1), int(ky1)),
+                (int(kx0), int(ky0 + 1)),
+                (int(kx1), int(ky0 + 1)),
+            ):
+                if set_if_clear(int(sx), int(sy), int(self.T_CABINET)):
+                    cab_count += 1
+                if cab_count >= 2:
+                    break
+            if cab_count == 0:
+                place_in_rect(int(self.T_CABINET), [(0, 0)], x0=int(kx0), y0=int(ky0), x1=int(kx1), y1=int(ky1))
+
+            # Bathroom: toilet + sink/cabinet.
+            placed_toilet = False
+            for ty3 in range(int(bay1), int(bay0) - 1, -1):
+                for tx3 in range(int(bax1), int(bax0) - 1, -1):
+                    # Avoid the door-adjacent tile.
+                    if int(tx3) == int(bax0) and int(ty3) == int(bay0):
+                        continue
+                    if set_if_floor(int(tx3), int(ty3), int(self.T_TOILET)):
+                        placed_toilet = True
+                        break
+                if placed_toilet:
+                    break
+            if not placed_toilet:
+                place_in_rect(int(self.T_TOILET), [(0, 0)], x0=int(bax0), y0=int(bay0), x1=int(bax1), y1=int(bay1))
+
+            if not set_if_clear(int(bax0), int(bay0), int(self.T_CABINET)):
+                place_in_rect(int(self.T_CABINET), [(0, 0)], x0=int(bax0), y0=int(bay0), x1=int(bax1), y1=int(bay1))
+
+        elif did_layout and bed_wall_y is not None and bed_div_x is not None:
             south_top_y = int(bed_wall_y + 1)
 
             # Bedrooms: beds + a small study.
@@ -21475,7 +22023,7 @@ class HardcoreSurvivalState(State):
                     y1=int(max_y - 1),
                 )
                 place_in_rect(
-                    int(self.T_SHELF),
+                    int(self.T_CABINET),
                     [(0, 0)],
                     x0=int(service_wall_x + 1),
                     y0=int(south_top_y),
@@ -21500,7 +22048,7 @@ class HardcoreSurvivalState(State):
                         y1=int(max_y - 2),
                     )
 
-            # Bathroom: toilet + shelf as sink/cabinet.
+            # Bathroom: toilet + sink/cabinet.
             if bath_box is not None:
                 bx0, by0, bx1, by1 = bath_box
                 # Place toilet first (priority) — avoid blocking the bathroom door
@@ -21524,10 +22072,10 @@ class HardcoreSurvivalState(State):
                         y0=int(by0),
                         x1=int(bx1),
                         y1=int(by1),
-                    )
+                )
                 # Then place sink/cabinet
                 place_in_rect(
-                    int(self.T_SHELF),
+                    int(self.T_CABINET),
                     [(0, 0)],
                     x0=int(bx0),
                     y0=int(by0),
@@ -21544,7 +22092,7 @@ class HardcoreSurvivalState(State):
                         break
                 # Then place sink nearby
                 for ox, oy in ((-1, 0), (0, -1), (-1, -1)):
-                    if set_if_clear(int(bx + ox), int(by + oy), int(self.T_SHELF)):
+                    if set_if_clear(int(bx + ox), int(by + oy), int(self.T_CABINET)):
                         break
         else:
             # Fallback: minimal furnishing if the apartment is too small to carve.
@@ -21555,7 +22103,7 @@ class HardcoreSurvivalState(State):
                 if place(int(self.T_BED), [(int(c[0]), int(c[1])) for c in cells]):
                     break
             place(int(self.T_FRIDGE), [(int(max_x - 1), int(min_y + 1))])
-            place(int(self.T_SHELF), [(int(max_x - 2), int(min_y + 1))])
+            place(int(self.T_CABINET), [(int(max_x - 2), int(min_y + 1))])
             place(int(self.T_SOFA), [(int(min_x + 1), int(max_y - 2)), (int(min_x + 2), int(max_y - 2))])
             place(int(self.T_TV), [(int(max_x - 1), int(max_y - 2))])
 
@@ -23840,6 +24388,7 @@ class HardcoreSurvivalState(State):
                 int(self.T_STAIRS_DOWN),
                 int(self.T_TABLE),
                 int(self.T_SHELF),
+                int(self.T_CABINET),
                 int(self.T_BED),
                 int(self.T_SOFA),
                 int(self.T_FRIDGE),
@@ -23848,6 +24397,7 @@ class HardcoreSurvivalState(State):
                 int(self.T_PC),
                 int(self.T_LAMP),
                 int(self.T_SWITCH),
+                int(self.T_TOILET),
             ):
                 inside_key = getattr(self, "_inside_building_key", None)
                 try:
@@ -24079,6 +24629,7 @@ class HardcoreSurvivalState(State):
         if tile_id in (
             self.T_TABLE,
             self.T_SHELF,
+            self.T_CABINET,
             self.T_BED,
             self.T_SOFA,
             self.T_FRIDGE,
@@ -24325,7 +24876,7 @@ class HardcoreSurvivalState(State):
                 surface.fill(hi, pygame.Rect(seat.x + 1, seat.y + 1, max(1, seat.w - 2), 1))
                 surface.fill(outline, pygame.Rect(seat.x + 1, rect.bottom - 2, 1, 1))
                 surface.fill(outline, pygame.Rect(seat.right - 2, rect.bottom - 2, 1, 1))
-            else:  # shelf
+            elif tile_id == self.T_SHELF:  # shelf
                 box = pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2)
                 pygame.draw.rect(surface, col, box, border_radius=2)
                 pygame.draw.rect(surface, outline, box, 1, border_radius=2)
@@ -24336,6 +24887,24 @@ class HardcoreSurvivalState(State):
                 if ((int(tx) + int(ty)) % 3) == 0:
                     surface.fill((200, 120, 120), pygame.Rect(box.x + 2, box.y + 2, 1, 2))
                     surface.fill((120, 200, 140), pygame.Rect(box.x + 4, box.y + 2, 1, 2))
+            elif tile_id == self.T_CABINET:
+                # Kitchen cabinet (reads differently from bookshelf).
+                counter = pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, 2)
+                body = pygame.Rect(rect.x + 1, rect.y + 4, rect.w - 2, rect.h - 5)
+                surface.fill(hi, pygame.Rect(counter.x, counter.y, counter.w, 1))
+                surface.fill(col, pygame.Rect(counter.x, counter.y + 1, counter.w, 1))
+                pygame.draw.rect(surface, outline, pygame.Rect(counter.x, counter.y, counter.w, 2), 1)
+                pygame.draw.rect(surface, col, body, border_radius=2)
+                pygame.draw.rect(surface, outline, body, 1, border_radius=2)
+                surface.fill(hi, pygame.Rect(body.x + 1, body.y + 1, max(1, body.w - 2), 1))
+                surface.fill(lo, pygame.Rect(body.x + 1, body.bottom - 2, max(1, body.w - 2), 1))
+                # Doors split + handles.
+                surface.fill(outline, pygame.Rect(body.centerx, body.y + 1, 1, max(1, body.h - 2)))
+                handle = (210, 210, 220)
+                surface.fill(handle, pygame.Rect(body.centerx - 2, body.y + 2, 1, 1))
+                surface.fill(handle, pygame.Rect(body.centerx + 1, body.y + 2, 1, 1))
+            else:
+                pass
 
         # Proximity outline for interactable world tiles (keyboard-friendly).
         try:
@@ -24651,6 +25220,10 @@ class HardcoreSurvivalState(State):
             or bool(getattr(self, "rv_interior", False))
         ):
             return
+        if float(getattr(self, "world_ctx_cooldown_left", 0.0)) > 0.0:
+            return
+        if float(getattr(self, "speech_left", 0.0)) > 0.0:
+            return
         if str(getattr(self, "player_pose_space", "")) == "world" and str(getattr(self, "player_pose", "")) in ("sleep", "sit"):
             return
 
@@ -24672,6 +25245,7 @@ class HardcoreSurvivalState(State):
             int(self.T_BED),
             int(self.T_FRIDGE),
             int(self.T_SHELF),
+            int(self.T_CABINET),
             int(self.T_TV),
             int(self.T_PC),
             int(self.T_LAMP),
@@ -24682,6 +25256,7 @@ class HardcoreSurvivalState(State):
             int(self.T_LAMP): 0,
             int(self.T_FRIDGE): 1,
             int(self.T_SHELF): 1,
+            int(self.T_CABINET): 1,
             int(self.T_BED): 2,
             int(self.T_TOILET): 2,
             int(self.T_SOFA): 3,
@@ -24741,7 +25316,7 @@ class HardcoreSurvivalState(State):
             opts = [("坐", "sit"), ("搬运", "move")]
         elif int(tid) == int(self.T_BED):
             opts = [("睡觉", "sleep"), ("搬运", "move")]
-        elif int(tid) in (int(self.T_FRIDGE), int(self.T_SHELF)):
+        elif int(tid) in (int(self.T_FRIDGE), int(self.T_SHELF), int(self.T_CABINET)):
             opts = [("打开", "open"), ("搬运", "move")]
         elif int(tid) == int(self.T_PC):
             opts = [("用电脑", "pc"), ("搬运", "move")]
@@ -24756,11 +25331,12 @@ class HardcoreSurvivalState(State):
         if not opts:
             return
 
-        btn_w = 38
-        btn_h = 16
-        gap = 4
-        panel_w = int(len(opts) * btn_w + max(0, len(opts) - 1) * gap + 10)
-        panel_h = int(btn_h + 10)
+        # Compact menu (doesn't cover the whole room).
+        btn_w = 32
+        btn_h = 14
+        gap = 3
+        panel_w = int(len(opts) * btn_w + max(0, len(opts) - 1) * gap + 8)
+        panel_h = int(btn_h + 8)
         px = int(tile_rect.centerx - panel_w // 2)
         py = int(tile_rect.top - panel_h - 8)
         if py < 4:
@@ -24768,17 +25344,17 @@ class HardcoreSurvivalState(State):
         px = int(clamp(int(px), 4, int(INTERNAL_W - 4 - panel_w)))
         py = int(clamp(int(py), 4, int(INTERNAL_H - 4 - panel_h)))
         panel = pygame.Rect(px, py, panel_w, panel_h)
-        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=6)
-        pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=6)
+        pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=5)
+        pygame.draw.rect(surface, (90, 90, 110), panel, 1, border_radius=5)
 
-        x0 = int(panel.x + 5)
-        y0 = int(panel.y + 5)
+        x0 = int(panel.x + 4)
+        y0 = int(panel.y + 4)
         font = self.app.font_s
         rects: list[tuple[pygame.Rect, str]] = []
         for i, (label, action) in enumerate(opts):
             br = pygame.Rect(int(x0 + i * (btn_w + gap)), int(y0), int(btn_w), int(btn_h))
-            pygame.draw.rect(surface, (28, 28, 34), br, border_radius=5)
-            pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=5)
+            pygame.draw.rect(surface, (28, 28, 34), br, border_radius=4)
+            pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=4)
             draw_text(surface, font, str(label), (br.centerx, br.centery - 1), pygame.Color(230, 230, 240), anchor="center")
             rects.append((br, str(action)))
 
@@ -25695,7 +26271,12 @@ class HardcoreSurvivalState(State):
             return 0
 
         face_h = int(self._building_face_height_px(style=int(style), w=int(w), h=int(h), var=int(var), floors=int(floors)))
-        cut = int(max(0, int(face_h) - 2))
+        # Cutaway depth: don't remove the full facade height for high-rises,
+        # otherwise apartments become too shallow (hard to fit 1厅2室1卫1厨).
+        if int(style) == 6:
+            cut = int(max(0, int(round(float(face_h) * 0.55)) - 2))
+        else:
+            cut = int(max(0, int(face_h) - 2))
         min_vis = 18 if int(style) == 6 else 14
         roof_h_px = int(max(1, (int(h) - 2) * int(self.TILE_SIZE)))
         max_cut = int(max(0, int(roof_h_px) - int(min_vis)))
@@ -27539,6 +28120,7 @@ class HardcoreSurvivalState(State):
 
         self._draw_world_furniture_carry_preview(surface, cam_x, cam_y_draw)
         self._draw_world_context_menu(surface, cam_x, cam_y_draw)
+        self._draw_toilet_task_ui(surface)
         self._draw_hover_tooltip(surface)
         self._draw_speech_bubble(surface)
         self._draw_dialog(surface)
