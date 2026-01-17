@@ -10168,7 +10168,7 @@ class HardcoreSurvivalState(State):
         # RV "interior" (world-map camera, NOT full-screen panel).
         self.rv_world_interior = False
         self._rv_world_return_pos: pygame.Vector2 | None = None
-        self._rv_world_int_key = (9000, 9000, 10, 8)  # tx0, ty0, w, h (tiles)
+        self._rv_world_int_key = (9000, 9000, 16, 10)  # tx0, ty0, w, h (tiles)
         self._rv_world_int_exit_tile: tuple[int, int] | None = None
         self._rv_world_int_setup_done = False
         self.rv_int_pos = pygame.Vector2(0, 0)
@@ -10357,6 +10357,7 @@ class HardcoreSurvivalState(State):
         self._gallery_page = 0  # 0=cars, 1=bike
         self._roof_cache: dict[tuple[int, int, int, int], pygame.Surface] = {}
         self._sprite_outline_cache: dict[tuple[int, int, int, int], pygame.Surface] = {}
+        self._door_open_anim: dict[tuple[int, int], float] = {}
         self._hover_tooltip: tuple[list[str], tuple[int, int]] | None = None
         # Simple dialog / typewriter box (used for home guidance, etc).
         self.dialog_open = False
@@ -10977,19 +10978,19 @@ class HardcoreSurvivalState(State):
     def _can_access_rv(self) -> bool:
         if self.mount == "rv":
             return True
-        return (self.player.pos - self.rv.pos).length_squared() <= (22.0 * 22.0)
+        return (self.player.pos - self.rv.pos).length_squared() <= (36.0 * 36.0)
 
     def _ensure_rv_world_interior_built(self) -> None:
-        if bool(getattr(self, "_rv_world_int_setup_done", False)):
-            return
         key = getattr(self, "_rv_world_int_key", None)
         if not (isinstance(key, tuple) and len(key) == 4):
+            return
+        if bool(getattr(self, "_rv_world_int_setup_done", False)) and getattr(self, "_rv_world_int_setup_key", None) == key:
             return
         tx0, ty0, w, h = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
         if int(w) < 6 or int(h) < 6:
             return
 
-        # Simple tiny RV room: walls + floor + 1 bed + an "exit tile".
+        # RV room (world-map interior): walls + floor + basic furniture + an "exit tile".
         for yy in range(int(h)):
             for xx in range(int(w)):
                 wx = int(tx0 + xx)
@@ -11005,12 +11006,18 @@ class HardcoreSurvivalState(State):
         self._rv_world_int_exit_tile = (int(exit_tx), int(exit_ty))
         self._world_set_tile(int(exit_tx), int(exit_ty), int(self.T_DOOR))
 
-        # Single bed.
-        bed_tx = int(tx0 + 2)
+        # Single bed + tiny storage so it feels like a real RV.
+        bed_tx = int(tx0 + 3)
         bed_ty = int(ty0 + 2)
         self._world_set_tile(int(bed_tx), int(bed_ty), int(self.T_BED))
+        self._world_set_tile(int(bed_tx + 1), int(bed_ty), int(self.T_FLOOR))
+
+        cab_tx = int(tx0 + w - 4)
+        cab_ty = int(ty0 + 2)
+        self._world_set_tile(int(cab_tx), int(cab_ty), int(self.T_CABINET))
 
         self._rv_world_int_setup_done = True
+        self._rv_world_int_setup_key = key
 
     def _rv_world_interior_toggle(self) -> None:
         if bool(getattr(self, "rv_world_interior", False)):
@@ -17728,19 +17735,44 @@ class HardcoreSurvivalState(State):
         if st is None:
             self._set_home_ui_status("空", seconds=1.0)
             return
+
+        idef = self._ITEMS.get(st.item_id)
+        name = idef.name if idef is not None else st.item_id
+
         before = int(st.qty)
-        left = int(dst.add(st.item_id, int(st.qty), self._ITEMS))
+
+        # Small tools (e.g. cup) are more usable when transferred directly into the hand.
+        take_hand = 0
+        if not from_player and idef is not None and str(getattr(idef, "kind", "")) == "tool":
+            if getattr(self, "held_item", None) is None and int(before) > 0:
+                take_hand = 1
+
+        moved_inv = 0
+        left = int(before)
+        if int(before - take_hand) > 0:
+            left_after = int(dst.add(st.item_id, int(before - take_hand), self._ITEMS))
+            moved_inv = int((before - take_hand) - left_after)
+            left = int(left_after)
+        else:
+            left = int(before - take_hand)
+
         moved = int(before - left)
         if moved <= 0:
             self._set_home_ui_status("空间不足", seconds=1.2)
             return
+
+        if take_hand > 0:
+            self.held_item = HardcoreSurvivalState._ItemStack(item_id=str(st.item_id), qty=1)
+
         if left <= 0:
             src.slots[idx] = None
         else:
             st.qty = int(left)
-        idef = self._ITEMS.get(st.item_id)
-        name = idef.name if idef is not None else st.item_id
-        self._set_home_ui_status(f"转移: {name} x{moved}", seconds=1.6)
+
+        if take_hand > 0 and moved_inv <= 0:
+            self._set_home_ui_status(f"拿在手上: {name}", seconds=1.2)
+        else:
+            self._set_home_ui_status(f"转移: {name} x{moved}", seconds=1.6)
 
     def _handle_home_ui_key(self, key: int) -> None:
         if key in (pygame.K_ESCAPE,):
@@ -18588,6 +18620,38 @@ class HardcoreSurvivalState(State):
 
         return pygame.Vector2(rect.centerx, rect.centery)
 
+    def _update_world_door_open_anim(self, dt: float) -> None:
+        # Visual-only door open/close animation for world-map doors.
+        if bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "house_interior", False)) or bool(getattr(self, "sch_interior", False)) or bool(getattr(self, "rv_interior", False)):
+            return
+        anim = getattr(self, "_door_open_anim", None)
+        if not isinstance(anim, dict):
+            anim = {}
+            self._door_open_anim = anim
+        tx, ty = self._player_tile()
+        openable = {int(self.T_DOOR), int(self.T_DOOR_HOME), int(self.T_DOOR_BROKEN)}
+        want: set[tuple[int, int]] = set()
+        for yy in range(int(ty) - 2, int(ty) + 3):
+            for xx in range(int(tx) - 2, int(tx) + 3):
+                tid = int(self.world.peek_tile(int(xx), int(yy), default=int(self.T_GRASS)))
+                if int(tid) not in openable:
+                    continue
+                if abs(int(xx) - int(tx)) <= 1 and abs(int(yy) - int(ty)) <= 1:
+                    want.add((int(xx), int(yy)))
+
+        open_speed = 10.0
+        close_speed = 8.0
+        for pos in set(anim.keys()) | want:
+            cur = float(anim.get(pos, 0.0))
+            if pos in want:
+                cur = min(1.0, cur + float(dt) * float(open_speed))
+            else:
+                cur = max(0.0, cur - float(dt) * float(close_speed))
+            if cur <= 0.001 and pos not in want:
+                anim.pop(pos, None)
+            else:
+                anim[pos] = float(cur)
+
     def update(self, dt: float) -> None:
         if self.hint_left > 0.0:
             self.hint_left = max(0.0, float(self.hint_left) - dt)
@@ -19151,6 +19215,7 @@ class HardcoreSurvivalState(State):
             else:
                 self.player.pos.update(new_pos)
 
+        self._update_world_door_open_anim(float(dt))
         self._maybe_show_home_highrise_dialog()
 
         focus = pygame.Vector2(self.player.pos)
@@ -21544,25 +21609,86 @@ class HardcoreSurvivalState(State):
         def has_toilet() -> bool:
             return any(int(t) == int(self.T_TOILET) for t in tiles)
 
-        # Internal apartment doors (exclude building border doors).
-        internal_doors: list[tuple[int, int]] = []
+        # Identify unit-entry doors by looking at the public lobby/corridor region.
+        # This stays stable even after we add interior room doors for the home layout.
+        door_like = {
+            int(self.T_DOOR),
+            int(self.T_DOOR_HOME),
+            int(self.T_DOOR_LOCKED),
+            int(self.T_DOOR_HOME_LOCKED),
+            int(self.T_DOOR_BROKEN),
+        }
+
+        # Public region seed: elevator tile (always in the lobby).
+        elev: tuple[int, int] | None = None
+        for yy in range(1, int(h) - 1):
+            row_off = int(yy) * int(w)
+            for xx in range(1, int(w) - 1):
+                if int(tiles[int(row_off + xx)]) == int(self.T_ELEVATOR):
+                    elev = (int(xx), int(yy))
+                    break
+            if elev is not None:
+                break
+        if elev is None:
+            return
+
+        def public_passable(x: int, y: int) -> bool:
+            if not (0 <= int(x) < int(w) and 0 <= int(y) < int(h)):
+                return False
+            tid = int(get(int(x), int(y)))
+            if int(tid) in door_like:
+                return False
+            tdef = self._TILES.get(int(tid))
+            return bool(tdef is not None and not bool(getattr(tdef, "solid", False)))
+
+        public: set[tuple[int, int]] = set()
+        stack = [elev]
+        while stack:
+            x, y = stack.pop()
+            x = int(x)
+            y = int(y)
+            if (x, y) in public:
+                continue
+            if not public_passable(int(x), int(y)):
+                continue
+            public.add((int(x), int(y)))
+            stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+
+        # Candidate unit-entry door tiles are those that border the public region.
+        unit_doors: list[tuple[int, int]] = []
         for yy in range(1, int(h) - 1):
             row_off = int(yy) * int(w)
             for xx in range(1, int(w) - 1):
                 tid = int(tiles[int(row_off + xx)])
-                if tid == int(self.T_DOOR):
-                    internal_doors.append((int(xx), int(yy)))
-        if not internal_doors:
+                if int(tid) not in door_like:
+                    continue
+                near_public = False
+                near_private = False
+                for ox, oy in ((0, -1), (-1, 0), (1, 0), (0, 1)):
+                    nx, ny = int(xx + ox), int(yy + oy)
+                    if not (0 <= int(nx) < int(w) and 0 <= int(ny) < int(h)):
+                        continue
+                    if (int(nx), int(ny)) in public:
+                        near_public = True
+                    else:
+                        nt = int(get(int(nx), int(ny)))
+                        if int(nt) != int(self.T_WALL):
+                            near_private = True
+                if near_public and near_private:
+                    unit_doors.append((int(xx), int(yy)))
+
+        if not unit_doors:
             return
-        internal_doors.sort(key=lambda p: (int(p[0]), int(p[1])))
+        unit_doors.sort(key=lambda p: (int(p[0]), int(p[1])))
 
         # Doorways can be 1-2 tiles wide; group contiguous door tiles so we
         # pick a whole doorway as a "unit door".
-        door_set = {(int(x), int(y)) for (x, y) in internal_doors}
+        unit_door_set = {(int(x), int(y)) for (x, y) in unit_doors}
         seen_doors: set[tuple[int, int]] = set()
         door_clusters: list[list[tuple[int, int]]] = []
-        for p in internal_doors:
-            px, py = int(p[0]), int(p[1])
+        for px, py in unit_doors:
+            px = int(px)
+            py = int(py)
             if (px, py) in seen_doors:
                 continue
             stack = [(int(px), int(py))]
@@ -21573,11 +21699,11 @@ class HardcoreSurvivalState(State):
                 sy = int(sy)
                 if (sx, sy) in seen_doors:
                     continue
-                if (sx, sy) not in door_set:
+                if (sx, sy) not in unit_door_set:
                     continue
                 seen_doors.add((sx, sy))
                 comp.append((sx, sy))
-                stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
+                stack.extend(((sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)))
             if comp:
                 comp.sort(key=lambda q: (int(q[0]), int(q[1])))
                 door_clusters.append(comp)
@@ -21607,6 +21733,8 @@ class HardcoreSurvivalState(State):
                 cur_home_door = int(get(int(hx2), int(hy2)))
                 if cur_home_door == int(self.T_DOOR):
                     set_t(int(hx2), int(hy2), int(self.T_DOOR_HOME))
+                elif cur_home_door == int(self.T_DOOR_LOCKED):
+                    set_t(int(hx2), int(hy2), int(self.T_DOOR_HOME_LOCKED))
         self.home_highrise_world_key = (int(tx0), int(ty0), int(w), int(h))
         self.home_highrise_world_floor = int(home_floor)
         self.home_highrise_world_home_door = (int(tx0 + dx), int(ty0 + dy))
@@ -21631,6 +21759,22 @@ class HardcoreSurvivalState(State):
                     set_t(int(ux), int(uy), int(tid))
         except Exception:
             pass
+
+        # Migration: if any non-entry interior doors were accidentally locked by
+        # older logic, unlock them (keep unit-entry doors as-is).
+        unit_door_set_all: set[tuple[int, int]] = set()
+        for comp in door_clusters:
+            for x, y in comp:
+                unit_door_set_all.add((int(x), int(y)))
+
+        for yy in range(1, int(h) - 1):
+            row_off = int(yy) * int(w)
+            for xx in range(1, int(w) - 1):
+                if (int(xx), int(yy)) in unit_door_set_all:
+                    continue
+                tid = int(tiles[int(row_off + xx)])
+                if tid in (int(self.T_DOOR_LOCKED), int(self.T_DOOR_HOME_LOCKED), int(self.T_DOOR_HOME)):
+                    tiles[int(row_off + xx)] = int(self.T_DOOR)
 
         # Flood-fill the apartment region above the door (skip the elevator lobby below).
         start: tuple[int, int] | None = (int(dx), int(dy - 1))
@@ -21769,6 +21913,11 @@ class HardcoreSurvivalState(State):
 
             if not need_relocate:
                 self._home_highrise_world_setup_done = True
+                try:
+                    if int(getattr(mh, "cur_floor", 1)) == int(home_floor):
+                        self._multi_house_apply_floor(chunk, mh)
+                except Exception:
+                    pass
                 return
 
             target_room = bath_comp if bath_comp is not None else None
@@ -21841,6 +21990,11 @@ class HardcoreSurvivalState(State):
                 except Exception:
                     pass
             self._home_highrise_world_setup_done = True
+            try:
+                if int(getattr(mh, "cur_floor", 1)) == int(home_floor):
+                    self._multi_house_apply_floor(chunk, mh)
+            except Exception:
+                pass
             return
 
         min_x = min(int(p[0]) for p in region)
@@ -25349,10 +25503,54 @@ class HardcoreSurvivalState(State):
                         surface.fill(hi, pygame.Rect(panel.centerx, panel.y + 3, 1, max(1, panel.h - 6)))
                         surface.fill(outline, pygame.Rect(panel.centerx - 1, panel.y + 2, 1, 1))
                     else:
-                        surface.fill(col, panel)
-                        surface.fill(hi, pygame.Rect(panel.x, panel.y, panel.w, 1))
-                        surface.fill(lo, pygame.Rect(panel.x, panel.bottom - 1, panel.w, 1))
-                        surface.fill(lo, pygame.Rect(panel.centerx, panel.y + 1, 1, max(1, panel.h - 2)))
+                        open_p = 0.0
+                        if tile_id == self.T_DOOR:
+                            try:
+                                open_p = float(getattr(self, "_door_open_anim", {}).get((int(tx), int(ty)), 0.0))
+                            except Exception:
+                                open_p = 0.0
+                            open_p = float(min(1.0, max(0.0, open_p)))
+
+                        if open_p > 0.001:
+                            # Draw a small swinging leaf with a darker opening behind it.
+                            gap = (12, 12, 14)
+                            surface.fill(gap, panel)
+
+                            left_wall = int(self.world.peek_tile(int(tx - 1), int(ty), default=int(self.T_WALL))) == int(self.T_WALL)
+                            right_wall = int(self.world.peek_tile(int(tx + 1), int(ty), default=int(self.T_WALL))) == int(self.T_WALL)
+                            up_wall = int(self.world.peek_tile(int(tx), int(ty - 1), default=int(self.T_WALL))) == int(self.T_WALL)
+                            down_wall = int(self.world.peek_tile(int(tx), int(ty + 1), default=int(self.T_WALL))) == int(self.T_WALL)
+
+                            shrink_w = True
+                            if up_wall and down_wall and not (left_wall and right_wall):
+                                shrink_w = False
+                            elif left_wall and right_wall and not (up_wall and down_wall):
+                                shrink_w = True
+                            elif up_wall and down_wall:
+                                shrink_w = False
+
+                            hinge = (int(tx) ^ int(ty)) & 1
+                            min_leaf = 2
+                            if shrink_w:
+                                leaf_w = max(int(min_leaf), int(round(float(panel.w) * (1.0 - 0.85 * float(open_p)))))
+                                leaf = pygame.Rect(panel.x, panel.y, int(leaf_w), panel.h) if hinge == 0 else pygame.Rect(panel.right - int(leaf_w), panel.y, int(leaf_w), panel.h)
+                            else:
+                                leaf_h = max(int(min_leaf), int(round(float(panel.h) * (1.0 - 0.85 * float(open_p)))))
+                                leaf = pygame.Rect(panel.x, panel.y, panel.w, int(leaf_h)) if hinge == 0 else pygame.Rect(panel.x, panel.bottom - int(leaf_h), panel.w, int(leaf_h))
+
+                            surface.fill(col, leaf)
+                            surface.fill(hi, pygame.Rect(leaf.x, leaf.y, leaf.w, 1))
+                            surface.fill(lo, pygame.Rect(leaf.x, leaf.bottom - 1, leaf.w, 1))
+                            if leaf.w > 3 and leaf.h > 3:
+                                if shrink_w:
+                                    surface.fill(lo, pygame.Rect(leaf.centerx, leaf.y + 1, 1, max(1, leaf.h - 2)))
+                                else:
+                                    surface.fill(lo, pygame.Rect(leaf.x + 1, leaf.centery, max(1, leaf.w - 2), 1))
+                        else:
+                            surface.fill(col, panel)
+                            surface.fill(hi, pygame.Rect(panel.x, panel.y, panel.w, 1))
+                            surface.fill(lo, pygame.Rect(panel.x, panel.bottom - 1, panel.w, 1))
+                            surface.fill(lo, pygame.Rect(panel.centerx, panel.y + 1, 1, max(1, panel.h - 2)))
                 surface.fill((30, 30, 34), pygame.Rect(inner.right - 2, inner.centery, 1, 1))
                 if tile_id == self.T_DOOR_LOCKED:
                     lock = pygame.Rect(inner.centerx - 1, inner.centery - 1, 3, 3)
@@ -25363,10 +25561,53 @@ class HardcoreSurvivalState(State):
                 pygame.draw.rect(surface, outline, inner, 1)
                 panel = inner.inflate(-2, -2)
                 if panel.w > 0 and panel.h > 0:
-                    surface.fill(col, panel)
-                    surface.fill(hi, pygame.Rect(panel.x, panel.y, panel.w, 1))
-                    surface.fill(lo, pygame.Rect(panel.x, panel.bottom - 1, panel.w, 1))
-                    surface.fill(lo, pygame.Rect(panel.centerx, panel.y + 1, 1, max(1, panel.h - 2)))
+                    open_p = 0.0
+                    if tile_id == self.T_DOOR_HOME:
+                        try:
+                            open_p = float(getattr(self, "_door_open_anim", {}).get((int(tx), int(ty)), 0.0))
+                        except Exception:
+                            open_p = 0.0
+                        open_p = float(min(1.0, max(0.0, open_p)))
+
+                    if open_p > 0.001:
+                        gap = (12, 12, 14)
+                        surface.fill(gap, panel)
+
+                        left_wall = int(self.world.peek_tile(int(tx - 1), int(ty), default=int(self.T_WALL))) == int(self.T_WALL)
+                        right_wall = int(self.world.peek_tile(int(tx + 1), int(ty), default=int(self.T_WALL))) == int(self.T_WALL)
+                        up_wall = int(self.world.peek_tile(int(tx), int(ty - 1), default=int(self.T_WALL))) == int(self.T_WALL)
+                        down_wall = int(self.world.peek_tile(int(tx), int(ty + 1), default=int(self.T_WALL))) == int(self.T_WALL)
+
+                        shrink_w = True
+                        if up_wall and down_wall and not (left_wall and right_wall):
+                            shrink_w = False
+                        elif left_wall and right_wall and not (up_wall and down_wall):
+                            shrink_w = True
+                        elif up_wall and down_wall:
+                            shrink_w = False
+
+                        hinge = (int(tx) ^ int(ty)) & 1
+                        min_leaf = 2
+                        if shrink_w:
+                            leaf_w = max(int(min_leaf), int(round(float(panel.w) * (1.0 - 0.85 * float(open_p)))))
+                            leaf = pygame.Rect(panel.x, panel.y, int(leaf_w), panel.h) if hinge == 0 else pygame.Rect(panel.right - int(leaf_w), panel.y, int(leaf_w), panel.h)
+                        else:
+                            leaf_h = max(int(min_leaf), int(round(float(panel.h) * (1.0 - 0.85 * float(open_p)))))
+                            leaf = pygame.Rect(panel.x, panel.y, panel.w, int(leaf_h)) if hinge == 0 else pygame.Rect(panel.x, panel.bottom - int(leaf_h), panel.w, int(leaf_h))
+
+                        surface.fill(col, leaf)
+                        surface.fill(hi, pygame.Rect(leaf.x, leaf.y, leaf.w, 1))
+                        surface.fill(lo, pygame.Rect(leaf.x, leaf.bottom - 1, leaf.w, 1))
+                        if leaf.w > 3 and leaf.h > 3:
+                            if shrink_w:
+                                surface.fill(lo, pygame.Rect(leaf.centerx, leaf.y + 1, 1, max(1, leaf.h - 2)))
+                            else:
+                                surface.fill(lo, pygame.Rect(leaf.x + 1, leaf.centery, max(1, leaf.w - 2), 1))
+                    else:
+                        surface.fill(col, panel)
+                        surface.fill(hi, pygame.Rect(panel.x, panel.y, panel.w, 1))
+                        surface.fill(lo, pygame.Rect(panel.x, panel.bottom - 1, panel.w, 1))
+                        surface.fill(lo, pygame.Rect(panel.centerx, panel.y + 1, 1, max(1, panel.h - 2)))
                 surface.fill((30, 30, 34), pygame.Rect(inner.right - 2, inner.centery, 1, 1))
                 if tile_id == self.T_DOOR_HOME_LOCKED:
                     lock = pygame.Rect(inner.centerx - 1, inner.centery - 1, 3, 3)
