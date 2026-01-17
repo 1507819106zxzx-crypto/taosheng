@@ -11722,7 +11722,7 @@ class HardcoreSurvivalState(State):
             self.hr_edit_blocks = []
             return
 
-        movable = {"B", "S", "F", "K", "T", "C", "P", "X"}
+        movable = {"B", "S", "F", "K", "T", "C", "P", "X", "L"}
         w = int(self._HR_INT_W)
         h = int(self._HR_INT_H)
         seen: set[tuple[int, int]] = set()
@@ -11989,12 +11989,30 @@ class HardcoreSurvivalState(State):
             if not isinstance(entry, tuple) or len(entry) < 3:
                 continue
             action, room_id, rect = entry[0], entry[1], entry[2]
+            payload = entry[3] if len(entry) >= 4 else None
             if not isinstance(rect, pygame.Rect):
                 continue
             if not rect.collidepoint(mx, my):
                 continue
             if str(action) == "toggle_lamp":
                 self._hr_room_toggle_light(str(room_id))
+                return True
+            if str(action) == "hr_move":
+                if not (isinstance(payload, tuple) and len(payload) == 2):
+                    return True
+                sel_tx, sel_ty = int(payload[0]), int(payload[1])
+                if not bool(getattr(self, "hr_edit_mode", False)):
+                    self._hr_toggle_edit_mode()
+                if not bool(getattr(self, "hr_edit_mode", False)):
+                    return True
+                blocks = getattr(self, "hr_edit_blocks", None)
+                if not isinstance(blocks, list) or not blocks:
+                    return True
+                for i, (_ch, cells) in enumerate(blocks):
+                    for cx, cy in cells:
+                        if int(cx) == int(sel_tx) and int(cy) == int(sel_ty):
+                            self.hr_edit_index = int(i)
+                            return True
                 return True
         return False
 
@@ -15598,10 +15616,16 @@ class HardcoreSurvivalState(State):
                     pygame.draw.ellipse(surface, outline, bowl, 1)
                     pygame.draw.rect(surface, porcelain2, tank, border_radius=2)
                     pygame.draw.rect(surface, outline, tank, 1, border_radius=2)
+                    pygame.draw.rect(surface, steel2, pygame.Rect(tank.right - 3, tank.y + 1, 2, 2), border_radius=1)
                     pygame.draw.rect(surface, porcelain2, base, border_radius=2)
                     pygame.draw.rect(surface, outline, base, 1, border_radius=2)
                     hole = bowl.inflate(-6, -6)
                     pygame.draw.ellipse(surface, (30, 30, 36), hole)
+                    water = hole.inflate(-4, -4)
+                    if water.w > 2 and water.h > 2:
+                        pygame.draw.ellipse(surface, (64, 126, 190), water)
+                        hl = pygame.Rect(water.x + 1, water.y + 1, max(1, water.w - 2), max(1, water.h // 2))
+                        pygame.draw.ellipse(surface, (120, 184, 220), hl, 1)
                     pygame.draw.ellipse(surface, outline, hole, 1)
                     continue
 
@@ -16456,6 +16480,9 @@ class HardcoreSurvivalState(State):
             tx, ty = self._hr_int_player_tile()
             candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
             interact = {"D", "B", "S", "F", "C", "O", "L"}
+            pose = str(getattr(self, "player_pose", "")).strip()
+            pose_space = str(getattr(self, "player_pose_space", "")).strip()
+            in_pose = bool(pose_space == "hr" and pose in ("sleep", "sit"))
 
             def _draw_cells_outline(
                 cells: list[tuple[int, int]],
@@ -16497,6 +16524,13 @@ class HardcoreSurvivalState(State):
                         pygame.draw.line(ov, edge_col, (left, bottom), (right, bottom), 1)
                 surface.blit(ov, (int(map_x + min_x * tile), int(map_y + min_y * tile)))
 
+            near_lamp: tuple[int, int] | None = None
+            for cx, cy in candidates:
+                if str(self._hr_int_char_at(int(cx), int(cy)))[:1] == "L":
+                    near_lamp = (int(cx), int(cy))
+                    break
+
+            chosen_ch = ""
             for cx, cy in candidates:
                 ch = self._hr_int_char_at(cx, cy)
                 if ch not in interact:
@@ -16518,31 +16552,55 @@ class HardcoreSurvivalState(State):
                     cells.append((int(sx), int(sy)))
                     stack.extend([(int(sx) + 1, int(sy)), (int(sx) - 1, int(sy)), (int(sx), int(sy) + 1), (int(sx), int(sy) - 1)])
                 _draw_cells_outline(cells, rgb=(0, 220, 80), fill_alpha=0, edge_alpha=220)
-                if (
-                    str(ch)[:1] == "L"
-                    and not bool(getattr(self, "inv_open", False))
-                    and not bool(getattr(self, "home_ui_open", False))
-                    and not bool(getattr(self, "hr_elevator_ui_open", False))
-                    and not bool(getattr(self, "world_map_open", False))
-                    and not bool(getattr(self, "hr_edit_mode", False))
-                ):
-                    label = "关灯" if bool(light_on) else "开灯"
-                    font = self.app.font_s
-                    tw, th = font.size(str(label))
-                    pad_x = 6
-                    pad_y = 3
-                    bw = int(tw + pad_x * 2)
-                    bh = int(th + pad_y * 2)
-                    lr = pygame.Rect(int(map_x + int(cx) * tile), int(map_y + int(cy) * tile), int(tile), int(tile))
-                    btn = pygame.Rect(int(lr.centerx - bw // 2), int(lr.top - bh - 4), int(bw), int(bh))
-                    btn.clamp_ip(map_rect.inflate(-2, -2))
-                    bs = pygame.Surface((btn.w, btn.h), pygame.SRCALPHA)
-                    bs.fill((10, 10, 12, 210))
-                    pygame.draw.rect(bs, (255, 220, 140, 230), bs.get_rect(), 1)
-                    surface.blit(bs, btn.topleft)
-                    draw_text(surface, font, str(label), btn.center, pygame.Color(240, 240, 240), anchor="center")
-                    self._hr_int_ui_buttons.append(("toggle_lamp", str(room_id), pygame.Rect(btn)))
+                chosen_ch = str(ch)[:1]
                 break
+
+            if (
+                near_lamp is not None
+                and not bool(in_pose)
+                and str(getattr(self, "hr_mode", "lobby")) == "home"
+                and str(room_id).strip()
+                and not bool(getattr(self, "inv_open", False))
+                and not bool(getattr(self, "home_ui_open", False))
+                and not bool(getattr(self, "hr_elevator_ui_open", False))
+                and not bool(getattr(self, "world_map_open", False))
+                and not bool(getattr(self, "hr_edit_mode", False))
+            ):
+                lx, ly = int(near_lamp[0]), int(near_lamp[1])
+                if str(chosen_ch) != "L":
+                    _draw_cells_outline([(int(lx), int(ly))], rgb=(0, 220, 80), fill_alpha=0, edge_alpha=220)
+
+                label_toggle = "关灯" if bool(light_on) else "开灯"
+                label_move = "搬运"
+                font = self.app.font_s
+                btn_h = int(font.get_height()) + 4
+                btn_w = int(max(30, int(max(font.size(str(label_toggle))[0], font.size(str(label_move))[0])) + 12))
+                gap = 4
+                opts: list[tuple[str, str, tuple[int, int] | None]] = [
+                    (str(label_toggle), "toggle_lamp", None),
+                    (str(label_move), "hr_move", (int(lx), int(ly))),
+                ]
+
+                panel_w = int(len(opts) * btn_w + max(0, len(opts) - 1) * gap + 10)
+                panel_h = int(btn_h + 10)
+                lr = pygame.Rect(int(map_x + int(lx) * tile), int(map_y + int(ly) * tile), int(tile), int(tile))
+                px = int(lr.centerx - panel_w // 2)
+                py = int(lr.top - panel_h - 6)
+                if py < int(map_rect.top + 2):
+                    py = int(lr.bottom + 6)
+                panel = pygame.Rect(int(px), int(py), int(panel_w), int(panel_h))
+                panel.clamp_ip(map_rect.inflate(-2, -2))
+                pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=6)
+                pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=6)
+
+                x0 = int(panel.x + 5)
+                y0 = int(panel.y + 5)
+                for i, (label, action, payload) in enumerate(opts):
+                    br = pygame.Rect(int(x0 + i * (btn_w + gap)), int(y0), int(btn_w), int(btn_h))
+                    pygame.draw.rect(surface, (28, 28, 34), br, border_radius=5)
+                    pygame.draw.rect(surface, (160, 160, 180), br, 1, border_radius=5)
+                    draw_text(surface, font, str(label), (br.centerx, br.centery - 1), pygame.Color(230, 230, 240), anchor="center")
+                    self._hr_int_ui_buttons.append((str(action), str(room_id), pygame.Rect(br), payload))
 
         if str(getattr(self, "hr_mode", "lobby")) == "home" and bool(getattr(self, "hr_edit_mode", False)):
             blocks = getattr(self, "hr_edit_blocks", None)
@@ -22386,27 +22444,36 @@ class HardcoreSurvivalState(State):
         tday = float(self._time_of_day())
         dawn_start, dawn_end = 0.22, 0.28
         dusk_start, dusk_end = 0.72, 0.78
+        # Keep nights readable (roughly like ~20:00) so the world doesn't become
+        # pitch-black without lamps. Lamps/streetlights still matter for detail.
+        night_ambient = 0.28
 
         if tday < dawn_start or tday >= dusk_end:
-            return 0.0, tday
+            return float(night_ambient), tday
         if tday < dawn_end:
-            return float(self._smoothstep(dawn_start, dawn_end, tday)), tday
+            t = float(self._smoothstep(dawn_start, dawn_end, tday))
+            return float(float(night_ambient) + (1.0 - float(night_ambient)) * t), tday
         if tday < dusk_start:
             return 1.0, tday
-        return float(1.0 - self._smoothstep(dusk_start, dusk_end, tday)), tday
+        t = float(self._smoothstep(dusk_start, dusk_end, tday))
+        return float(1.0 - (1.0 - float(night_ambient)) * t), tday
 
     def _make_day_night_overlay_surface(self, *, in_rv: bool) -> pygame.Surface | None:
         daylight, tday = self._daylight_amount()
-        # Night should be truly dark outside (streetlamps / lamps provide visibility).
-        max_alpha = 255 if not in_rv else 120
+        # Night should be dark, but not total blackout (so it's playable without
+        # staring only at light halos). Interiors get a lighter overlay.
+        max_alpha = 230 if not in_rv else 80
         a = int(round(float(max_alpha) * (1.0 - float(daylight))))
         if a <= 0:
             return None
 
-        if 0.0 < daylight < 1.0:
-            col = (36, 26, 64) if tday < 0.5 else (64, 34, 26)  # dawn / dusk
+        # With a night ambient floor, daylight is never 0.0, so pick colors by time.
+        if 0.22 <= tday < 0.28:
+            col = (36, 26, 64)  # dawn
+        elif 0.72 <= tday < 0.78:
+            col = (64, 34, 26)  # dusk
         else:
-            col = (0, 0, 0) if float(daylight) <= 0.0 else (12, 14, 30)  # night / (unused) day
+            col = (8, 10, 18) if float(daylight) < 0.95 else (12, 14, 30)  # night / (unused) day
 
         overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
         overlay.fill((int(col[0]), int(col[1]), int(col[2]), int(a)))
@@ -24057,7 +24124,7 @@ class HardcoreSurvivalState(State):
             int(self.T_SWITCH),
         }
         pri = {
-            int(self.T_SWITCH): 0,
+            int(self.T_LAMP): 0,
             int(self.T_FRIDGE): 1,
             int(self.T_SHELF): 1,
             int(self.T_BED): 2,
@@ -24065,7 +24132,7 @@ class HardcoreSurvivalState(State):
             int(self.T_CHAIR): 3,
             int(self.T_PC): 4,
             int(self.T_TV): 4,
-            int(self.T_LAMP): 5,
+            int(self.T_SWITCH): 5,
         }
         chosen: tuple[int, int, int] | None = None
         best = None
@@ -24124,7 +24191,7 @@ class HardcoreSurvivalState(State):
         elif int(tid) == int(self.T_TV):
             opts = [("看电视", "tv"), ("搬运", "move")]
         elif int(tid) == int(self.T_LAMP):
-            opts = [("搬运", "move")]
+            opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("搬运", "move")]
         elif int(tid) == int(self.T_SWITCH):
             opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light")]
         if not opts:

@@ -2,8 +2,10 @@
   "scale": 2,
   "fullscreen": true,
   "show_grid": false,
-  "lamp_world_radius_tiles": 5,
-  "lamp_world_intensity": 1.0,
+  "lamp_world_radius_tiles": 18,
+  "lamp_world_intensity": 3.0,
+  "lamp_world_halo": 1.5,
   "lamp_hr_radius_tiles": 5,
-  "lamp_hr_intensity": 1.0
+  "lamp_hr_intensity": 1.0,
+  "lamp_hr_halo": 0.35
 }
