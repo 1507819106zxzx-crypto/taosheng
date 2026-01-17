@@ -20450,6 +20450,14 @@ class HardcoreSurvivalState(State):
         if action == "pc":
             self._try_use_pc_world()
             return
+        if action == "pee":
+            if not self._use_toilet_world_at(int(tx), int(ty), kind="pee"):
+                self._set_hint("靠近马桶", seconds=0.9)
+            return
+        if action == "poop":
+            if not self._use_toilet_world_at(int(tx), int(ty), kind="poop"):
+                self._set_hint("靠近马桶", seconds=0.9)
+            return
         if action == "move":
             if self._home_furniture_pickup_at(int(tx), int(ty)):
                 # Close the context menu immediately so clicks place furniture.
@@ -20459,6 +20467,37 @@ class HardcoreSurvivalState(State):
             else:
                 self._set_hint("不能搬", seconds=0.9)
             return
+
+    def _use_toilet_world_at(self, tx: int, ty: int, *, kind: str) -> bool:
+        if getattr(self, "mount", None) is not None:
+            return False
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return False
+
+        tx = int(tx)
+        ty = int(ty)
+        ptx, pty = self._player_tile()
+        if abs(int(tx) - int(ptx)) > 1 or abs(int(ty) - int(pty)) > 1:
+            return False
+        if not self._tile_in_home_world(int(tx), int(ty)):
+            return False
+        if int(self.world.get_tile(int(tx), int(ty))) != int(self.T_TOILET):
+            return False
+
+        kind = str(kind)
+        if kind == "poop":
+            self.player.morale = float(clamp(float(self.player.morale) + 1.0, 0.0, 100.0))
+            self._speech_say("拉屎完成", seconds=1.2)
+            return True
+
+        self.player.morale = float(clamp(float(self.player.morale) + 0.5, 0.0, 100.0))
+        self._speech_say("小便完成", seconds=1.2)
+        return True
 
     def _handle_world_context_menu_mouse(self, event: pygame.event.Event) -> bool:
         if bool(getattr(self, "home_move_mode", False)):
@@ -24637,12 +24676,14 @@ class HardcoreSurvivalState(State):
             int(self.T_PC),
             int(self.T_LAMP),
             int(self.T_SWITCH),
+            int(self.T_TOILET),
         }
         pri = {
             int(self.T_LAMP): 0,
             int(self.T_FRIDGE): 1,
             int(self.T_SHELF): 1,
             int(self.T_BED): 2,
+            int(self.T_TOILET): 2,
             int(self.T_SOFA): 3,
             int(self.T_CHAIR): 3,
             int(self.T_PC): 4,
@@ -24690,8 +24731,9 @@ class HardcoreSurvivalState(State):
             tile_rect = r if tile_rect is None else tile_rect.union(r)
         if tile_rect is None:
             return
-        pygame.draw.rect(surface, (0, 0, 0), tile_rect, 1, border_radius=6)
-        pygame.draw.rect(surface, (255, 220, 140), tile_rect.inflate(-2, -2), 1, border_radius=6)
+        # Pixel-perfect outline (no rounded corners).
+        pygame.draw.rect(surface, (0, 0, 0), tile_rect.inflate(2, 2), 1)
+        pygame.draw.rect(surface, (255, 220, 140), tile_rect, 1)
 
         # Build options.
         opts: list[tuple[str, str]] = []
@@ -24709,6 +24751,8 @@ class HardcoreSurvivalState(State):
             opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("搬运", "move")]
         elif int(tid) == int(self.T_SWITCH):
             opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light")]
+        elif int(tid) == int(self.T_TOILET):
+            opts = [("小便", "pee"), ("大便", "poop")]
         if not opts:
             return
 
