@@ -4781,7 +4781,7 @@ class HardcoreSurvivalState(State):
         "W....SSS.....W...W....PPP.....W",
         "WWWWWW.WWWWWWW...WWWWWWW.WWWWWW",
         "W.............................W",
-        "W..........L..XXX.............I",
+        "W..........L..XXX.............W",
         "W.............CCC.............D",
         "W.............................W",
         "WKKKKK..FF............,,,,,,,,W",
@@ -4789,7 +4789,7 @@ class HardcoreSurvivalState(State):
         "WKKKKK...............W,,RR,,,,W",
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
     ]
-    _HR_INT_HOME_LAYOUT_VERSION = 2
+    _HR_INT_HOME_LAYOUT_VERSION = 3
     _HR_INT_W = 31
     _HR_INT_H = 15
     _HR_INT_TILE_SIZE = 20
@@ -6419,6 +6419,41 @@ class HardcoreSurvivalState(State):
         pygame.draw.rect(surf, outline, pygame.Rect(6, 8, 4, 2), 1, border_radius=1)
         return surf
 
+    def _make_prop_sprite_streetlamp(*, variant: int = 0) -> pygame.Surface:
+        # Simple road-side lamp post (tall sprite; light itself is handled by the lighting system).
+        w, h = 14, 30
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        outline = (10, 10, 12)
+        pole = (130, 130, 140)
+        pole2 = (96, 96, 106)
+        glow = (255, 230, 150)
+
+        # Pole.
+        pygame.draw.rect(surf, pole, pygame.Rect(w // 2 - 1, 8, 2, 18))
+        pygame.draw.rect(surf, pole2, pygame.Rect(w // 2, 8, 1, 18))
+        pygame.draw.rect(surf, outline, pygame.Rect(w // 2 - 1, 8, 2, 18), 1)
+
+        # Arm + head.
+        arm_y = 8
+        arm_w = 6
+        if int(variant) % 2 == 0:
+            pygame.draw.line(surf, pole, (w // 2, arm_y), (w // 2 + arm_w, arm_y + 2), 2)
+            pygame.draw.line(surf, outline, (w // 2, arm_y), (w // 2 + arm_w, arm_y + 2), 1)
+            head = pygame.Rect(w // 2 + arm_w - 2, arm_y + 1, 4, 4)
+        else:
+            pygame.draw.line(surf, pole, (w // 2, arm_y), (w // 2 - arm_w, arm_y + 2), 2)
+            pygame.draw.line(surf, outline, (w // 2, arm_y), (w // 2 - arm_w, arm_y + 2), 1)
+            head = pygame.Rect(w // 2 - arm_w - 2, arm_y + 1, 4, 4)
+        pygame.draw.rect(surf, (34, 34, 42), head, border_radius=1)
+        pygame.draw.rect(surf, outline, head, 1, border_radius=1)
+        surf.fill(glow, head.inflate(-2, -2))
+
+        # Base.
+        base = pygame.Rect(w // 2 - 3, 25, 6, 3)
+        pygame.draw.rect(surf, pole2, base, border_radius=1)
+        pygame.draw.rect(surf, outline, base, 1, border_radius=1)
+        return surf
+
     _PROP_DEFS: dict[str, _PropDef] = {
         # Building signs / markers.
         "sign_hospital": _PropDef(
@@ -6512,6 +6547,17 @@ class HardcoreSurvivalState(State):
                 _make_prop_sprite_billboard(variant=0),
                 _make_prop_sprite_billboard(variant=1),
                 _make_prop_sprite_billboard(variant=2),
+            ),
+        ),
+        "streetlamp": _PropDef(
+            id="streetlamp",
+            name="路灯",
+            category="路灯",
+            solid=False,
+            collider=(10, 10),
+            sprites=(
+                _make_prop_sprite_streetlamp(variant=0),
+                _make_prop_sprite_streetlamp(variant=1),
             ),
         ),
         # Park toys (abandoned).
@@ -7937,7 +7983,126 @@ class HardcoreSurvivalState(State):
                 if core and rng.random() < 0.28:
                     self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
 
+            # Street lighting: road-side lamp posts so nights aren't pure black.
+            self._stamp_city_streetlamps(tiles, props, buildings, cx, cy, rng=rng, reserved=reserved)
             self._stamp_city_decor(tiles, props, cx, cy, rng=rng)
+
+        def _stamp_city_streetlamps(
+            self,
+            tiles: list[int],
+            props: list["HardcoreSurvivalState._WorldProp"],
+            buildings: list[tuple[int, int, int, int, int, int]],
+            cx: int,
+            cy: int,
+            *,
+            rng: random.Random,
+            reserved: set[tuple[int, int]] | None = None,
+        ) -> None:
+            def idx(x: int, y: int) -> int:
+                return y * self.state.CHUNK_SIZE + x
+
+            base_tx = int(cx) * int(self.state.CHUNK_SIZE)
+            base_ty = int(cy) * int(self.state.CHUNK_SIZE)
+            tile_size = int(self.state.TILE_SIZE)
+
+            t_road = int(self.state.T_ROAD)
+            t_highway = int(self.state.T_HIGHWAY)
+            walk_tiles = {
+                int(self.state.T_SIDEWALK),
+                int(self.state.T_PAVEMENT),
+                int(self.state.T_BRICK),
+                int(self.state.T_CONCRETE),
+            }
+
+            def inside_any_building(tx: int, ty: int) -> bool:
+                for bx0, by0, bw, bh, _roof_kind, _floors in buildings:
+                    if int(bx0) <= int(tx) < int(bx0) + int(bw) and int(by0) <= int(ty) < int(by0) + int(bh):
+                        return True
+                return False
+
+            # Deterministic spacing along streets.
+            spacing = 10
+            off_x = int(rng.randrange(spacing))
+            off_y = int(rng.randrange(spacing))
+
+            cand: list[tuple[int, int]] = []
+            for y in range(2, int(self.state.CHUNK_SIZE) - 2):
+                for x in range(2, int(self.state.CHUNK_SIZE) - 2):
+                    if reserved is not None and (int(x), int(y)) in reserved:
+                        continue
+                    t = int(tiles[idx(int(x), int(y))])
+                    if t not in walk_tiles:
+                        continue
+                    # Must be next to a road/highway edge.
+                    left = int(tiles[idx(int(x - 1), int(y))])
+                    right = int(tiles[idx(int(x + 1), int(y))])
+                    up = int(tiles[idx(int(x), int(y - 1))])
+                    down = int(tiles[idx(int(x), int(y + 1))])
+                    near_lr = (left in (t_road, t_highway)) or (right in (t_road, t_highway))
+                    near_ud = (up in (t_road, t_highway)) or (down in (t_road, t_highway))
+                    if not (near_lr or near_ud):
+                        continue
+
+                    # Avoid placing right against building walls/doors to reduce visual overlap.
+                    near_wall = False
+                    for ny in range(int(y) - 1, int(y) + 2):
+                        for nx in range(int(x) - 1, int(x) + 2):
+                            tt = int(tiles[idx(int(nx), int(ny))])
+                            if tt in (int(self.state.T_WALL), int(self.state.T_DOOR)):
+                                near_wall = True
+                                break
+                        if near_wall:
+                            break
+                    if near_wall:
+                        continue
+
+                    tx = int(base_tx + int(x))
+                    ty = int(base_ty + int(y))
+                    if inside_any_building(int(tx), int(ty)):
+                        continue
+
+                    if near_lr and (int(ty) % spacing) != int(off_y):
+                        continue
+                    if near_ud and (int(tx) % spacing) != int(off_x):
+                        continue
+                    cand.append((int(x), int(y)))
+
+            if not cand:
+                return
+            rng.shuffle(cand)
+
+            # Cap per chunk to keep lighting cost predictable.
+            want = int(clamp(int(len(cand) // 18), 4, 14))
+            min_d2 = float((tile_size * 6) ** 2)
+
+            placed = 0
+            for x, y in cand:
+                if placed >= want:
+                    break
+                tx = int(base_tx + int(x))
+                ty = int(base_ty + int(y))
+                px = (float(tx) + 0.5) * float(tile_size)
+                py = (float(ty) + 0.5) * float(tile_size)
+                ok = True
+                for pr in props:
+                    if str(getattr(pr, "prop_id", "")) != "streetlamp":
+                        continue
+                    dx = float(pr.pos.x) - float(px)
+                    dy = float(pr.pos.y) - float(py)
+                    if dx * dx + dy * dy < min_d2:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                props.append(
+                    HardcoreSurvivalState._WorldProp(
+                        pos=pygame.Vector2(px, py),
+                        prop_id="streetlamp",
+                        variant=int(rng.randint(0, 1)),
+                        dir=str(rng.choice(["left", "right"])),
+                    )
+                )
+                placed += 1
 
         def _stamp_basketball_court(self, tiles: list[int], *, rng: random.Random) -> None:
             # Simple outdoor court: a rectangle of court tiles.
@@ -12669,7 +12834,7 @@ class HardcoreSurvivalState(State):
         chosen: tuple[int, int, str] | None = None
         interact = {"D", "E", "H", "A", "B", "^", "v"}
         if mode == "home":
-            interact.update({"S", "F", "C", "P", "X", "I", "O"})
+            interact.update({"S", "F", "C", "P", "X", "L", "O"})
         for cx, cy in candidates:
             ch = self._hr_int_char_at(cx, cy)
             if ch in interact:
@@ -12701,7 +12866,7 @@ class HardcoreSurvivalState(State):
                 return
             self._hr_interior_exit()
             return
-        if ch == "I" and mode == "home":
+        if ch == "L" and mode == "home":
             room_id = str(getattr(self, "hr_current_room", "")).strip()
             lights = getattr(self, "hr_room_lights", None)
             if not isinstance(lights, dict):
@@ -19745,7 +19910,8 @@ class HardcoreSurvivalState(State):
             (tx - 1, ty - 1),
         ]
         for cx, cy in candidates:
-            if int(self.world.get_tile(int(cx), int(cy))) != int(self.T_SWITCH):
+            tid = int(self.world.get_tile(int(cx), int(cy)))
+            if tid not in (int(self.T_LAMP), int(self.T_SWITCH)):
                 continue
             self.home_light_on = not bool(getattr(self, "home_light_on", True))
             self._set_hint("开灯" if bool(self.home_light_on) else "关灯", seconds=0.8)
@@ -20863,7 +21029,7 @@ class HardcoreSurvivalState(State):
             place(int(self.T_SOFA), [(int(min_x + 1), int(max_y - 2)), (int(min_x + 2), int(max_y - 2))])
             place(int(self.T_TV), [(int(max_x - 1), int(max_y - 2))])
 
-        # Lighting: a wall switch near the entrance + a lamp in the living area.
+        # Lighting: a lamp in the living area (toggle on the lamp itself).
         def place_decor(tid: int, candidates: list[tuple[int, int]]) -> bool:
             for x, y in candidates:
                 x = int(x)
@@ -20875,21 +21041,6 @@ class HardcoreSurvivalState(State):
                 set_t(int(x), int(y), int(tid))
                 return True
             return False
-
-        door_in_x = int(dx)
-        door_in_y = int(dy - 1)
-        place_decor(
-            int(self.T_SWITCH),
-            [
-                (door_in_x - 2, door_in_y),
-                (door_in_x + 2, door_in_y),
-                (door_in_x - 1, door_in_y),
-                (door_in_x + 1, door_in_y),
-                (door_in_x - 2, door_in_y - 1),
-                (door_in_x + 2, door_in_y - 1),
-                (door_in_x, door_in_y + 1),
-            ],
-        )
 
         lamp_y0 = int(min_y if bed_wall_y is None else (bed_wall_y + 1))
         lamp_x1 = int(max_x if service_wall_x is None else (service_wall_x - 1))
@@ -22234,8 +22385,6 @@ class HardcoreSurvivalState(State):
         start_ty: int,
         end_ty: int,
     ) -> None:
-        if not bool(getattr(self, "home_light_on", True)):
-            return
         if (
             bool(getattr(self, "hr_interior", False))
             or bool(getattr(self, "house_interior", False))
@@ -22254,15 +22403,48 @@ class HardcoreSurvivalState(State):
         if ts <= 0:
             return
 
-        # Only light inside the real home (world-map interior).
-        lamps: list[tuple[int, int]] = []
+        home_on = bool(getattr(self, "home_light_on", True))
+
+        # World lamps: home lamps (toggleable) + streetlamps (always on).
+        lamps: list[tuple[int, int, bool]] = []  # (tx, ty, restrict_to_home)
+        seen_lamps: set[tuple[int, int]] = set()
         for ty in range(int(start_ty), int(end_ty) + 1):
             for tx in range(int(start_tx), int(end_tx) + 1):
                 if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_LAMP):
                     continue
-                if not self._tile_in_home_world(int(tx), int(ty)):
+                restrict_home = bool(self._tile_in_home_world(int(tx), int(ty)))
+                if restrict_home and not home_on:
                     continue
-                lamps.append((int(tx), int(ty)))
+                key = (int(tx), int(ty))
+                if key in seen_lamps:
+                    continue
+                seen_lamps.add(key)
+                lamps.append((int(tx), int(ty), bool(restrict_home)))
+
+        # Streetlamps are props, not tiles (so sidewalks remain sidewalks).
+        start_cx = int(start_tx) // int(self.CHUNK_SIZE)
+        end_cx = int(end_tx) // int(self.CHUNK_SIZE)
+        start_cy = int(start_ty) // int(self.CHUNK_SIZE)
+        end_cy = int(end_ty) // int(self.CHUNK_SIZE)
+        for cy in range(int(start_cy), int(end_cy) + 1):
+            for cx in range(int(start_cx), int(end_cx) + 1):
+                chunk = self.world.peek_chunk(int(cx), int(cy))
+                if chunk is None:
+                    continue
+                for pr in getattr(chunk, "props", []):
+                    if str(getattr(pr, "prop_id", "")) != "streetlamp":
+                        continue
+                    px = float(getattr(getattr(pr, "pos", pygame.Vector2(0, 0)), "x", 0.0))
+                    py = float(getattr(getattr(pr, "pos", pygame.Vector2(0, 0)), "y", 0.0))
+                    tx = int(math.floor(px / float(ts)))
+                    ty = int(math.floor(py / float(ts)))
+                    if tx < int(start_tx) or tx > int(end_tx) or ty < int(start_ty) or ty > int(end_ty):
+                        continue
+                    key = (int(tx), int(ty))
+                    if key in seen_lamps:
+                        continue
+                    seen_lamps.add(key)
+                    lamps.append((int(tx), int(ty), False))
         if not lamps:
             return
 
@@ -22300,14 +22482,14 @@ class HardcoreSurvivalState(State):
             self._lamp_hole_cache = cache
             hole = g
 
-        solid_blocks = {
+        door_blocks = {
             int(self.T_DOOR),
             int(self.T_DOOR_HOME),
             int(self.T_DOOR_LOCKED),
             int(self.T_DOOR_HOME_LOCKED),
         }
 
-        for lx, ly in lamps:
+        for lx, ly, restrict_home in lamps:
             seen: set[tuple[int, int]] = set()
             lit: list[tuple[int, int]] = []
             stack = [(int(lx), int(ly))]
@@ -22323,12 +22505,14 @@ class HardcoreSurvivalState(State):
                 dy = int(y - int(ly))
                 if int(dx * dx + dy * dy) > int(r2):
                     continue
-                if not self._tile_in_home_world(int(x), int(y)):
+                if bool(restrict_home) and not self._tile_in_home_world(int(x), int(y)):
                     continue
                 lit.append((int(x), int(y)))
 
                 tid = int(self.world.peek_tile(int(x), int(y)))
-                if bool(self._tile_solid(int(tid))) and int(tid) not in solid_blocks:
+                if int(tid) in door_blocks:
+                    continue
+                if bool(self._tile_solid(int(tid))):
                     continue
                 stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
 
@@ -22381,8 +22565,6 @@ class HardcoreSurvivalState(State):
         start_ty: int,
         end_ty: int,
     ) -> None:
-        if not bool(getattr(self, "home_light_on", True)):
-            return
         if bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "house_interior", False)) or bool(getattr(self, "sch_interior", False)) or bool(getattr(self, "rv_interior", False)):
             return
 
@@ -22392,15 +22574,48 @@ class HardcoreSurvivalState(State):
         if ts <= 0:
             return
 
-        # Only light inside the real home (world-map interior).
-        lamps: list[tuple[int, int]] = []
+        home_on = bool(getattr(self, "home_light_on", True))
+
+        # World lamps: home lamps (toggleable) + streetlamps (always on).
+        lamps: list[tuple[int, int, bool]] = []  # (tx, ty, restrict_to_home)
+        seen_lamps: set[tuple[int, int]] = set()
         for ty in range(int(start_ty), int(end_ty) + 1):
             for tx in range(int(start_tx), int(end_tx) + 1):
                 if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_LAMP):
                     continue
-                if not self._tile_in_home_world(int(tx), int(ty)):
+                restrict_home = bool(self._tile_in_home_world(int(tx), int(ty)))
+                if restrict_home and not home_on:
                     continue
-                lamps.append((int(tx), int(ty)))
+                key = (int(tx), int(ty))
+                if key in seen_lamps:
+                    continue
+                seen_lamps.add(key)
+                lamps.append((int(tx), int(ty), bool(restrict_home)))
+
+        # Streetlamps are props, not tiles (so sidewalks remain sidewalks).
+        start_cx = int(start_tx) // int(self.CHUNK_SIZE)
+        end_cx = int(end_tx) // int(self.CHUNK_SIZE)
+        start_cy = int(start_ty) // int(self.CHUNK_SIZE)
+        end_cy = int(end_ty) // int(self.CHUNK_SIZE)
+        for cy in range(int(start_cy), int(end_cy) + 1):
+            for cx in range(int(start_cx), int(end_cx) + 1):
+                chunk = self.world.peek_chunk(int(cx), int(cy))
+                if chunk is None:
+                    continue
+                for pr in getattr(chunk, "props", []):
+                    if str(getattr(pr, "prop_id", "")) != "streetlamp":
+                        continue
+                    px = float(getattr(getattr(pr, "pos", pygame.Vector2(0, 0)), "x", 0.0))
+                    py = float(getattr(getattr(pr, "pos", pygame.Vector2(0, 0)), "y", 0.0))
+                    tx = int(math.floor(px / float(ts)))
+                    ty = int(math.floor(py / float(ts)))
+                    if tx < int(start_tx) or tx > int(end_tx) or ty < int(start_ty) or ty > int(end_ty):
+                        continue
+                    key = (int(tx), int(ty))
+                    if key in seen_lamps:
+                        continue
+                    seen_lamps.add(key)
+                    lamps.append((int(tx), int(ty), False))
         if not lamps:
             return
 
@@ -22433,15 +22648,15 @@ class HardcoreSurvivalState(State):
             self._world_lamp_bloom_cache = cache
             glow = g
 
-        solid_blocks = {
+        door_blocks = {
             int(self.T_DOOR),
             int(self.T_DOOR_HOME),
             int(self.T_DOOR_LOCKED),
             int(self.T_DOOR_HOME_LOCKED),
         }
 
-        for lx, ly in lamps:
-            # BFS mask: light doesn't propagate through walls/solid tiles, and never leaves home.
+        for lx, ly, restrict_home in lamps:
+            # BFS mask: light doesn't propagate through walls/solid tiles.
             seen: set[tuple[int, int]] = set()
             lit: list[tuple[int, int]] = []
             stack = [(int(lx), int(ly))]
@@ -22457,12 +22672,14 @@ class HardcoreSurvivalState(State):
                 dy = int(y - int(ly))
                 if int(dx * dx + dy * dy) > int(r2):
                     continue
-                if not self._tile_in_home_world(int(x), int(y)):
+                if bool(restrict_home) and not self._tile_in_home_world(int(x), int(y)):
                     continue
                 lit.append((int(x), int(y)))
 
                 tid = int(self.world.peek_tile(int(x), int(y)))
-                if bool(self._tile_solid(int(tid))) and int(tid) not in solid_blocks:
+                if int(tid) in door_blocks:
+                    continue
+                if bool(self._tile_solid(int(tid))):
                     continue
                 stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
 
