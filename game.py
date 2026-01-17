@@ -10619,6 +10619,9 @@ class HardcoreSurvivalState(State):
             if not self.inv_open and event.key in (pygame.K_h,):
                 self._teleport_to_bathroom()
                 return
+            if not self.inv_open and event.key in (pygame.K_g,):
+                self._rv_interior_toggle()
+                return
             if not self.inv_open and event.key in (pygame.K_f,):
                 self._toggle_vehicle()
                 return
