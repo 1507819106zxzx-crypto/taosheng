@@ -2264,6 +2264,7 @@ class HardcoreSurvivalState(State):
     T_SWITCH = 34
     T_TOILET = 35
     T_CABINET = 36
+    T_SINK = 37
 
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
@@ -2329,6 +2330,7 @@ class HardcoreSurvivalState(State):
         T_SWITCH: _TileDef("switch", (170, 170, 176), solid=False),
         T_TOILET: _TileDef("toilet", (240, 240, 245), solid=True),
         T_CABINET: _TileDef("cabinet", (92, 72, 54), solid=True),
+        T_SINK: _TileDef("sink", (184, 188, 196), solid=True),
     }
 
     _PLAYER_PAL = {
@@ -4891,6 +4893,8 @@ class HardcoreSurvivalState(State):
         "ammo_9mm": _ItemDef("ammo_9mm", "9mm弹", stack=60, color=(230, 220, 140), kind="ammo"),
         "scrap": _ItemDef("scrap", "废铁", stack=20, color=(150, 150, 160), kind="mat"),
         "wood": _ItemDef("wood", "木材", stack=20, color=(150, 110, 70), kind="mat"),
+        "cup": _ItemDef("cup", "杯子", stack=1, color=(230, 230, 236), kind="tool"),
+        "cup_water": _ItemDef("cup_water", "杯装水", stack=1, color=(120, 170, 230), kind="drink"),
     }
 
     # Procedurally-generated bulk item library (300+). Keep it compact by composing
@@ -5623,6 +5627,27 @@ class HardcoreSurvivalState(State):
                 pass
 
         outline = (10, 10, 12)
+
+        if item_id in ("cup", "cup_water"):
+            surf = pygame.Surface((12, 12), pygame.SRCALPHA)
+            cup_col = (232, 232, 238)
+            cup_sh = (200, 200, 210)
+            water_col = (120, 170, 230)
+            body = pygame.Rect(3, 4, 6, 6)
+            pygame.draw.rect(surf, cup_col, body, border_radius=2)
+            pygame.draw.rect(surf, outline, body, 1, border_radius=2)
+            # Rim highlight + base shadow.
+            surf.fill((245, 245, 250), pygame.Rect(body.x + 1, body.y + 1, body.w - 2, 1))
+            surf.fill(cup_sh, pygame.Rect(body.x + 1, body.bottom - 2, body.w - 2, 1))
+            # Handle.
+            handle = pygame.Rect(body.right - 1, body.y + 2, 2, 3)
+            pygame.draw.rect(surf, cup_col, handle, border_radius=1)
+            pygame.draw.rect(surf, outline, handle, 1, border_radius=1)
+            if item_id == "cup_water":
+                fill = pygame.Rect(body.x + 1, body.y + 2, body.w - 2, body.h - 3)
+                pygame.draw.rect(surf, water_col, fill, border_radius=1)
+                pygame.draw.rect(surf, outline, fill, 1, border_radius=1)
+            return surf
 
         def seed_sign(shift: int) -> int:
             return -1 if (((int(seed) >> int(shift)) & 1) == 1) else 1
@@ -10074,6 +10099,7 @@ class HardcoreSurvivalState(State):
         # Some starter supplies at home.
         self.home_storage.add("food_can", 4, self._ITEMS)
         self.home_storage.add("bandage", 6, self._ITEMS)
+        self.home_storage.add("cup", 1, self._ITEMS)
         self.home_storage.add("key_rv", 1, self._ITEMS)
         self.home_storage.add("key_moto", 1, self._ITEMS)
         self.inventory.add("key_house", 1, self._ITEMS)
@@ -10170,7 +10196,11 @@ class HardcoreSurvivalState(State):
         self.world_ctx_target = None
         self.world_ctx_rects = []
         self.world_ctx_cooldown_left = 0.0
+        self.world_ctx_idle_s = 0.0
+        self.world_ctx_idle_target = None
+        self.world_ctx_suppressed = None
         self._last_cam_draw = (0, 0)
+        self.world_tv_states: dict[tuple[int, int], bool] = {}
 
         self.hr_elevator_ui_open = False
         self.hr_elevator_sel = 0
@@ -13059,9 +13089,6 @@ class HardcoreSurvivalState(State):
             self._set_hint("电脑：地图", seconds=1.0)
             return
         if ch == "X" and mode == "home":
-            if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "hr":
-                self._set_hint("坐下再看电视", seconds=1.0)
-                return
             dx = int(_cx) - int(tx)
             dy = int(_cy) - int(ty)
             if abs(int(dx)) >= abs(int(dy)):
@@ -18457,6 +18484,31 @@ class HardcoreSurvivalState(State):
         if float(getattr(self, "world_ctx_cooldown_left", 0.0)) > 0.0:
             self.world_ctx_cooldown_left = max(0.0, float(getattr(self, "world_ctx_cooldown_left", 0.0)) - dt)
 
+        # Auto-dismiss the in-world context bubble if it stays up without clicks.
+        try:
+            if bool(getattr(self, "world_ctx_open", False)) and isinstance(getattr(self, "world_ctx_target", None), tuple):
+                tgt = tuple(getattr(self, "world_ctx_target"))
+                if tgt == getattr(self, "world_ctx_idle_target", None):
+                    self.world_ctx_idle_s = float(getattr(self, "world_ctx_idle_s", 0.0)) + float(dt)
+                else:
+                    self.world_ctx_idle_target = tgt
+                    self.world_ctx_idle_s = 0.0
+            else:
+                self.world_ctx_idle_target = None
+                self.world_ctx_idle_s = 0.0
+
+            if float(getattr(self, "world_ctx_idle_s", 0.0)) >= 4.0:
+                ptx, pty = self._player_tile()
+                self.world_ctx_suppressed = {"target": tuple(getattr(self, "world_ctx_target", ())), "player_tile": (int(ptx), int(pty))}
+                self.world_ctx_idle_s = 0.0
+                self.world_ctx_idle_target = None
+                self.world_ctx_open = False
+                self.world_ctx_target = None
+                self.world_ctx_rects = []
+                self.world_ctx_cooldown_left = max(float(getattr(self, "world_ctx_cooldown_left", 0.0)), 0.8)
+        except Exception:
+            pass
+
         if getattr(self, "rv_ui_status_left", 0.0) > 0.0:
             self.rv_ui_status_left = max(0.0, float(self.rv_ui_status_left) - dt)
             if self.rv_ui_status_left <= 0.0:
@@ -18487,17 +18539,26 @@ class HardcoreSurvivalState(State):
             self.bike.vel.update(0, 0)
             return
 
-        self.world_time_s += dt
-        self._update_weather(dt)
+        dt_time = float(dt)
+        if str(getattr(self, "player_pose", "")) == "sleep" and str(getattr(self, "player_pose_space", "")) == "world":
+            # Sleep at night fast-forwards time; the fuller you are, the faster it goes.
+            tday = (float(self.world_time_s) % float(self.DAY_LENGTH_S)) / float(self.DAY_LENGTH_S)
+            if tday >= (20.0 / 24.0) or tday <= (6.0 / 24.0):
+                full = float(clamp(float(self.player.hunger) / 100.0, 0.0, 1.0))
+                dt_time = float(dt) * float(8.0 + 16.0 * full)
+        dt_time = float(clamp(float(dt_time), 0.0, 0.45))
+
+        self.world_time_s += dt_time
+        self._update_weather(dt_time)
 
         if getattr(self, "noise_left", 0.0) > 0.0:
-            self.noise_left = max(0.0, float(self.noise_left) - dt)
+            self.noise_left = max(0.0, float(self.noise_left) - dt_time)
             if self.noise_left <= 0.0:
                 self.noise_radius = 0.0
 
         # Survival stats (prototype tuning).
-        self.player.hunger = float(clamp(self.player.hunger - dt * 0.10, 0.0, 100.0))
-        self.player.thirst = float(clamp(self.player.thirst - dt * 0.16, 0.0, 100.0))
+        self.player.hunger = float(clamp(self.player.hunger - dt_time * 0.10, 0.0, 100.0))
+        self.player.thirst = float(clamp(self.player.thirst - dt_time * 0.16, 0.0, 100.0))
 
         focus = pygame.Vector2(self.player.pos)
         nearest = 99999.0
@@ -18515,7 +18576,7 @@ class HardcoreSurvivalState(State):
             stress += (90.0 - nearest) / 90.0 * 1.4
 
         morale_decay = 0.010 + 0.035 * stress
-        self.player.morale = float(clamp(self.player.morale - dt * morale_decay * 20.0, 0.0, 100.0))
+        self.player.morale = float(clamp(self.player.morale - dt_time * morale_decay * 20.0, 0.0, 100.0))
 
         cond_down = 0.0
         if self.player.hunger <= 0.0:
@@ -18529,7 +18590,7 @@ class HardcoreSurvivalState(State):
             cond_up += 0.08
             if self.player.hunger > 50.0 and self.player.thirst > 50.0:
                 cond_up += 0.05
-        self.player.condition = float(clamp(self.player.condition + dt * (cond_up - cond_down) * 10.0, 0.0, 100.0))
+        self.player.condition = float(clamp(self.player.condition + dt_time * (cond_up - cond_down) * 10.0, 0.0, 100.0))
 
         # Starvation / dehydration damage.
         dmg_rate = 0.0
@@ -18538,13 +18599,13 @@ class HardcoreSurvivalState(State):
         if self.player.thirst <= 0.0:
             dmg_rate += 0.85
         if dmg_rate > 0.0:
-            self.starve_accum += dmg_rate * dt
+            self.starve_accum += dmg_rate * dt_time
             while self.starve_accum >= 1.0:
                 self.starve_accum -= 1.0
                 self.player.hp = max(0, int(self.player.hp) - 1)        
 
         # Bleeding damage (from zombie scratches/bites).
-        self._apply_bleed(dt)
+        self._apply_bleed(dt_time)
 
         keys = pygame.key.get_pressed()
         move = pygame.Vector2(0, 0)
@@ -19334,7 +19395,7 @@ class HardcoreSurvivalState(State):
         far = float(self.TILE_SIZE) * 4.8
         armed = bool(getattr(self, "home_highrise_dialog_armed", True))
         if armed and d2 <= near * near:
-            self._speech_say("我的家", seconds=1.3)
+            self._speech_say("我的家在6楼2户", seconds=1.7)
             self.home_highrise_dialog_armed = False
             return
             home_floor = int(getattr(self, "home_highrise_floor", 0))
@@ -20066,55 +20127,26 @@ class HardcoreSurvivalState(State):
             return False
 
         tx, ty = self._player_tile()
-        sitting = str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "world"
         candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
         hit: tuple[int, int] | None = None
         for cx, cy in candidates:
             if int(self.world.get_tile(int(cx), int(cy))) == int(self.T_TV):
                 hit = (int(cx), int(cy))
                 break
-        if hit is None and sitting:
-            best = None
-            for dy2 in range(-2, 3):
-                for dx2 in range(-2, 3):
-                    if max(abs(int(dx2)), abs(int(dy2))) > 2:
-                        continue
-                    cx = int(tx + dx2)
-                    cy = int(ty + dy2)
-                    if int(self.world.get_tile(int(cx), int(cy))) != int(self.T_TV):
-                        continue
-                    key = (max(abs(int(dx2)), abs(int(dy2))), abs(int(dx2)) + abs(int(dy2)))
-                    if best is None or key < best[0]:
-                        best = (key, int(cx), int(cy))
-            if best is not None:
-                _key, cx, cy = best
-                hit = (int(cx), int(cy))
         if hit is None:
             return False
 
-        if not sitting:
-            self._set_hint("坐下再看电视", seconds=1.0)
-            return True
-
-        dx = int(hit[0]) - int(tx)
-        dy = int(hit[1]) - int(ty)
-        if abs(int(dx)) >= abs(int(dy)):
-            if int(dx) > 0:
-                self.player.dir = "right"
-            elif int(dx) < 0:
-                self.player.dir = "left"
-        else:
-            if int(dy) > 0:
-                self.player.dir = "down"
-            elif int(dy) < 0:
-                self.player.dir = "up"
-
-        self.player.morale = float(clamp(float(self.player.morale) + 3.0, 0.0, 100.0))
-        self.inv_open = False
-        self.world_map_open = False
-        self._gallery_page = 0
-        self._gallery_open = True
-        self._set_hint("看电视", seconds=1.0)
+        states = getattr(self, "world_tv_states", None)
+        if not isinstance(states, dict):
+            states = {}
+            self.world_tv_states = states
+        key = (int(hit[0]), int(hit[1]))
+        states[key] = not bool(states.get(key, False))
+        tv_now = bool(states.get(key, False))
+        if tv_now:
+            self.player.morale = float(clamp(float(self.player.morale) + 2.0, 0.0, 100.0))
+        self._gallery_open = False
+        self._set_hint("电视：开" if tv_now else "电视：关", seconds=1.0)
         return True
 
     def _try_sit_world(self) -> bool:
@@ -20597,9 +20629,11 @@ class HardcoreSurvivalState(State):
             self._try_toggle_home_light_world()
             return
         if action == "tv":
-            if not (str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "world"):
-                self._try_sit_world()
             self._try_watch_tv_world()
+            return
+        if action == "water":
+            if not self._fill_sink_water_world_at(int(tx), int(ty)):
+                self._set_hint("靠近水龙头", seconds=0.9)
             return
         if action == "pc":
             if not (str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "world"):
@@ -20709,6 +20743,48 @@ class HardcoreSurvivalState(State):
 
         total = 4.0 if kind == "poop" else 2.4
         self.toilet_task = {"kind": kind, "total": float(total), "left": float(total)}
+        return True
+
+    def _fill_sink_water_world_at(self, tx: int, ty: int) -> bool:
+        if getattr(self, "mount", None) is not None:
+            return False
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return False
+
+        tx = int(tx)
+        ty = int(ty)
+        ptx, pty = self._player_tile()
+        if abs(int(tx) - int(ptx)) > 1 or abs(int(ty) - int(pty)) > 1:
+            return False
+        if not self._tile_in_home_world(int(tx), int(ty)):
+            return False
+        if int(self.world.get_tile(int(tx), int(ty))) != int(self.T_SINK):
+            return False
+
+        inv = getattr(self, "inventory", None)
+        if not isinstance(inv, HardcoreSurvivalState._Inventory):
+            return False
+
+        if int(inv.count("cup")) <= 0:
+            self._set_hint("需要杯子（柜子里有）", seconds=1.2)
+            return True
+
+        removed = int(inv.remove("cup", 1))
+        if removed <= 0:
+            self._set_hint("需要杯子（柜子里有）", seconds=1.2)
+            return True
+        left = int(inv.add("cup_water", 1, self._ITEMS))
+        if left > 0:
+            inv.add("cup", 1, self._ITEMS)
+            self._set_hint("背包满了", seconds=1.0)
+            return True
+
+        self._speech_say("接了一杯水", seconds=1.1)
         return True
 
     def _update_toilet_task(self, dt: float) -> None:
@@ -21887,7 +21963,7 @@ class HardcoreSurvivalState(State):
             if cab_count == 0:
                 place_in_rect(int(self.T_CABINET), [(0, 0)], x0=int(kx0), y0=int(ky0), x1=int(kx1), y1=int(ky1))
 
-            # Bathroom: toilet + sink/cabinet.
+            # Bathroom: toilet + sink (faucet).
             placed_toilet = False
             for ty3 in range(int(bay1), int(bay0) - 1, -1):
                 for tx3 in range(int(bax1), int(bax0) - 1, -1):
@@ -21902,8 +21978,8 @@ class HardcoreSurvivalState(State):
             if not placed_toilet:
                 place_in_rect(int(self.T_TOILET), [(0, 0)], x0=int(bax0), y0=int(bay0), x1=int(bax1), y1=int(bay1))
 
-            if not set_if_clear(int(bax0), int(bay0), int(self.T_CABINET)):
-                place_in_rect(int(self.T_CABINET), [(0, 0)], x0=int(bax0), y0=int(bay0), x1=int(bax1), y1=int(bay1))
+            if not set_if_clear(int(bax0), int(bay0), int(self.T_SINK)):
+                place_in_rect(int(self.T_SINK), [(0, 0)], x0=int(bax0), y0=int(bay0), x1=int(bax1), y1=int(bay1))
 
         elif did_layout and bed_wall_y is not None and bed_div_x is not None:
             south_top_y = int(bed_wall_y + 1)
@@ -22048,7 +22124,7 @@ class HardcoreSurvivalState(State):
                         y1=int(max_y - 2),
                     )
 
-            # Bathroom: toilet + sink/cabinet.
+            # Bathroom: toilet + sink (faucet).
             if bath_box is not None:
                 bx0, by0, bx1, by1 = bath_box
                 # Place toilet first (priority) — avoid blocking the bathroom door
@@ -22073,9 +22149,9 @@ class HardcoreSurvivalState(State):
                         x1=int(bx1),
                         y1=int(by1),
                 )
-                # Then place sink/cabinet
+                # Then place sink.
                 place_in_rect(
-                    int(self.T_CABINET),
+                    int(self.T_SINK),
                     [(0, 0)],
                     x0=int(bx0),
                     y0=int(by0),
@@ -22092,7 +22168,7 @@ class HardcoreSurvivalState(State):
                         break
                 # Then place sink nearby
                 for ox, oy in ((-1, 0), (0, -1), (-1, -1)):
-                    if set_if_clear(int(bx + ox), int(by + oy), int(self.T_CABINET)):
+                    if set_if_clear(int(bx + ox), int(by + oy), int(self.T_SINK)):
                         break
         else:
             # Fallback: minimal furnishing if the apartment is too small to carve.
@@ -22512,6 +22588,11 @@ class HardcoreSurvivalState(State):
             self.player.morale = clamp(self.player.morale + 2.0, 0.0, 100.0)
             self._set_hint("喝了水：口渴+")
             return True
+        if item_id == "cup_water":
+            self.player.thirst = clamp(self.player.thirst + 35.0, 0.0, 100.0)
+            self.player.morale = clamp(self.player.morale + 1.0, 0.0, 100.0)
+            self._set_hint("喝了一杯水", seconds=1.0)
+            return True
         if item_id == "bandage":
             stopped = self._bandage_one_wound()
             self.player.hp = int(clamp(self.player.hp + 18, 0, 100))    
@@ -22673,6 +22754,10 @@ class HardcoreSurvivalState(State):
                 if not ok:
                     if not str(getattr(self, "hint_text", "")).strip():
                         self._set_hint("暂时不能使用", seconds=1.0)
+                    return
+                if str(stack.item_id) == "cup_water":
+                    # Drinking a cup leaves the empty cup behind (so you can refill it).
+                    self.inventory.slots[int(self.inv_index)] = HardcoreSurvivalState._ItemStack(item_id="cup", qty=1)
                     return
                 stack.qty -= 1
                 if stack.qty <= 0:
@@ -24162,6 +24247,82 @@ class HardcoreSurvivalState(State):
                         if glass.w > 0 and glass.h > 0:
                             rv_clips.append(glass)
 
+        # If the player is inside their home on the world map, don't render rain
+        # through the interior area (only outside the apartment footprint).
+        home_clips: list[pygame.Rect] | None = None
+        if (not in_rv) and bool(getattr(self, "home_highrise_world_key", None)):
+            try:
+                ptx, pty = self._player_tile()
+                if self._tile_in_home_world(int(ptx), int(pty)):
+                    home_key = getattr(self, "home_highrise_world_key", None)
+                    if isinstance(home_key, tuple) and len(home_key) == 4:
+                        tx0, ty0, w, h = (int(home_key[0]), int(home_key[1]), int(home_key[2]), int(home_key[3]))
+                        cam_x, cam_y_draw = getattr(
+                            self,
+                            "_last_cam_draw",
+                            (int(getattr(self, "cam_x", 0)), int(getattr(self, "cam_y", 0))),
+                        )
+                        ts = int(max(1, int(getattr(self, "TILE_SIZE", self.TILE_SIZE))))
+
+                        start_y = int(ty0)
+                        shift_px = 0
+
+                        overlay = getattr(self, "_inside_highrise_floor_overlay", None)
+                        if overlay is not None:
+                            try:
+                                otx0, oty0, ow, oh, floor_y0, offset_px = (
+                                    int(overlay[0]),
+                                    int(overlay[1]),
+                                    int(overlay[2]),
+                                    int(overlay[3]),
+                                    int(overlay[4]),
+                                    int(overlay[5]),
+                                )
+                                if (otx0, oty0, ow, oh) == (int(tx0), int(ty0), int(w), int(h)) and int(offset_px) > 0:
+                                    start_y = int(max(int(oty0), int(floor_y0) - 1))
+                                    shift_px = int(offset_px)
+                            except Exception:
+                                pass
+
+                        if shift_px <= 0:
+                            mask = getattr(self, "_inside_highrise_draw_mask", None)
+                            if mask is not None:
+                                try:
+                                    mtx0, mty0, mw, mh, floor_y0 = (
+                                        int(mask[0]),
+                                        int(mask[1]),
+                                        int(mask[2]),
+                                        int(mask[3]),
+                                        int(mask[4]),
+                                    )
+                                    if (mtx0, mty0, mw, mh) == (int(tx0), int(ty0), int(w), int(h)):
+                                        start_y = int(max(int(mty0), int(floor_y0) - 1))
+                                except Exception:
+                                    pass
+
+                        x_px = int(tx0) * ts - int(cam_x)
+                        y_px = int(start_y) * ts - int(cam_y_draw) - int(shift_px)
+                        w_px = int(w) * ts
+                        h_px = int((int(ty0) + int(h) - int(start_y)) * ts)
+                        block = pygame.Rect(int(x_px), int(y_px), int(w_px), int(h_px))
+                        screen = pygame.Rect(0, 0, INTERNAL_W, INTERNAL_H)
+                        block = block.clip(screen)
+
+                        if block.w > 0 and block.h > 0:
+                            home_clips = []
+                            if block.top > 0:
+                                home_clips.append(pygame.Rect(0, 0, INTERNAL_W, block.top))
+                            if block.bottom < INTERNAL_H:
+                                home_clips.append(pygame.Rect(0, block.bottom, INTERNAL_W, INTERNAL_H - block.bottom))
+                            if block.left > 0:
+                                home_clips.append(pygame.Rect(0, block.top, block.left, block.h))
+                            if block.right < INTERNAL_W:
+                                home_clips.append(pygame.Rect(block.right, block.top, INTERNAL_W - block.right, block.h))
+            except Exception:
+                home_clips = None
+
+        precip_clips = rv_clips if rv_clips is not None else home_clips
+
         # Base tint per weather.
         if kind == "cloudy":
             a = int(round(40.0 * inten * tint_mult))
@@ -24182,8 +24343,8 @@ class HardcoreSurvivalState(State):
             alpha = int(clamp(alpha, 20, 210))
             dx = int(round(clamp(float(self.weather_wind) * 0.05, -4.0, 4.0)))
             ln = 6 + int(round(4.0 * inten))
-            if rv_clips:
-                for cr in rv_clips:
+            if precip_clips:
+                for cr in precip_clips:
                     layer.set_clip(cr)
                     for x, y, _spd in self._rain_drops:
                         xi = int(x)
@@ -24198,8 +24359,8 @@ class HardcoreSurvivalState(State):
         elif kind == "snow" and self._snow_flakes:
             alpha = int(round(170.0 * inten))
             alpha = int(clamp(alpha, 30, 230))
-            if rv_clips:
-                for cr in rv_clips:
+            if precip_clips:
+                for cr in precip_clips:
                     layer.set_clip(cr)
                     for x, y, _spd, _drift in self._snow_flakes:
                         xi = int(x)
@@ -24253,14 +24414,25 @@ class HardcoreSurvivalState(State):
             int(self.T_FLOOR),
             int(self.T_DOOR),
             int(self.T_DOOR_HOME),
+            int(self.T_DOOR_LOCKED),
+            int(self.T_DOOR_HOME_LOCKED),
+            int(self.T_STAIRS_UP),
+            int(self.T_STAIRS_DOWN),
             int(self.T_TABLE),
             int(self.T_SHELF),
+            int(self.T_CABINET),
+            int(self.T_SINK),
             int(self.T_BED),
             int(self.T_SOFA),
             int(self.T_FRIDGE),
             int(self.T_TV),
             int(self.T_CHAIR),
+            int(self.T_PC),
+            int(self.T_LAMP),
+            int(self.T_SWITCH),
+            int(self.T_TOILET),
             int(self.T_ELEVATOR),
+            int(self.T_BARRICADE),
         ):
             return (72, 72, 92)
         if tile_id == int(self.T_ROAD):
@@ -24398,6 +24570,7 @@ class HardcoreSurvivalState(State):
                 int(self.T_LAMP),
                 int(self.T_SWITCH),
                 int(self.T_TOILET),
+                int(self.T_SINK),
             ):
                 inside_key = getattr(self, "_inside_building_key", None)
                 try:
@@ -24797,8 +24970,21 @@ class HardcoreSurvivalState(State):
                 pygame.draw.rect(surface, (34, 34, 40), frame_r, border_radius=2)
                 pygame.draw.rect(surface, outline, frame_r, 1, border_radius=2)
                 screen = frame_r.inflate(-2, -3)
+                tv_on = bool(getattr(self, "world_tv_states", {}).get((int(tx), int(ty)), False))
                 surface.fill((14, 14, 18), screen)
-                surface.fill((60, 110, 140), pygame.Rect(screen.x + 1, screen.y + 1, 2, 1))
+                if tv_on and screen.w > 3 and screen.h > 2:
+                    t = int(float(getattr(self, "world_time_s", 0.0)) * 8.0)
+                    # Simple animated "show" (doesn't wash out the room).
+                    c1 = (120, 200, 240)
+                    c2 = (210, 180, 120)
+                    for yy in range(screen.y + 1, screen.bottom - 1):
+                        if ((yy + t) % 5) == 0:
+                            surface.fill(c1, pygame.Rect(screen.x + 1, yy, screen.w - 2, 1))
+                        elif ((yy + t) % 7) == 0:
+                            surface.fill(c2, pygame.Rect(screen.x + 1, yy, screen.w - 2, 1))
+                    surface.fill((240, 240, 250), pygame.Rect(screen.x + 1, screen.y + 1, 2, 1))
+                else:
+                    surface.fill((60, 110, 140), pygame.Rect(screen.x + 1, screen.y + 1, 2, 1))
                 stand = pygame.Rect(rect.centerx - 1, rect.bottom - 2, 2, 1)
                 surface.fill(outline, stand)
             elif tile_id == self.T_SOFA:
@@ -24903,6 +25089,23 @@ class HardcoreSurvivalState(State):
                 handle = (210, 210, 220)
                 surface.fill(handle, pygame.Rect(body.centerx - 2, body.y + 2, 1, 1))
                 surface.fill(handle, pygame.Rect(body.centerx + 1, body.y + 2, 1, 1))
+            elif tile_id == self.T_SINK:
+                # Bathroom/kitchen sink with a small faucet.
+                rim = pygame.Rect(rect.x + 1, rect.y + 3, rect.w - 2, rect.h - 5)
+                bowl = rim.inflate(-3, -4)
+                steel = (200, 204, 214)
+                steel2 = (150, 156, 170)
+                water = (120, 170, 230)
+                pygame.draw.rect(surface, outline, rim, 1, border_radius=2)
+                pygame.draw.rect(surface, steel, bowl, border_radius=2)
+                pygame.draw.rect(surface, outline, bowl, 1, border_radius=2)
+                # Faucet
+                fx = int(rect.centerx)
+                surface.fill(steel2, pygame.Rect(fx - 1, rect.y + 1, 2, 3))
+                surface.fill(steel2, pygame.Rect(fx - 3, rect.y + 3, 6, 1))
+                surface.fill(outline, pygame.Rect(fx - 1, rect.y + 1, 2, 1))
+                # Water hint
+                surface.fill(water, pygame.Rect(bowl.x + 2, bowl.y + 2, max(1, bowl.w - 4), 1))
             else:
                 pass
 
@@ -24930,7 +25133,7 @@ class HardcoreSurvivalState(State):
                             int(self.T_STAIRS_UP),
                             int(self.T_STAIRS_DOWN),
                         ):
-                            pygame.draw.rect(surface, (0, 0, 0), rect, 1)
+                            pygame.draw.rect(surface, (120, 100, 60), rect, 1)
                             pygame.draw.rect(surface, (255, 220, 140), rect.inflate(-2, -2), 1)
         except Exception:
             pass
@@ -25228,6 +25431,13 @@ class HardcoreSurvivalState(State):
             return
 
         tx, ty = self._player_tile()
+        # If the player moved after an auto-dismiss, allow the bubble again.
+        sup = getattr(self, "world_ctx_suppressed", None)
+        if isinstance(sup, dict):
+            pt = sup.get("player_tile")
+            if isinstance(pt, tuple) and len(pt) == 2 and (int(tx), int(ty)) != (int(pt[0]), int(pt[1])):
+                self.world_ctx_suppressed = None
+
         candidates = [
             (tx, ty),
             (tx + 1, ty),
@@ -25251,12 +25461,14 @@ class HardcoreSurvivalState(State):
             int(self.T_LAMP),
             int(self.T_SWITCH),
             int(self.T_TOILET),
+            int(self.T_SINK),
         }
         pri = {
             int(self.T_LAMP): 0,
             int(self.T_FRIDGE): 1,
             int(self.T_SHELF): 1,
             int(self.T_CABINET): 1,
+            int(self.T_SINK): 1,
             int(self.T_BED): 2,
             int(self.T_TOILET): 2,
             int(self.T_SOFA): 3,
@@ -25282,6 +25494,20 @@ class HardcoreSurvivalState(State):
             return
 
         cx, cy, tid = chosen
+        sup = getattr(self, "world_ctx_suppressed", None)
+        if isinstance(sup, dict):
+            stgt = sup.get("target")
+            pt = sup.get("player_tile")
+            if (
+                isinstance(stgt, tuple)
+                and len(stgt) == 3
+                and isinstance(pt, tuple)
+                and len(pt) == 2
+                and (int(tx), int(ty)) == (int(pt[0]), int(pt[1]))
+                and (int(cx), int(cy), int(tid)) == (int(stgt[0]), int(stgt[1]), int(stgt[2]))
+            ):
+                return
+
         # Outline the whole connected block (2-tile bed/sofa/pc).
         seen: set[tuple[int, int]] = set()
         stack = [(int(cx), int(cy))]
@@ -25307,7 +25533,7 @@ class HardcoreSurvivalState(State):
         if tile_rect is None:
             return
         # Pixel-perfect outline (no rounded corners).
-        pygame.draw.rect(surface, (0, 0, 0), tile_rect.inflate(2, 2), 1)
+        pygame.draw.rect(surface, (120, 100, 60), tile_rect.inflate(2, 2), 1)
         pygame.draw.rect(surface, (255, 220, 140), tile_rect, 1)
 
         # Build options.
@@ -25318,10 +25544,13 @@ class HardcoreSurvivalState(State):
             opts = [("睡觉", "sleep"), ("搬运", "move")]
         elif int(tid) in (int(self.T_FRIDGE), int(self.T_SHELF), int(self.T_CABINET)):
             opts = [("打开", "open"), ("搬运", "move")]
+        elif int(tid) == int(self.T_SINK):
+            opts = [("接水", "water")]
         elif int(tid) == int(self.T_PC):
             opts = [("用电脑", "pc"), ("搬运", "move")]
         elif int(tid) == int(self.T_TV):
-            opts = [("看电视", "tv"), ("搬运", "move")]
+            tv_on = bool(getattr(self, "world_tv_states", {}).get((int(cx), int(cy)), False))
+            opts = [("关电视" if tv_on else "开电视", "tv"), ("搬运", "move")]
         elif int(tid) == int(self.T_LAMP):
             opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("搬运", "move")]
         elif int(tid) == int(self.T_SWITCH):
