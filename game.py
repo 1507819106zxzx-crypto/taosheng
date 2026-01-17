@@ -10615,7 +10615,7 @@ class HardcoreSurvivalState(State):
                 self._toggle_barricade()
                 return
             if not self.inv_open and event.key in (pygame.K_h,):
-                self._rv_interior_toggle()
+                self._teleport_to_bathroom()
                 return
             if not self.inv_open and event.key in (pygame.K_f,):
                 self._toggle_vehicle()
@@ -11548,6 +11548,42 @@ class HardcoreSurvivalState(State):
         self._house_int_set_layout(self._HOUSE_INT_F1_LAYOUT)
         self.player.pos.update(self.house_world_return)
         self._set_hint("离开住宅", seconds=1.0)
+
+    def _teleport_to_bathroom(self) -> None:
+        """Teleport player directly to bathroom in house interior."""
+        self.inv_open = False
+        self.rv_ui_open = False
+        self.home_ui_open = False
+        self.hr_elevator_ui_open = False
+        self.sch_elevator_ui_open = False
+        self._gallery_open = False
+        self.house_interior = True
+        self.mount = None
+        self.player.vel.update(0, 0)
+        self.player.walk_phase *= 0.85
+        self.rv.vel.update(0, 0)
+        self.bike.vel.update(0, 0)
+
+        self.house_building = None
+        self.house_max_floors = int(self._HOUSE_INT_MAX_FLOORS_DEFAULT)
+        self.house_world_return = pygame.Vector2(self.player.pos)
+        self.house_floor = 1
+        self._house_int_set_layout(self._HOUSE_INT_F1_LAYOUT)
+
+        # Find toilet "O" position and spawn near it
+        tile = int(self._HOUSE_INT_TILE_SIZE)
+        for y, row in enumerate(self.house_layout):
+            for x, ch in enumerate(row):
+                if ch == "O":
+                    # Spawn on bathroom floor next to toilet
+                    self.house_int_pos = pygame.Vector2((x - 1 + 0.5) * tile, (y + 0.5) * tile)
+                    self.house_int_facing = pygame.Vector2(1, 0)
+                    self._set_hint("卫生间：Esc退出", seconds=1.6)
+                    return
+        # Fallback to center
+        self.house_int_pos = pygame.Vector2((self._HOUSE_INT_W / 2.0) * tile, (self._HOUSE_INT_H / 2.0) * tile)
+        self.house_int_facing = pygame.Vector2(0, 1)
+        self._set_hint("卫生间：Esc退出", seconds=1.6)
 
     def _house_interior_interact(self) -> None:
         if not getattr(self, "house_interior", False):
