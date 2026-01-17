@@ -12713,12 +12713,28 @@ class HardcoreSurvivalState(State):
             self._hr_room_storages_bind(home_room, populate=True)
         want_ver = int(getattr(self, "_HR_INT_HOME_LAYOUT_VERSION", 0))
         cur_ver = int(getattr(self, "hr_home_layout_version", 0))
-        if cur_ver != want_ver:
-            self.hr_home_layout = [str(r) for r in self._HR_INT_HOME_LAYOUT]
+        layout = getattr(self, "hr_home_layout", None)
+        need_reset = bool(int(cur_ver) != int(want_ver))
+        if not need_reset:
+            if not isinstance(layout, list):
+                need_reset = True
+            else:
+                norm = [str(r) for r in layout]
+                if len(norm) != int(self._HR_INT_H) or any(len(r) != int(self._HR_INT_W) for r in norm):
+                    need_reset = True
+                # If the saved layout predates the bathroom/toilet addition, refresh it.
+                if not any("O" in r for r in norm):
+                    need_reset = True
+                if not need_reset:
+                    layout = norm
+                    self.hr_home_layout = list(norm)
+
+        if need_reset:
+            layout = [str(r) for r in self._HR_INT_HOME_LAYOUT]
+            self.hr_home_layout = list(layout)
             self.hr_home_layout_version = int(want_ver)
-        elif not isinstance(getattr(self, "hr_home_layout", None), list):
-            self.hr_home_layout = [str(r) for r in self._HR_INT_HOME_LAYOUT]
-        self._hr_int_set_layout(getattr(self, "hr_home_layout", self._HR_INT_HOME_LAYOUT))
+
+        self._hr_int_set_layout(list(layout or self._HR_INT_HOME_LAYOUT))
         if home_room:
             self._hr_room_floor_items_bind(home_room, populate=True)
         else:
@@ -15073,11 +15089,10 @@ class HardcoreSurvivalState(State):
                 dy = int(y - ly)
                 if int(dx * dx + dy * dy) > int(r2):
                     continue
-                lit.append((x, y))
-
                 ch = str(self._hr_int_char_at(int(x), int(y)))[:1]
                 if ch in blocks:
                     continue
+                lit.append((x, y))
                 stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
 
             base_rect = pygame.Rect(int(map_x_local + lx * tile), int(map_y_local + ly * tile), int(tile), int(tile))
@@ -15176,11 +15191,10 @@ class HardcoreSurvivalState(State):
                 dy = int(y - ly)
                 if int(dx * dx + dy * dy) > int(r2):
                     continue
-                lit.append((x, y))
-
                 ch = str(self._hr_int_char_at(int(x), int(y)))[:1]
                 if ch in blocks:
                     continue
+                lit.append((x, y))
                 stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
 
             base_rect = pygame.Rect(int(map_x_local + lx * tile), int(map_y_local + ly * tile), int(tile), int(tile))
@@ -22383,7 +22397,8 @@ class HardcoreSurvivalState(State):
 
     def _make_day_night_overlay_surface(self, *, in_rv: bool) -> pygame.Surface | None:
         daylight, tday = self._daylight_amount()
-        max_alpha = 160 if not in_rv else 120
+        # Night should be truly dark outside (streetlamps / lamps provide visibility).
+        max_alpha = 255 if not in_rv else 120
         a = int(round(float(max_alpha) * (1.0 - float(daylight))))
         if a <= 0:
             return None
@@ -22391,7 +22406,7 @@ class HardcoreSurvivalState(State):
         if 0.0 < daylight < 1.0:
             col = (36, 26, 64) if tday < 0.5 else (64, 34, 26)  # dawn / dusk
         else:
-            col = (12, 14, 30)  # night tint
+            col = (0, 0, 0) if float(daylight) <= 0.0 else (12, 14, 30)  # night / (unused) day
 
         overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
         overlay.fill((int(col[0]), int(col[1]), int(col[2]), int(a)))
@@ -22482,10 +22497,11 @@ class HardcoreSurvivalState(State):
         ):
             return
 
-        daylight, _tday = self._daylight_amount()
-        max_alpha = 160
-        night_a = int(round(float(max_alpha) * (1.0 - float(daylight))))
-        if night_a <= 0:
+        try:
+            night_a = int(overlay.get_at((0, 0))[3])
+        except Exception:
+            night_a = int(overlay.get_alpha() or 0)
+        if int(night_a) <= 0:
             return
 
         ts = int(self.TILE_SIZE)
@@ -22547,7 +22563,7 @@ class HardcoreSurvivalState(State):
             return
 
         radius_px = int(max(int(ts) * 2, int(ts) * int(radius_tiles)))
-        max_sub_alpha = int(clamp(int(round(float(night_a) * 0.85 * float(intensity))), 0, int(night_a)))
+        max_sub_alpha = int(clamp(int(round(float(night_a) * 1.0 * float(intensity))), 0, int(night_a)))
         if max_sub_alpha <= 0:
             return
 
@@ -22596,13 +22612,12 @@ class HardcoreSurvivalState(State):
                     continue
                 if bool(restrict_home) and not self._tile_in_home_world(int(x), int(y)):
                     continue
-                lit.append((int(x), int(y)))
-
                 tid = int(self.world.peek_tile(int(x), int(y)))
                 if int(tid) in door_blocks:
                     continue
                 if bool(self._tile_solid(int(tid))):
                     continue
+                lit.append((int(x), int(y)))
                 stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
 
             base_rect = self._world_tile_screen_rect(int(lx), int(ly), int(cam_x), int(cam_y))
@@ -22763,13 +22778,13 @@ class HardcoreSurvivalState(State):
                     continue
                 if bool(restrict_home) and not self._tile_in_home_world(int(x), int(y)):
                     continue
-                lit.append((int(x), int(y)))
 
                 tid = int(self.world.peek_tile(int(x), int(y)))
                 if int(tid) in door_blocks:
                     continue
                 if bool(self._tile_solid(int(tid))):
                     continue
+                lit.append((int(x), int(y)))
                 stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
 
             # Build a local mask surface (white where visible tiles exist).
