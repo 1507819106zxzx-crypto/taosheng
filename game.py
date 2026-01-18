@@ -3908,9 +3908,9 @@ class HardcoreSurvivalState(State):
             id="rv",
             name="房车",
             # Larger RV so it can contain a small walkable interior space (world camera mode).
-            sprite_size=(100, 50),
-            collider=(100, 50),
-            wheelbase=32.0,
+            sprite_size=(160, 80),
+            collider=(160, 80),
+            wheelbase=46.0,
             max_fwd=105.0,
             max_rev=38.0,
             accel=165.0,
@@ -7533,6 +7533,7 @@ class HardcoreSurvivalState(State):
                 pass
 
             # 1F interior: elevator lobby + 2/3 apartments (never single-unit).
+            apt_doors: list[tuple[int, int, bool]] = []
             try:
                 in_left = int(x0 + 1)
                 in_right = int(x0 + w - 2)
@@ -7612,16 +7613,23 @@ class HardcoreSurvivalState(State):
                             tiles[idx(int(sx), int(yy))] = int(self.state.T_WALL)
 
                     reserved: set[tuple[int, int]] = set(lobby_area)
-                    apt_doors: list[tuple[int, int]] = []
+                    seed_base = int(self.seed) ^ 0x6B8B4567
                     for ux0, ux1 in unit_ranges:
                         if int(ux1 - ux0 + 1) < 3:
                             continue
                         dx = int(clamp(int((ux0 + ux1) // 2), int(ux0 + 1), int(ux1 - 1)))
-                        tiles[idx(int(dx), int(sep_y))] = int(self.state.T_DOOR)
-                        apt_doors.append((int(dx), int(sep_y)))
-                    for dy in (-1, 0, 1):
-                        for dx2 in (-1, 0, 1):
-                            reserved.add((int(dx + dx2), int(sep_y + dy)))
+                        # Unit-entry doors:
+                        # - 1F: always locked (prevents breaking into neighbors from the lobby).
+                        # - Upper floors: some are broken (enterable).
+                        wx = int(cx) * int(self.state.CHUNK_SIZE) + int(dx)
+                        wy = int(cy) * int(self.state.CHUNK_SIZE) + int(sep_y)
+                        hh = int(self.state._hash2_u32(int(wx), int(wy), int(seed_base)))
+                        broken_up = int(hh % 100) < 18
+                        tiles[idx(int(dx), int(sep_y))] = int(self.state.T_DOOR_LOCKED)
+                        apt_doors.append((int(dx), int(sep_y), bool(broken_up)))
+                        for dy in (-1, 0, 1):
+                            for dx2 in (-1, 0, 1):
+                                reserved.add((int(dx + dx2), int(sep_y + dy)))
             except Exception:
                 pass
 
@@ -7660,6 +7668,14 @@ class HardcoreSurvivalState(State):
                     i2 = int(dy - y0) * int(w) + int(dx - x0)
                     if 0 <= i2 < len(f_up):
                         f_up[int(i2)] = int(self.state.T_WALL)
+                # Upper floors: apply the precomputed broken/locked state for unit-entry doors.
+                try:
+                    for dx, dy, broken_up in list(apt_doors):
+                        i2 = int(dy - y0) * int(w) + int(dx - x0)
+                        if 0 <= i2 < len(f_up):
+                            f_up[int(i2)] = int(self.state.T_DOOR_BROKEN) if bool(broken_up) else int(self.state.T_DOOR_LOCKED)
+                except Exception:
+                    pass
 
                 floor_tiles: dict[int, list[int]] = {1: f1}
                 for fl in range(2, int(floors) + 1):
@@ -9460,6 +9476,7 @@ class HardcoreSurvivalState(State):
                     ty0w = cy * self.state.CHUNK_SIZE + y0
                     doors_w = tuple((cx * self.state.CHUNK_SIZE + int(dx), cy * self.state.CHUNK_SIZE + int(dy)) for dx, dy in door_tiles)
                     floors = int(building_floors)
+                    apt_doors: list[tuple[int, int, bool]] = []
 
                     # Elevator tile inside the lobby (world-map multi-floor switching).
                     try:
@@ -9549,11 +9566,18 @@ class HardcoreSurvivalState(State):
 
                             reserved: set[tuple[int, int]] = set(lobby_area)
                             # Apartment doors on the separator line.
+                            seed_base = int(self.seed) ^ 0x6B8B4567
                             for ux0, ux1 in unit_ranges:
                                 if int(ux1 - ux0 + 1) < 3:
                                     continue
                                 dx = int(clamp(int((ux0 + ux1) // 2), int(ux0 + 1), int(ux1 - 1)))
-                                tiles[idx(int(dx), int(sep_y))] = int(self.state.T_DOOR)
+                                # 1F: always locked; upper floors may have broken doors.
+                                wx = int(base_tx + int(dx))
+                                wy = int(base_ty + int(sep_y))
+                                hh = int(self.state._hash2_u32(int(wx), int(wy), int(seed_base)))
+                                broken_up = int(hh % 100) < 18
+                                tiles[idx(int(dx), int(sep_y))] = int(self.state.T_DOOR_LOCKED)
+                                apt_doors.append((int(dx), int(sep_y), bool(broken_up)))
                                 for ddy in (-1, 0, 1):
                                     for ddx in (-1, 0, 1):
                                         reserved.add((int(dx + ddx), int(sep_y + ddy)))
@@ -9586,6 +9610,14 @@ class HardcoreSurvivalState(State):
                             i2 = int(dy - y0) * int(w) + int(dx - x0)
                             if 0 <= i2 < len(f_up):
                                 f_up[int(i2)] = int(self.state.T_WALL)
+                        # Upper floors: apply the broken/locked state for unit-entry doors.
+                        try:
+                            for dx, dy, broken_up in list(apt_doors):
+                                i2 = int(dy - y0) * int(w) + int(dx - x0)
+                                if 0 <= i2 < len(f_up):
+                                    f_up[int(i2)] = int(self.state.T_DOOR_BROKEN) if bool(broken_up) else int(self.state.T_DOOR_LOCKED)
+                        except Exception:
+                            pass
 
                         floor_tiles: dict[int, list[int]] = {1: f1}
                         for fl in range(2, int(floors) + 1):
@@ -10153,6 +10185,8 @@ class HardcoreSurvivalState(State):
         self._apply_rv_model()
         self.rv_dir = "right"
         self.rv_anim = 0.0
+        self.rv_drive_view = "outside"  # outside | cabin
+        self.rv_headlights_on = True
         self.bike = HardcoreSurvivalState._Bike(
             pos=pygame.Vector2(self.player.pos) + pygame.Vector2(-28, 10),
             vel=pygame.Vector2(0, 0),
@@ -10169,7 +10203,7 @@ class HardcoreSurvivalState(State):
         # RV "interior" (world-map camera, NOT full-screen panel).
         self.rv_world_interior = False
         self._rv_world_return_pos: pygame.Vector2 | None = None
-        self._rv_world_int_size = (10, 5)  # w, h (tiles)
+        self._rv_world_int_size = (16, 8)  # w, h (tiles)
         self._rv_world_int_active_key: tuple[int, int, int, int] | None = None
         self._rv_world_int_restore_tiles: dict[tuple[int, int], int] | None = None
         self._rv_world_int_exit_tile: tuple[int, int] | None = None
@@ -10679,8 +10713,10 @@ class HardcoreSurvivalState(State):
                 self._toggle_barricade()
                 return
             if not self.inv_open and event.key in (pygame.K_h,):
-                # H: near RV -> enter/exit RV interior; elsewhere -> quick home teleport.
-                if bool(getattr(self, "rv_world_interior", False)) or self._can_access_rv():
+                # H: driving RV -> toggle cabin view; otherwise near RV -> enter/exit RV interior; elsewhere -> quick home teleport.
+                if self.mount == "rv":
+                    self._toggle_rv_drive_view()
+                elif bool(getattr(self, "rv_world_interior", False)) or self._can_access_rv():
                     self._rv_world_interior_toggle()
                 else:
                     self._teleport_to_bathroom()
@@ -10689,6 +10725,9 @@ class HardcoreSurvivalState(State):
                 self._rv_interior_toggle()
                 return
             if not self.inv_open and event.key in (pygame.K_f,):
+                if bool(getattr(self, "rv_world_interior", False)):
+                    if self._rv_world_try_drive_from_seat():
+                        return
                 self._toggle_vehicle()
                 return
             if not self.inv_open and event.key in (pygame.K_r,):
@@ -10980,7 +11019,12 @@ class HardcoreSurvivalState(State):
     def _can_access_rv(self) -> bool:
         if self.mount == "rv":
             return True
-        return (self.player.pos - self.rv.pos).length_squared() <= (36.0 * 36.0)
+        try:
+            pad = 24
+            r = self.rv.rect().inflate(int(pad * 2), int(pad * 2))
+            return bool(r.collidepoint(int(round(float(self.player.pos.x))), int(round(float(self.player.pos.y)))))
+        except Exception:
+            return (self.player.pos - self.rv.pos).length_squared() <= (36.0 * 36.0)
 
     def _ensure_rv_world_interior_built(self) -> bool:
         # Build a temporary RV room on the world map (same camera/tile mode).
@@ -10994,7 +11038,8 @@ class HardcoreSurvivalState(State):
         except Exception:
             w, h = 16, 10
         w = int(max(6, min(28, int(w))))
-        h = int(max(6, min(20, int(h))))
+        # Allow 5-tile height so the default RV collider (50px @ TILE_SIZE=10) can fit.
+        h = int(max(5, min(20, int(h))))
 
         # Stamp the room inside the RV's own footprint (not a separate far-away area).
         rv_rect = self.rv.rect()
@@ -11052,16 +11097,122 @@ class HardcoreSurvivalState(State):
         self._rv_world_int_exit_tile = (int(exit_tx), int(exit_ty))
         self._world_set_tile(int(exit_tx), int(exit_ty), int(self.T_DOOR))
 
-        # Single bed + small cabinet.
-        bed_tx = int(tx0 + 3)
-        bed_ty = int(ty0 + 2)
-        self._world_set_tile(int(bed_tx), int(bed_ty), int(self.T_BED))
-        self._world_set_tile(int(bed_tx + 1), int(bed_ty), int(self.T_FLOOR))
+        fx0 = int(tx0 + 1)
+        fx1 = int(tx0 + int(w) - 2)
+        fy0 = int(ty0 + 1)
+        fy1 = int(ty0 + int(h) - 2)
 
-        cab_tx = int(tx0 + w - 4)
-        cab_ty = int(ty0 + 2)
-        self._world_set_tile(int(cab_tx), int(cab_ty), int(self.T_CABINET))
+        # Driver cabin: vertical partition + distinct floor tone (cockpit).
+        part_x: int | None = None
+        cabin_x0: int | None = None
+        try:
+            inner_w = int(max(1, int(w) - 2))
+            cabin_inner_w = int(clamp(int(inner_w // 3), 3, 5))
+            cabin_x0 = int(fx1 - cabin_inner_w + 1)
+            cand_part = int(cabin_x0 - 1)
+            if int(fx0 + 2) <= int(cand_part) <= int(fx1 - 2):
+                part_x = int(cand_part)
+                door_y = int(ty0 + max(1, int(h) // 2))
+                door_y = int(clamp(int(door_y), int(fy0), int(fy1)))
+                for yy in range(int(fy0), int(fy1) + 1):
+                    if int(yy) == int(door_y):
+                        continue
+                    self._world_set_tile(int(part_x), int(yy), int(self.T_WALL))
+                for yy in range(int(fy0), int(fy1) + 1):
+                    for xx in range(int(part_x + 1), int(fx1) + 1):
+                        if int(self.world.peek_tile(int(xx), int(yy))) == int(self.T_FLOOR):
+                            self._world_set_tile(int(xx), int(yy), int(self.T_CONCRETE))
+        except Exception:
+            part_x = None
+            cabin_x0 = None
 
+        living_x1 = int(fx1 if part_x is None else int(part_x - 1))
+
+        # Bed (2 tiles, living area).
+        bed_y = int(clamp(int(fy0 + 1), int(fy0), int(fy1)))
+        bed_x0 = int(clamp(int(fx0 + 1), int(fx0), int(living_x1 - 1)))
+        if int(bed_x0 + 1) <= int(living_x1) and int(fy0) <= int(bed_y) <= int(fy1):
+            for bx in (int(bed_x0), int(bed_x0 + 1)):
+                if int(self.world.peek_tile(int(bx), int(bed_y))) == int(self.T_FLOOR):
+                    self._world_set_tile(int(bx), int(bed_y), int(self.T_BED))
+
+        # Cabinet (living area, away from the exit tile).
+        cab_x = int(clamp(int(fx0 + 1), int(fx0), int(living_x1)))
+        cab_y = int(clamp(int(fy1 - 1), int(fy0), int(fy1)))
+        if (int(cab_x), int(cab_y)) != (int(exit_tx), int(exit_ty)):
+            if int(self.world.peek_tile(int(cab_x), int(cab_y))) == int(self.T_FLOOR):
+                self._world_set_tile(int(cab_x), int(cab_y), int(self.T_CABINET))
+
+        # Cabin seats + dashboard (right side).
+        self._rv_world_driver_seat_tile = None
+        try:
+            if part_x is not None and cabin_x0 is not None:
+                seat_x = int(clamp(int(cabin_x0 + 1), int(cabin_x0), int(fx1)))
+            else:
+                seat_x = int(clamp(int(fx1 - 1), int(fx0), int(fx1)))
+            driver_y = int(clamp(int(fy0 + 1), int(fy0), int(fy1)))
+            pass_y = int(clamp(int(driver_y + 2), int(fy0), int(fy1)))
+            if int(self.world.peek_tile(int(seat_x), int(driver_y))) in (int(self.T_FLOOR), int(self.T_CONCRETE)):
+                self._world_set_tile(int(seat_x), int(driver_y), int(self.T_CHAIR))
+                self._rv_world_driver_seat_tile = (int(seat_x), int(driver_y))
+            if int(self.world.peek_tile(int(seat_x), int(pass_y))) in (int(self.T_FLOOR), int(self.T_CONCRETE)):
+                if (int(seat_x), int(pass_y)) != (int(exit_tx), int(exit_ty)):
+                    self._world_set_tile(int(seat_x), int(pass_y), int(self.T_CHAIR))
+            dash_x = int(fx1)
+            dash_y = int(clamp(int(driver_y + 1), int(fy0), int(fy1)))
+            if (int(dash_x), int(dash_y)) not in ((int(exit_tx), int(exit_ty)), (int(seat_x), int(driver_y)), (int(seat_x), int(pass_y))):
+                if int(self.world.peek_tile(int(dash_x), int(dash_y))) in (int(self.T_FLOOR), int(self.T_CONCRETE)):
+                    self._world_set_tile(int(dash_x), int(dash_y), int(self.T_TABLE))
+        except Exception:
+            self._rv_world_driver_seat_tile = None
+
+        return True
+
+    def _toggle_rv_drive_view(self) -> None:
+        if self.mount != "rv":
+            return
+        cur = str(getattr(self, "rv_drive_view", "outside"))
+        self.rv_drive_view = "cabin" if cur != "cabin" else "outside"
+        self._set_hint(f"RV View: {str(self.rv_drive_view).upper()}", seconds=0.9)
+
+    def _rv_world_try_drive_from_seat(self) -> bool:
+        if not bool(getattr(self, "rv_world_interior", False)):
+            return False
+        seat = getattr(self, "_rv_world_driver_seat_tile", None)
+        if not (isinstance(seat, tuple) and len(seat) == 2):
+            return False
+        tx, ty = self._player_tile()
+        sx, sy = int(seat[0]), int(seat[1])
+        if abs(int(tx) - int(sx)) > 1 or abs(int(ty) - int(sy)) > 1:
+            return False
+        if int(self.inventory.count("key_rv")) <= 0:
+            self._set_hint("Need: RV key", seconds=1.1)
+            return True
+
+        # Teardown interior tiles but keep the player on the RV so driving starts immediately.
+        self._clear_player_pose()
+        self.rv_world_interior = False
+        self.player.vel.update(0, 0)
+
+        restore = getattr(self, "_rv_world_int_restore_tiles", None)
+        if isinstance(restore, dict):
+            for (rtx, rty), tid in list(restore.items()):
+                try:
+                    self._world_set_tile(int(rtx), int(rty), int(tid))
+                except Exception:
+                    pass
+        self._rv_world_int_restore_tiles = None
+        self._rv_world_int_active_key = None
+        self._rv_world_int_exit_tile = None
+        self._rv_world_return_pos = None
+
+        self.mount = "rv"
+        self.rv.vel.update(0, 0)
+        self.rv.speed = 0.0
+        self.player.pos.update(self.rv.pos)
+        self.player.vel.update(0, 0)
+        self.rv_drive_view = "cabin"
+        self._set_hint("Drive", seconds=0.9)
         return True
 
     def _rv_world_interior_toggle(self) -> None:
@@ -11091,7 +11242,9 @@ class HardcoreSurvivalState(State):
         self.bike.vel.update(0, 0)
 
         if not self._ensure_rv_world_interior_built():
-            self._set_hint("房车内部生成失败", seconds=1.2)
+            # Keep the detailed reason set by _ensure_rv_world_interior_built().
+            if not str(getattr(self, "hint_text", "")).strip():
+                self._set_hint("房车内部生成失败", seconds=1.2)
             return
 
         ex = getattr(self, "_rv_world_int_exit_tile", None)
@@ -12262,18 +12415,55 @@ class HardcoreSurvivalState(State):
         return False
 
     def _hr_make_hall_layout(self, floor: int) -> list[str]:
-        base = [str(r) for r in self._HR_INT_HALL_BASE]
-        home_floor = int(getattr(self, "hr_home_floor", -1))
-        if int(floor) != int(home_floor):
-            return base
         doors = list(getattr(self, "_HR_INT_APT_DOORS", []))
         if not doors:
-            return base
-        idx = int(getattr(self, "hr_home_door_index", 0)) % len(doors)
-        hx, hy = doors[idx]
+            return [str(r) for r in self._HR_INT_HALL_BASE]
+
+        base = [str(r) for r in self._HR_INT_HALL_BASE]
         rows = [list(r) for r in base]
-        if 0 <= int(hy) < len(rows) and 0 <= int(hx) < len(rows[int(hy)]):
-            rows[int(hy)][int(hx)] = "H"
+
+        # Mark the player's home door (green) on the home floor.
+        home_floor = int(getattr(self, "hr_home_floor", -1))
+        if int(floor) == int(home_floor):
+            idx = int(getattr(self, "hr_home_door_index", 0)) % len(doors)
+            hx, hy = doors[idx]
+            if 0 <= int(hy) < len(rows) and 0 <= int(hx) < len(rows[int(hy)]):
+                rows[int(hy)][int(hx)] = "H"
+
+        # Mark some other unit doors as broken (enterable) so players can tell why it opens.
+        states = getattr(self, "hr_apt_door_broken", None)
+        if not isinstance(states, dict):
+            states = {}
+            self.hr_apt_door_broken = states
+        sb = getattr(self, "hr_building", None)
+        if isinstance(sb, HardcoreSurvivalState._SpecialBuilding):
+            bkey = (int(sb.tx0), int(sb.ty0), int(sb.w), int(sb.h))
+        else:
+            bkey = (0, 0, 0, 0)
+        seed_base = int(self.seed) ^ 0x6B8B4567
+        for i, (dx, dy) in enumerate(doors):
+            unit = int(i) + 1
+            dx = int(dx)
+            dy = int(dy)
+            if not (0 <= dy < len(rows) and 0 <= dx < len(rows[dy])):
+                continue
+            if rows[dy][dx] == "H":
+                continue
+            door_key = (int(bkey[0]), int(bkey[1]), int(bkey[2]), int(bkey[3]), int(floor), int(unit))
+            if door_key in states:
+                broken = bool(states.get(door_key, False))
+            else:
+                hh = int(
+                    self._hash2_u32(
+                        int(bkey[0]) + int(floor) * 37 + int(unit) * 11,
+                        int(bkey[1]) + int(floor) * 17 + int(unit) * 29,
+                        int(seed_base),
+                    )
+                )
+                broken = int(hh % 100) < 18
+                states[door_key] = bool(broken)
+            if broken and rows[dy][dx] == "A":
+                rows[dy][dx] = "a"
         return ["".join(r) for r in rows]
 
     def _hr_set_floor(self, floor: int, *, spawn_at: str = "elevator") -> None:
@@ -13166,7 +13356,7 @@ class HardcoreSurvivalState(State):
         tx, ty = self._hr_int_player_tile()
         candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
         chosen: tuple[int, int, str] | None = None
-        interact = {"D", "E", "H", "A", "B", "^", "v"}
+        interact = {"D", "E", "H", "A", "a", "B", "^", "v"}
         if mode == "home":
             interact.update({"S", "F", "C", "P", "X", "L", "O"})
         for cx, cy in candidates:
@@ -13423,13 +13613,7 @@ class HardcoreSurvivalState(State):
                 return
             self._set_hint("这不是你的家", seconds=1.2)
             return
-        if ch == "A":
-            has_key = int(self.inventory.count("key_house")) > 0
-            has_crowbar = int(self.inventory.count("crowbar")) > 0
-            if not (has_key or has_crowbar):
-                self._set_hint("门锁住了(需要钥匙/撬棍)", seconds=1.2)
-                return
-
+        if ch in ("A", "a"):
             doors = list(getattr(self, "_HR_INT_APT_DOORS", []))
             unit = 0
             for i, (dx, dy) in enumerate(doors):
@@ -13437,11 +13621,24 @@ class HardcoreSurvivalState(State):
                     unit = int(i) + 1
                     break
             floor = int(getattr(self, "hr_floor", 1))
-            room_id = f"{int(floor)}{int(unit):02d}" if unit > 0 else f"{int(floor)}??"
+            base_room_id = f"{int(floor)}{int(unit):02d}" if unit > 0 else f"{int(floor)}??"
             home_room = str(getattr(self, "home_highrise_room", "")).strip()
-            if home_room and room_id == home_room:
+            if home_room and base_room_id == home_room:
+                if int(self.inventory.count("key_house")) <= 0:
+                    self._set_hint("需要我家的钥匙", seconds=1.1)
+                    return
                 self._hr_enter_home()
                 return
+
+            # Other units: locked unless the door is broken ('a').
+            if ch != "a":
+                self._set_hint("别人的门锁住了", seconds=1.2)
+                return
+
+            room_id = str(base_room_id)
+            sb = getattr(self, "hr_building", None)
+            if isinstance(sb, HardcoreSurvivalState._SpecialBuilding):
+                room_id = f"{int(sb.tx0)}_{int(sb.ty0)}_{base_room_id}"
 
             # Break-in room: use the default apartment layout + per-room storage.
             self.hr_hall_pos_before_home = pygame.Vector2(self.hr_int_pos)
@@ -13467,7 +13664,7 @@ class HardcoreSurvivalState(State):
                 self.hr_int_pos = pygame.Vector2((sx + 0.5) * tile, (sy + 0.5) * tile)
             self.hr_int_vel = pygame.Vector2(0, 0)
             self.hr_int_walk_phase = 0.0
-            self._set_hint(f"进入{room_id}", seconds=1.0)
+            self._set_hint(f"进入{base_room_id}", seconds=1.0)
             return
         self._set_hint("这里没有可互动", seconds=1.0)
 
@@ -15796,7 +15993,7 @@ class HardcoreSurvivalState(State):
                 ch = row[x] if x < len(row) else "W"
                 r = pygame.Rect(map_x + x * tile, map_y + y * tile, tile, tile)
 
-                if ch in ("W", "V", "D", "A", "H", "I"):
+                if ch in ("W", "V", "D", "A", "a", "H", "I"):
                     pygame.draw.rect(surface, wall, r)
                     pygame.draw.rect(surface, wall_hi, pygame.Rect(r.x, r.y, r.w, 4))
                     pygame.draw.rect(surface, wall_edge, r, 1)
@@ -15820,7 +16017,7 @@ class HardcoreSurvivalState(State):
                         pygame.draw.rect(surface, outline, dr.inflate(2, 2))
                         pygame.draw.rect(surface, (240, 220, 140), dr)
                         pygame.draw.circle(surface, outline, (dr.right - 5, dr.centery), 2)
-                    elif ch in ("A", "H"):
+                    elif ch in ("A", "a", "H"):
                         # Apartment doors: keep a solid wall frame, bottom aligned to the baseboard.
                         # Doors should be taller than one tile (player sprite is 2x inside). Pixel-style.
                         door_h = int(clamp(int(tile * 1.7), int(tile + 8), int(tile * 2 - 2)))
@@ -15832,6 +16029,10 @@ class HardcoreSurvivalState(State):
                         pygame.draw.circle(surface, (240, 220, 140), (dr.right - 4, knob_y), 2)
                         if ch == "H":
                             pygame.draw.rect(surface, (120, 200, 140), pygame.Rect(dr.x + 2, dr.y + 2, dr.w - 4, 3))
+                        if ch == "a":
+                            # Broken door accent so players understand it's enterable.
+                            pygame.draw.line(surface, outline, (dr.x + 3, dr.y + 6), (dr.right - 4, dr.bottom - 7), 2)
+                            pygame.draw.line(surface, (40, 20, 20), (dr.x + 4, dr.bottom - 6), (dr.right - 5, dr.bottom - 6), 1)
                     elif ch == "I":
                         # Light switch on the wall (controls room lighting). Pixel-style.
                         plate = pygame.Rect(int(r.centerx - 4), int(r.centery - 6), 8, 12)
@@ -18097,7 +18298,8 @@ class HardcoreSurvivalState(State):
                         hits.append(brect)
 
         # Player-owned vehicles are also solid when on foot.
-        if self.mount != "rv":
+        # Exception: when inside the RV world-interior, allow walking within the RV footprint.
+        if self.mount != "rv" and not bool(getattr(self, "rv_world_interior", False)):
             try:
                 vw, vh = int(getattr(self.rv, "w", 0)), int(getattr(self.rv, "h", 0))
                 if vw > 0 and vh > 0:
@@ -23728,7 +23930,15 @@ class HardcoreSurvivalState(State):
         rv_d2 = float((self.player.pos - self.rv.pos).length_squared())
         bike_d2 = float((self.player.pos - self.bike.pos).length_squared())
         parked_chunk, parked_bike, parked_d2 = self._find_nearest_parked_bike(radius_px=18.0)
-        can_rv = rv_d2 <= (22.0 * 22.0)
+        try:
+            pad = 22
+            can_rv = bool(
+                self.rv.rect()
+                .inflate(int(pad * 2), int(pad * 2))
+                .collidepoint(int(round(float(self.player.pos.x))), int(round(float(self.player.pos.y))))
+            )
+        except Exception:
+            can_rv = rv_d2 <= (22.0 * 22.0)
         can_bike = bike_d2 <= (18.0 * 18.0)
         can_parked = parked_bike is not None and parked_chunk is not None
         if not can_rv and not can_bike and not can_parked:
@@ -24533,6 +24743,108 @@ class HardcoreSurvivalState(State):
             tmp.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
             overlay.blit(tmp, (int(ox), int(oy)), special_flags=pygame.BLEND_RGBA_SUB)
 
+    def _carve_vehicle_headlights_from_night_overlay(
+        self,
+        overlay: pygame.Surface,
+        cam_x: int,
+        cam_y: int,
+    ) -> None:
+        if self.mount != "rv":
+            return
+        if bool(getattr(self, "rv_world_interior", False)):
+            return
+        if not bool(getattr(self, "rv_headlights_on", True)):
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return
+
+        try:
+            night_a = int(overlay.get_at((0, 0))[3])
+        except Exception:
+            night_a = int(overlay.get_alpha() or 0)
+        if int(night_a) <= 0:
+            return
+
+        daylight, _tday = self._daylight_amount()
+        if float(daylight) >= 0.92:
+            return
+
+        max_sub_alpha = int(clamp(int(round(float(night_a) * 1.25)), 0, int(night_a)))
+        if max_sub_alpha <= 0:
+            return
+
+        forward = pygame.Vector2(math.cos(float(self.rv.heading)), math.sin(float(self.rv.heading)))
+        if forward.length_squared() <= 0.001:
+            forward = pygame.Vector2(1, 0)
+        forward = forward.normalize()
+        side = forward.rotate(90)
+
+        rv_w = float(getattr(self.rv, "w", 80.0))
+        rv_h = float(getattr(self.rv, "h", 40.0))
+        front_off = max(10.0, rv_w * 0.5 - 10.0)
+        head_sep = float(clamp(rv_h * 0.18, 8.0, 18.0))
+
+        length = int(clamp(int(round(max(120.0, rv_w * 1.20))), 90, 220))
+        base_half_ang = 26.0
+
+        def carve_cone(origin_world: pygame.Vector2) -> None:
+            sx = int(round(float(origin_world.x) - float(cam_x)))
+            sy = int(round(float(origin_world.y) - float(cam_y)))
+
+            left_dir = forward.rotate(-base_half_ang)
+            right_dir = forward.rotate(base_half_ang)
+            p1 = pygame.Vector2(sx, sy) + left_dir * float(length)
+            p2 = pygame.Vector2(sx, sy) + right_dir * float(length)
+            pad = 10
+            minx = int(math.floor(min(float(sx), float(p1.x), float(p2.x)) - pad))
+            miny = int(math.floor(min(float(sy), float(p1.y), float(p2.y)) - pad))
+            maxx = int(math.ceil(max(float(sx), float(p1.x), float(p2.x)) + pad))
+            maxy = int(math.ceil(max(float(sy), float(p1.y), float(p2.y)) + pad))
+
+            bounds = overlay.get_rect()
+            if maxx < bounds.left or maxy < bounds.top or minx > bounds.right or miny > bounds.bottom:
+                return
+            minx = int(clamp(minx, 0, bounds.w - 1))
+            miny = int(clamp(miny, 0, bounds.h - 1))
+            maxx = int(clamp(maxx, 0, bounds.w - 1))
+            maxy = int(clamp(maxy, 0, bounds.h - 1))
+            bw = int(maxx - minx + 1)
+            bh = int(maxy - miny + 1)
+            if bw <= 1 or bh <= 1:
+                return
+
+            beam = pygame.Surface((bw, bh), pygame.SRCALPHA)
+            ox = sx - minx
+            oy = sy - miny
+
+            # Strong at the center, fades forward.
+            steps = 8
+            for i in range(steps):
+                t = float(i) / float(max(1, steps - 1))
+                a = int(round(float(max_sub_alpha) * ((1.0 - t) ** 2)))
+                if a <= 0:
+                    continue
+                l = float(length) * (0.35 + 0.65 * t)
+                ang = float(base_half_ang) * (0.55 + 0.45 * t)
+                ld = forward.rotate(-ang)
+                rd = forward.rotate(ang)
+                q1 = pygame.Vector2(float(ox), float(oy)) + ld * l
+                q2 = pygame.Vector2(float(ox), float(oy)) + rd * l
+                pts = [(float(ox), float(oy)), (float(q1.x), float(q1.y)), (float(q2.x), float(q2.y))]
+                pygame.draw.polygon(beam, (0, 0, 0, int(a)), pts)
+
+            pygame.draw.circle(beam, (0, 0, 0, int(max_sub_alpha)), (int(ox), int(oy)), 6)
+            overlay.blit(beam, (int(minx), int(miny)), special_flags=pygame.BLEND_RGBA_SUB)
+
+        base = pygame.Vector2(self.rv.pos) + forward * float(front_off)
+        carve_cone(base + side * head_sep)
+        carve_cone(base - side * head_sep)
+
     def _draw_world_lighting(
         self,
         surface: pygame.Surface,
@@ -24547,6 +24859,7 @@ class HardcoreSurvivalState(State):
         if overlay is not None:
             try:
                 self._carve_world_lamps_from_night_overlay(overlay, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
+                self._carve_vehicle_headlights_from_night_overlay(overlay, cam_x, cam_y)
             except Exception:
                 pass
             surface.blit(overlay, (0, 0))
@@ -25304,6 +25617,32 @@ class HardcoreSurvivalState(State):
                             # Never mask the outer border so doors/walls read correctly.
                             if int(tx) not in (int(tx0), int(tx0) + int(w) - 1) and int(ty) not in (int(ty0), int(ty0) + int(h) - 1):
                                 tile_id = int(self.T_WALL)
+        except Exception:
+            pass
+
+        # RV world-interior: draw border wall tiles as thin lines so the RV
+        # doesn't look like it has "thick black blocks" as walls.
+        try:
+            if bool(getattr(self, "rv_world_interior", False)) and int(tile_id) == int(self.T_WALL):
+                key = getattr(self, "_rv_world_int_active_key", None)
+                if isinstance(key, tuple) and len(key) == 4:
+                    rx0, ry0, rw, rh = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+                    if int(rx0) <= int(tx) < int(rx0) + int(rw) and int(ry0) <= int(ty) < int(ry0) + int(rh):
+                        relx = int(tx) - int(rx0)
+                        rely = int(ty) - int(ry0)
+                        if int(relx) in (0, int(rw) - 1) or int(rely) in (0, int(rh) - 1):
+                            base = self._tint(self._tile_color(int(self.T_FLOOR)), add=(-18, -18, -18))
+                            surface.fill(base, rect)
+                            line = (10, 10, 12)
+                            if int(rely) == 0:
+                                surface.fill(line, pygame.Rect(rect.x, rect.y, rect.w, 1))
+                            if int(rely) == int(rh) - 1:
+                                surface.fill(line, pygame.Rect(rect.x, rect.bottom - 1, rect.w, 1))
+                            if int(relx) == 0:
+                                surface.fill(line, pygame.Rect(rect.x, rect.y, 1, rect.h))
+                            if int(relx) == int(rw) - 1:
+                                surface.fill(line, pygame.Rect(rect.right - 1, rect.y, 1, rect.h))
+                            return
         except Exception:
             pass
         col = self._tile_color(tile_id)
@@ -26776,7 +27115,9 @@ class HardcoreSurvivalState(State):
     def _draw_rv(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         # When inside the RV interior (world-tile mode), hide the exterior sprite
         # so the stamped interior space is visible and walkable.
-        if bool(getattr(self, "rv_world_interior", False)):
+        if bool(getattr(self, "rv_world_interior", False)) or (
+            self.mount == "rv" and str(getattr(self, "rv_drive_view", "outside")) == "cabin"
+        ):
             return
         rvp = pygame.Vector2(self.rv.pos) - pygame.Vector2(cam_x, cam_y)        
         moving = self.mount == "rv" and abs(float(self.rv.speed)) > 6.0
@@ -26814,15 +27155,61 @@ class HardcoreSurvivalState(State):
             if rect.collidepoint(mx, my):
                 model = self._CAR_MODELS.get(str(mid))
                 name = model.name if model is not None else str(mid)
-                near = (self.player.pos - self.rv.pos).length_squared() <= (22.0 * 22.0)
+                try:
+                    pad = 22
+                    near = bool(
+                        self.rv.rect()
+                        .inflate(int(pad * 2), int(pad * 2))
+                        .collidepoint(int(round(float(self.player.pos.x))), int(round(float(self.player.pos.y))))
+                    )
+                except Exception:
+                    near = (self.player.pos - self.rv.pos).length_squared() <= (22.0 * 22.0)
                 if self.mount == "rv":
-                    prompt = "F 下车  |  H 内部"
+                    prompt = "F 下车  |  H 视角"
                 else:
                     prompt = "F 上车  |  H 内部" if near else "靠近后: F 上车 / H 内部"
                 lines = [f"房车：{name}", f"燃油: {int(self.rv.fuel)}", prompt]
                 hi = (255, 245, 140)
                 self._blit_sprite_outline(surface, spr, rect, color=hi)
                 self._hover_tooltip = (lines, (mx, my))
+
+    def _draw_rv_drive_overlay(self, surface: pygame.Surface) -> None:
+        if self.mount != "rv":
+            return
+        if str(getattr(self, "rv_drive_view", "outside")) != "cabin":
+            return
+
+        overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
+
+        # Cabin frame (subtle; keeps world readable).
+        frame_a = 120
+        overlay.fill((0, 0, 0, frame_a), pygame.Rect(0, 0, INTERNAL_W, 16))
+        overlay.fill((0, 0, 0, frame_a), pygame.Rect(0, 0, 16, INTERNAL_H))
+        overlay.fill((0, 0, 0, frame_a), pygame.Rect(INTERNAL_W - 16, 0, 16, INTERNAL_H))
+
+        dash_h = 62
+        dash = pygame.Rect(0, INTERNAL_H - dash_h, INTERNAL_W, dash_h)
+        overlay.fill((0, 0, 0, 170), dash)
+        overlay.fill((28, 28, 34, 180), pygame.Rect(dash.x, dash.y, dash.w, 2))
+
+        # Steering wheel.
+        cx = int(INTERNAL_W // 2)
+        cy = int(dash.y + dash.h // 2 + 6)
+        r = 18
+        pygame.draw.circle(overlay, (18, 18, 22, 255), (cx, cy), r + 1, 1)
+        pygame.draw.circle(overlay, (40, 40, 46, 255), (cx, cy), r, 2)
+        pygame.draw.circle(overlay, (16, 16, 18, 255), (cx, cy), max(2, r - 6), 2)
+        pygame.draw.line(overlay, (40, 40, 46, 255), (cx - r + 4, cy), (cx + r - 4, cy), 2)
+        pygame.draw.line(overlay, (40, 40, 46, 255), (cx, cy - r + 4), (cx, cy + r - 4), 2)
+
+        # HUD.
+        spd = int(abs(float(getattr(self.rv, "speed", 0.0))))
+        fuel = int(max(0, float(getattr(self.rv, "fuel", 0.0))))
+        draw_text(overlay, self.app.font_s, f"SPD {spd}", (14, dash.y + 10), pygame.Color(230, 230, 235), anchor="topleft")
+        draw_text(overlay, self.app.font_s, f"FUEL {fuel}", (14, dash.y + 26), pygame.Color(200, 200, 210), anchor="topleft")
+        draw_text(overlay, self.app.font_s, "H View  |  F Exit", (INTERNAL_W - 14, dash.y + 10), pygame.Color(170, 170, 185), anchor="topright")
+
+        surface.blit(overlay, (0, 0))
 
     def _draw_bike(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         bp = pygame.Vector2(self.bike.pos) - pygame.Vector2(cam_x, cam_y)       
@@ -29210,6 +29597,7 @@ class HardcoreSurvivalState(State):
         self._draw_roofs(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_world_lighting(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_weather_effects(surface, in_rv=False)
+        self._draw_rv_drive_overlay(surface)
         self._draw_home_move_mode_overlay(surface, cam_x, cam_y_draw)
         self._draw_survival_ui(surface)
         if getattr(self, "world_map_open", False):
