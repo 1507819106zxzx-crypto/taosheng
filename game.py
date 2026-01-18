@@ -10378,6 +10378,7 @@ class HardcoreSurvivalState(State):
         self.world_ctx_suppressed = None
         self.lamp_cfg_open = False
         self.lamp_cfg_target: tuple[int, int] | None = None
+        self._rv_mode_btn_rects: dict[str, pygame.Rect] = {}
         self.lamp_cfg_rects: list[tuple[pygame.Rect, str]] = []
         self._last_cam_draw = (0, 0)
         self.world_tv_states: dict[tuple[int, int], bool] = {}
@@ -10708,6 +10709,8 @@ class HardcoreSurvivalState(State):
                 return
 
         if event.type == pygame.MOUSEBUTTONDOWN:
+            if self._handle_rv_mode_buttons_mouse(event):
+                return
             if self._handle_world_furniture_carry_mouse(event):
                 return
             if self._handle_world_context_menu_mouse(event):
@@ -10858,8 +10861,9 @@ class HardcoreSurvivalState(State):
                 return
             if not self.inv_open and event.key in (pygame.K_f,):
                 if bool(getattr(self, "rv_world_interior", False)):
-                    if self._rv_world_try_drive_from_seat():
-                        return
+                    # In RV world-interior: F only tries to start driving.
+                    self._rv_world_try_drive_from_seat()
+                    return
                 self._toggle_vehicle()
                 return
             if not self.inv_open and event.key in (pygame.K_r,):
@@ -11307,6 +11311,38 @@ class HardcoreSurvivalState(State):
         tx, ty = self._player_tile()
         sx, sy = int(seat[0]), int(seat[1])
         if abs(int(tx) - int(sx)) > 1 or abs(int(ty) - int(sy)) > 1:
+            return False
+        if int(self.inventory.count("key_rv")) <= 0:
+            self._set_hint("Need: RV key", seconds=1.1)
+            return True
+
+        # Teardown interior tiles but keep the player on the RV so driving starts immediately.
+        self._clear_player_pose()
+        self.rv_world_interior = False
+        self.player.vel.update(0, 0)
+
+        restore = getattr(self, "_rv_world_int_restore_tiles", None)
+        if isinstance(restore, dict):
+            for (rtx, rty), tid in list(restore.items()):
+                try:
+                    self._world_set_tile(int(rtx), int(rty), int(tid))
+                except Exception:
+                    pass
+        self._rv_world_int_restore_tiles = None
+        self._rv_world_int_active_key = None
+        self._rv_world_int_exit_tile = None
+        self._rv_world_return_pos = None
+
+        self.mount = "rv"
+        self.rv.vel.update(0, 0)
+        self.rv.speed = 0.0
+        self.player.pos.update(self.rv.pos)
+        self.player.vel.update(0, 0)
+        self._set_hint("Drive", seconds=0.9)
+        return True
+
+    def _rv_world_try_drive_from_anywhere(self) -> bool:
+        if not bool(getattr(self, "rv_world_interior", False)):
             return False
         if int(self.inventory.count("key_rv")) <= 0:
             self._set_hint("Need: RV key", seconds=1.1)
@@ -18546,6 +18582,30 @@ class HardcoreSurvivalState(State):
                 if rect.colliderect(tile_rect):
                     hits.append(tile_rect)
 
+        # Building roofs/facades: block vehicles from entering building footprints.
+        try:
+            ts = int(self.TILE_SIZE)
+            if ts > 0:
+                start_cx = left // self.CHUNK_SIZE
+                end_cx = right // self.CHUNK_SIZE
+                start_cy = top // self.CHUNK_SIZE
+                end_cy = bottom // self.CHUNK_SIZE
+                seen_buildings: set[tuple[int, int, int, int]] = set()
+                for cy in range(int(start_cy) - 1, int(end_cy) + 2):
+                    for cx in range(int(start_cx) - 1, int(end_cx) + 2):
+                        chunk = self.world.get_chunk(int(cx), int(cy))
+                        for b in getattr(chunk, "buildings", []):
+                            bx0, by0, bw, bh = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                            key = (int(bx0), int(by0), int(bw), int(bh))
+                            if key in seen_buildings:
+                                continue
+                            seen_buildings.add(key)
+                            brect = pygame.Rect(int(bx0 * ts), int(by0 * ts), int(bw * ts), int(bh * ts))
+                            if rect.colliderect(brect):
+                                hits.append(brect)
+        except Exception:
+            pass
+
         # Solid world props (signs/toys/etc) still block vehicles.
         start_cx = left // self.CHUNK_SIZE
         end_cx = right // self.CHUNK_SIZE
@@ -19056,32 +19116,55 @@ class HardcoreSurvivalState(State):
         return p
 
     def _move_box_vehicle(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
+        # Sub-stepped movement to avoid tunneling through 1-tile walls when dt spikes.
+        w = int(w)
+        h = int(h)
+        dt = float(dt)
+        if dt > 0.25:
+            dt = 0.25
+
+        dx_total = float(vel.x) * dt
+        dy_total = float(vel.y) * dt
+        if abs(dx_total) < 1e-6 and abs(dy_total) < 1e-6:
+            return pygame.Vector2(float(pos.x), float(pos.y))
+
+        # Keep per-step movement small (px) so collisions can't be skipped.
+        max_step = 2.0
+        steps = int(max(1, math.ceil(max(abs(dx_total), abs(dy_total)) / max_step)))
+        steps = int(clamp(int(steps), 1, 80))
+        step_dx = float(dx_total) / float(steps)
+        step_dy = float(dy_total) / float(steps)
+
+        p = pygame.Vector2(pos)
         rect = pygame.Rect(
-            iround(float(pos.x) - float(w) / 2.0),
-            iround(float(pos.y) - float(h) / 2.0),
+            iround(float(p.x) - float(w) / 2.0),
+            iround(float(p.y) - float(h) / 2.0),
             int(w),
             int(h),
         )
-        dx = float(vel.x * dt)
-        dy = float(vel.y * dt)
 
-        if dx != 0.0:
-            rect.x += int(round(dx))
-            for hit in self._collide_rect_world_vehicle(rect):
-                if dx > 0:
-                    rect.right = hit.left
-                else:
-                    rect.left = hit.right
+        for _ in range(int(steps)):
+            if abs(step_dx) > 1e-9:
+                p.x += float(step_dx)
+                rect.x = iround(float(p.x) - float(w) / 2.0)
+                for hit in self._collide_rect_world_vehicle(rect):
+                    if step_dx > 0.0:
+                        rect.right = hit.left
+                    else:
+                        rect.left = hit.right
+                p.x = float(rect.centerx)
 
-        if dy != 0.0:
-            rect.y += int(round(dy))
-            for hit in self._collide_rect_world_vehicle(rect):
-                if dy > 0:
-                    rect.bottom = hit.top
-                else:
-                    rect.top = hit.bottom
+            if abs(step_dy) > 1e-9:
+                p.y += float(step_dy)
+                rect.y = iround(float(p.y) - float(h) / 2.0)
+                for hit in self._collide_rect_world_vehicle(rect):
+                    if step_dy > 0.0:
+                        rect.bottom = hit.top
+                    else:
+                        rect.top = hit.bottom
+                p.y = float(rect.centery)
 
-        return pygame.Vector2(rect.centerx, rect.centery)
+        return pygame.Vector2(float(rect.centerx), float(rect.centery))
 
     def _update_world_door_open_anim(self, dt: float) -> None:
         # Visual-only door open/close animation for world-map doors.
@@ -21811,6 +21894,64 @@ class HardcoreSurvivalState(State):
             self.player.morale = float(clamp(float(self.player.morale) + 0.5, 0.0, 100.0))
             self._speech_say("小便完成", seconds=1.2)
 
+    def _handle_rv_mode_buttons_mouse(self, event: pygame.event.Event) -> bool:
+        rects = getattr(self, "_rv_mode_btn_rects", None)
+        if not isinstance(rects, dict) or not rects:
+            return False
+        if not hasattr(event, "pos"):
+            return False
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return False
+        mx, my = int(internal[0]), int(internal[1])
+        btn = int(getattr(event, "button", 0))
+        if btn != 1:
+            return False
+
+        for key, r in rects.items():
+            if not isinstance(r, pygame.Rect):
+                continue
+            if not r.collidepoint(mx, my):
+                continue
+            key = str(key)
+
+            if key == "life":
+                if bool(getattr(self, "rv_world_interior", False)):
+                    return True
+                if getattr(self, "mount", None) == "rv":
+                    if abs(float(getattr(self.rv, "speed", 0.0))) > 1.0:
+                        self._set_hint("先停车", seconds=0.9)
+                        return True
+                if not self._can_access_rv():
+                    self._set_hint("靠近房车", seconds=0.9)
+                    return True
+                self._rv_world_interior_enter()
+                return True
+
+            if key == "drive":
+                if getattr(self, "mount", None) == "rv":
+                    return True
+                if bool(getattr(self, "rv_world_interior", False)):
+                    self._rv_world_try_drive_from_anywhere()
+                    return True
+                if not self._can_access_rv():
+                    self._set_hint("靠近房车", seconds=0.9)
+                    return True
+                if int(self.inventory.count("key_rv")) <= 0:
+                    self._set_hint("Need: RV key", seconds=1.1)
+                    return True
+                self.mount = "rv"
+                self.rv.vel.update(0, 0)
+                self.rv.speed = 0.0
+                self.player.pos.update(self.rv.pos)
+                self.player.vel.update(0, 0)
+                self._set_hint("Drive", seconds=0.9)
+                return True
+
+            return True
+
+        return False
+
     def _handle_world_context_menu_mouse(self, event: pygame.event.Event) -> bool:
         if bool(getattr(self, "home_move_mode", False)):
             return False
@@ -24274,6 +24415,12 @@ class HardcoreSurvivalState(State):
             self.player.pos.update(self.bike.pos)
             self._set_hint(f"骑上 {self._two_wheel_name(getattr(self.bike, 'model_id', 'bike'))}")
             return
+
+        # RV: enter world-interior first (life mode). Driving remains key-gated below.
+        if not bool(getattr(self, "rv_world_interior", False)):
+            self._rv_world_interior_enter()
+            if bool(getattr(self, "rv_world_interior", False)):
+                return
 
         if int(self.inventory.count("key_rv")) <= 0:
             self._set_hint("需要房车钥匙", seconds=1.1)
@@ -31314,6 +31461,25 @@ class HardcoreSurvivalState(State):
         y0 = 34
         if isinstance(minimap_rect, pygame.Rect):
             y0 = max(int(y0), int(minimap_rect.bottom + 6))
+
+        # RV mode toggle buttons (life vs drive).
+        self._rv_mode_btn_rects = {}
+        if self.mount in (None, "rv"):
+            near_rv_btn = (self.player.pos - self.rv.pos).length_squared() <= (22.0 * 22.0)
+            if near_rv_btn or bool(getattr(self, "rv_world_interior", False)) or self.mount == "rv":
+                btn_w = 54
+                btn_h = 16
+                gap = 4
+                bx = int(INTERNAL_W - 6 - btn_w)
+                by = int(y0)
+                life_selected = bool(getattr(self, "rv_world_interior", False))
+                drive_selected = self.mount == "rv"
+                r_life = pygame.Rect(bx, by, int(btn_w), int(btn_h))
+                r_drive = pygame.Rect(bx, by + int(btn_h + gap), int(btn_w), int(btn_h))
+                draw_button(surface, self.app.font_s, "生活", r_life, selected=bool(life_selected), disabled=bool(life_selected))
+                draw_button(surface, self.app.font_s, "开车", r_drive, selected=bool(drive_selected), disabled=bool(drive_selected))
+                self._rv_mode_btn_rects = {"life": r_life.copy(), "drive": r_drive.copy()}
+                y0 = int(r_drive.bottom + 6)
 
         if self.mount is not None:
             kind = "房车" if self.mount == "rv" else self._two_wheel_name(getattr(self.bike, "model_id", "bike"))
