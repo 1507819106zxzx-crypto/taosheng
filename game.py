@@ -2266,6 +2266,7 @@ class HardcoreSurvivalState(State):
     T_CABINET = 36
     T_SINK = 37
     T_DOOR_BROKEN = 38
+    T_GAS_PUMP = 39
 
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
@@ -2333,6 +2334,7 @@ class HardcoreSurvivalState(State):
         T_CABINET: _TileDef("cabinet", (92, 72, 54), solid=True),
         T_SINK: _TileDef("sink", (184, 188, 196), solid=True),
         T_DOOR_BROKEN: _TileDef("door_broken", (120, 96, 52), solid=False),
+        T_GAS_PUMP: _TileDef("gas_pump", (200, 70, 70), solid=True),
     }
 
     _PLAYER_PAL = {
@@ -6370,6 +6372,25 @@ class HardcoreSurvivalState(State):
             pygame.draw.line(surf, red, (cx - 4, cy), (cx + 4, cy), 1)
             pygame.draw.rect(surf, red, pygame.Rect(cx - 2, cy, 5, 3), 1)
             surf.set_at((cx, cy - 3), gold)
+        elif icon == "fuel":
+            white = (240, 240, 240)
+            # Droplet silhouette.
+            for dx, dy in (
+                (0, -3),
+                (-1, -2),
+                (1, -2),
+                (-2, -1),
+                (2, -1),
+                (-2, 0),
+                (2, 0),
+                (-1, 1),
+                (1, 1),
+                (0, 2),
+            ):
+                x = int(cx + dx)
+                y = int(cy + dy)
+                if 0 <= x < surf.get_width() and 0 <= y < surf.get_height():
+                    surf.set_at((x, y), white)
         else:
             steel = (220, 220, 230)
             pygame.draw.rect(surf, steel, pygame.Rect(cx - 2, cy - 2, 4, 4), 1)
@@ -6503,6 +6524,14 @@ class HardcoreSurvivalState(State):
             solid=False,
             collider=(10, 8),
             sprites=(_make_prop_sprite_sign(bg=(60, 60, 72), accent=(230, 200, 120), icon="cart"),),
+        ),
+        "sign_gas": _PropDef(
+            id="sign_gas",
+            name="加油站标识",
+            category="建筑",
+            solid=False,
+            collider=(12, 8),
+            sprites=(_make_prop_sprite_sign(bg=(46, 46, 56), accent=(240, 200, 120), icon="fuel"),),
         ),
         "sign_shop_big": _PropDef(
             id="sign_shop_big",
@@ -7033,6 +7062,20 @@ class HardcoreSurvivalState(State):
                 tuple[int, int], list[tuple[int, int, int, int, int, int]]
             ] = self._plan_compound_towers(target=8)
 
+            # Gas station (world-map POI): place one on the south highway near the main road,
+            # so the player can drive there to refuel.
+            try:
+                stx, _sty = self.spawn_tile()
+                self.gas_station_cx = int(stx) // int(state.CHUNK_SIZE)
+                self.gas_station_cy = int(getattr(self, "highway_y", 0)) // int(state.CHUNK_SIZE)
+                if self._is_city_chunk(int(self.gas_station_cx), int(self.gas_station_cy)):
+                    self.gas_station_cy = int(self.city_cy) + int(self.city_radius) + 1
+                if self._is_compound_chunk(int(self.gas_station_cx), int(self.gas_station_cy)):
+                    self.gas_station_cy = int(self.compound_cy1) + 2
+            except Exception:
+                self.gas_station_cx = int(self.city_cx)
+                self.gas_station_cy = int(self.city_cy) + int(self.city_radius) + 1
+
         def spawn_tile(self) -> tuple[int, int]:
             tx = self.state.ROAD_HALF - int(self.road_off_x)
             ty = self.state.ROAD_HALF - int(self.road_off_y)
@@ -7354,8 +7397,16 @@ class HardcoreSurvivalState(State):
                             tile = self.state.T_ROAD
                     tiles[ly * self.state.CHUNK_SIZE + lx] = tile
 
+            gas_station_cx = int(getattr(self, "gas_station_cx", 10**9))
+            gas_station_cy = int(getattr(self, "gas_station_cy", 10**9))
+            is_gas_station = bool(int(cx) == int(gas_station_cx) and int(cy) == int(gas_station_cy))
+
             town_kind: str | None = None
-            if is_city:
+            if is_gas_station:
+                rng = random.Random(self.state._hash2_u32(cx, cy, self.seed ^ 0xA511F00D))
+                self._stamp_gas_station_chunk(tiles, items, buildings, props, cx, cy, rng=rng, reserved=door_reserved)
+                town_kind = "加油站"
+            elif is_city:
                 rng = random.Random(self.state._hash2_u32(cx, cy, self.seed ^ 0xC17C1701))
                 self._stamp_city_chunk(
                     tiles,
@@ -7400,7 +7451,7 @@ class HardcoreSurvivalState(State):
                         reserved=door_reserved,
                     )
 
-            if not is_city:
+            if not is_city and not is_gas_station:
                 # Beach / wetlands / highway decoration on non-city chunks.
                 rng2 = random.Random(self.state._hash2_u32(cx, cy, self.seed ^ 0x0D00BDEC))
                 self._stamp_outdoor_decor(tiles, props, cx, cy, rng=rng2)
@@ -7842,7 +7893,7 @@ class HardcoreSurvivalState(State):
                     cx,
                     cy,
                     rng=rng,
-                    count=int(rng.randint(1, 3)),
+                    count=int(rng.randint(0, 2)),
                     models=["bike_lady", "bike_mountain", "bike_auto", "moto"],
                     buildings=buildings,
                 )
@@ -7985,7 +8036,7 @@ class HardcoreSurvivalState(State):
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "学校", reserved=reserved)
                 self._stamp_basketball_court(tiles, rng=rng)
                 self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, school=True, buildings=buildings, reserved=reserved)
-                self._spawn_two_wheelers(tiles, bikes, cx, cy, rng=rng, count=rng.randint(5, 12), models=["bike_lady", "bike_mountain", "bike_auto", "moto", "moto_lux", "moto_long"], buildings=buildings, reserved=reserved)
+                self._spawn_two_wheelers(tiles, bikes, cx, cy, rng=rng, count=rng.randint(2, 6), models=["bike_lady", "bike_mountain", "bike_auto", "moto", "moto_lux", "moto_long"], buildings=buildings, reserved=reserved)
                 buildings_n = max(3, buildings_n - 1)
             elif roll < 0.46:
                 self._stamp_buildings(tiles, items, buildings, special_buildings, props, cx, cy, rng, "医院", reserved=reserved)
@@ -8028,10 +8079,10 @@ class HardcoreSurvivalState(State):
             # Make parking lots common/visible in city blocks (esp. near core).
             # (Parking stamping is safe: it avoids overwriting buildings/roads.)
             if not is_spawn_chunk:
-                lot_chance = float(clamp(0.24 + 0.40 * density, 0.18, 0.72))
+                lot_chance = float(clamp(0.12 + 0.18 * density, 0.10, 0.35))
                 if rng.random() < lot_chance:
                     self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
-                if core and rng.random() < 0.28:
+                if core and rng.random() < 0.10:
                     self._stamp_parking_lot(tiles, cars, bikes, cx, cy, rng=rng, buildings=buildings, reserved=reserved)
 
             # Street lighting: road-side lamp posts so nights aren't pure black.
@@ -8173,6 +8224,87 @@ class HardcoreSurvivalState(State):
                 for x in range(int(x0), int(x0 + w)):
                     tiles[idx(x, y)] = int(self.state.T_COURT)
 
+        def _stamp_gas_station_chunk(
+            self,
+            tiles: list[int],
+            items: list["HardcoreSurvivalState._WorldItem"],
+            buildings: list[tuple[int, int, int, int, int, int]],
+            props: list["HardcoreSurvivalState._WorldProp"],
+            cx: int,
+            cy: int,
+            *,
+            rng: random.Random,
+            reserved: set[tuple[int, int]] | None = None,
+        ) -> None:
+            # Simple roadside gas station: a small shop + a couple of pumps.
+            chunk_size = int(self.state.CHUNK_SIZE)
+
+            def idx(x: int, y: int) -> int:
+                return y * chunk_size + x
+
+            base_tx = int(cx) * chunk_size
+            base_ty = int(cy) * chunk_size
+
+            # Forecourt aligned near the highway band (if present).
+            hy = int(getattr(self, "highway_y", base_ty + chunk_size // 2))
+            y_center = int(clamp(int(hy - base_ty), 8, 24))
+            x0 = 4
+            w = 24
+            h = 14
+            y0 = int(clamp(int(y_center) - 10, 2, chunk_size - h - 2))
+
+            for y in range(int(y0), int(y0 + h)):
+                for x in range(int(x0), int(x0 + w)):
+                    tiles[idx(int(x), int(y))] = int(self.state.T_PAVEMENT)
+
+            # Shop building (1F).
+            shop_x0 = int(x0 + 2)
+            shop_y0 = int(y0 + 2)
+            shop_w = 9
+            shop_h = 7
+            door_x = int(shop_x0 + shop_w // 2)
+            door_y = int(shop_y0 + shop_h - 1)
+            for y in range(int(shop_y0), int(shop_y0 + shop_h)):
+                for x in range(int(shop_x0), int(shop_x0 + shop_w)):
+                    border = bool(
+                        int(x) == int(shop_x0)
+                        or int(x) == int(shop_x0 + shop_w - 1)
+                        or int(y) == int(shop_y0)
+                        or int(y) == int(shop_y0 + shop_h - 1)
+                    )
+                    tiles[idx(int(x), int(y))] = int(self.state.T_WALL if border else self.state.T_FLOOR)
+            tiles[idx(int(door_x), int(door_y))] = int(self.state.T_DOOR)
+            if reserved is not None:
+                for dy in (-1, 0, 1):
+                    for dx in (-1, 0, 1):
+                        reserved.add((int(door_x + dx), int(door_y + dy)))
+
+            roof_var = int(rng.randrange(0, 256))
+            roof_kind = (2 << 8) | int(roof_var)
+            buildings.append((int(base_tx + shop_x0), int(base_ty + shop_y0), int(shop_w), int(shop_h), int(roof_kind), 1))
+
+            # Front sign.
+            props.append(
+                HardcoreSurvivalState._WorldProp(
+                    pos=pygame.Vector2((float(base_tx + door_x) + 0.5) * float(self.state.TILE_SIZE), (float(base_ty + door_y) + 0.5) * float(self.state.TILE_SIZE)),
+                    prop_id="sign_gas",
+                    variant=0,
+                    dir="down",
+                )
+            )
+
+            # Pumps (solid tiles).
+            pump_y = int(y0 + h - 5)
+            for pump_x in (int(x0 + w - 8), int(x0 + w - 5)):
+                if int(x0) <= int(pump_x) < int(x0 + w) and int(y0) <= int(pump_y) < int(y0 + h):
+                    tiles[idx(int(pump_x), int(pump_y))] = int(self.state.T_GAS_PUMP)
+
+            # Small parking stripe to the side.
+            for y in range(int(y0 + 1), int(y0 + h - 1)):
+                x = int(x0 + w - 2)
+                if 0 <= x < chunk_size:
+                    tiles[idx(int(x), int(y))] = int(self.state.T_PARKING)
+
         def _stamp_parking_lot(
             self,
             tiles: list[int],
@@ -8245,7 +8377,7 @@ class HardcoreSurvivalState(State):
             if not spots:
                 return
             rng.shuffle(spots)
-            n_cars = int(clamp(int(rng.randint(3, 9)), 0, len(spots)))
+            n_cars = int(clamp(int(rng.randint(1, 4)), 0, len(spots)))
             for i in range(n_cars):
                 sx, sy = spots[i]
                 tx = base_tx + int(sx)
@@ -8264,7 +8396,7 @@ class HardcoreSurvivalState(State):
                     cx,
                     cy,
                     rng=rng,
-                    count=rng.randint(2, 5),
+                    count=rng.randint(1, 3),
                     models=["bike_lady", "bike_mountain", "bike_auto"],
                     buildings=buildings,
                     reserved=reserved,
@@ -10180,12 +10312,11 @@ class HardcoreSurvivalState(State):
             pos=pygame.Vector2(self.player.pos) + pygame.Vector2(34, 0),  
             vel=pygame.Vector2(0, 0),
             model_id="rv",
-            fuel=15.0,
+            fuel=100.0,
         )
         self._apply_rv_model()
         self.rv_dir = "right"
         self.rv_anim = 0.0
-        self.rv_drive_view = "outside"  # outside | cabin
         self.rv_headlights_on = True
         self.bike = HardcoreSurvivalState._Bike(
             pos=pygame.Vector2(self.player.pos) + pygame.Vector2(-28, 10),
@@ -10713,9 +10844,10 @@ class HardcoreSurvivalState(State):
                 self._toggle_barricade()
                 return
             if not self.inv_open and event.key in (pygame.K_h,):
-                # H: driving RV -> toggle cabin view; otherwise near RV -> enter/exit RV interior; elsewhere -> quick home teleport.
+                # H: driving RV -> toggle headlights; otherwise near RV -> enter/exit RV interior; elsewhere -> quick home teleport.
                 if self.mount == "rv":
-                    self._toggle_rv_drive_view()
+                    self.rv_headlights_on = not bool(getattr(self, "rv_headlights_on", True))
+                    self._set_hint("��Ƶ�" if bool(self.rv_headlights_on) else "�ص�", seconds=0.9)
                 elif bool(getattr(self, "rv_world_interior", False)) or self._can_access_rv():
                     self._rv_world_interior_toggle()
                 else:
@@ -11166,13 +11298,6 @@ class HardcoreSurvivalState(State):
 
         return True
 
-    def _toggle_rv_drive_view(self) -> None:
-        if self.mount != "rv":
-            return
-        cur = str(getattr(self, "rv_drive_view", "outside"))
-        self.rv_drive_view = "cabin" if cur != "cabin" else "outside"
-        self._set_hint(f"RV View: {str(self.rv_drive_view).upper()}", seconds=0.9)
-
     def _rv_world_try_drive_from_seat(self) -> bool:
         if not bool(getattr(self, "rv_world_interior", False)):
             return False
@@ -11209,7 +11334,6 @@ class HardcoreSurvivalState(State):
         self.rv.speed = 0.0
         self.player.pos.update(self.rv.pos)
         self.player.vel.update(0, 0)
-        self.rv_drive_view = "cabin"
         self._set_hint("Drive", seconds=0.9)
         return True
 
@@ -21067,6 +21191,77 @@ class HardcoreSurvivalState(State):
             return True
         return False
 
+    def _try_refuel_at_gas_pump_world(self) -> bool:
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+            or bool(getattr(self, "rv_interior", False))
+        ):
+            return False
+
+        tx, ty = self._player_tile()
+        pump: tuple[int, int] | None = None
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                cx = int(tx + dx)
+                cy = int(ty + dy)
+                if int(self.world.peek_tile(int(cx), int(cy))) == int(self.T_GAS_PUMP):
+                    pump = (int(cx), int(cy))
+                    break
+            if pump is not None:
+                break
+        if pump is None:
+            return False
+
+        px, py = pump
+        pump_pos = pygame.Vector2((float(px) + 0.5) * float(self.TILE_SIZE), (float(py) + 0.5) * float(self.TILE_SIZE))
+
+        # Prefer the currently mounted vehicle; otherwise refuel a nearby personal vehicle.
+        candidates: list[tuple[str, object]] = []
+        if getattr(self, "mount", None) == "rv":
+            candidates.append(("rv", self.rv))
+        elif getattr(self, "mount", None) == "bike":
+            mid = str(getattr(self.bike, "model_id", "bike"))
+            if mid.startswith("moto"):
+                candidates.append(("bike", self.bike))
+        else:
+            candidates.append(("rv", self.rv))
+            mid = str(getattr(self.bike, "model_id", "bike"))
+            if mid.startswith("moto"):
+                candidates.append(("bike", self.bike))
+
+        best: tuple[str, object] | None = None
+        best_d2 = float(70.0 * 70.0)
+        for kind, obj in candidates:
+            pos = pygame.Vector2(getattr(obj, "pos", pygame.Vector2(0, 0)))
+            d2 = float((pos - pump_pos).length_squared())
+            if d2 <= best_d2:
+                best = (str(kind), obj)
+                best_d2 = d2
+
+        if best is None:
+            self._set_hint("把车开到加油机旁边", seconds=1.1)
+            return True
+
+        kind, target = best
+        before = float(getattr(target, "fuel", 0.0))
+        if before >= 99.9:
+            self._set_hint("油已满", seconds=0.9)
+            return True
+
+        try:
+            setattr(target, "fuel", 100.0)
+        except Exception:
+            return False
+
+        if kind == "rv":
+            self._rv_no_fuel_warned = False
+        else:
+            self._bike_no_fuel_warned = False
+        self._set_hint("加油完成", seconds=0.9)
+        return True
+
     def _interact_primary(self) -> None:
         # Primary interact key on the world map: stairs/pickup (doors are walk-into).
         if str(getattr(self, "player_pose", "")) == "sleep" and str(getattr(self, "player_pose_space", "")) == "world":
@@ -21082,6 +21277,8 @@ class HardcoreSurvivalState(State):
             self._set_hint("起身", seconds=0.8)
             return
         if self._try_exit_rv_world_interior():
+            return
+        if self._try_refuel_at_gas_pump_world():
             return
         if self._try_use_highrise_elevator():
             return
@@ -26291,6 +26488,25 @@ class HardcoreSurvivalState(State):
                 surface.fill(outline, pygame.Rect(fx - 1, rect.y + 1, 2, 1))
                 # Water hint
                 surface.fill(water, pygame.Rect(bowl.x + 2, bowl.y + 2, max(1, bowl.w - 4), 1))
+            elif tile_id == self.T_GAS_PUMP:
+                # Simple gas pump (world-map prop tile).
+                pump = pygame.Rect(rect.x + 2, rect.y + 1, rect.w - 4, rect.h - 2)
+                red = (200, 70, 70)
+                red2 = (150, 46, 46)
+                glass = (120, 200, 240)
+                pygame.draw.rect(surface, red2, pump, border_radius=2)
+                pygame.draw.rect(surface, outline, pump, 1, border_radius=2)
+                top = pygame.Rect(pump.x, pump.y, pump.w, 3)
+                surface.fill(red, top)
+                surface.fill(outline, pygame.Rect(top.x, top.bottom - 1, top.w, 1))
+                # Display window.
+                win = pygame.Rect(pump.x + 2, pump.y + 3, pump.w - 4, 3)
+                pygame.draw.rect(surface, (20, 20, 24), win, border_radius=1)
+                pygame.draw.rect(surface, outline, win, 1, border_radius=1)
+                surface.fill(glass, pygame.Rect(win.x + 1, win.y + 1, max(1, win.w - 2), 1))
+                # Hose.
+                surface.fill(outline, pygame.Rect(pump.right - 2, pump.y + 4, 1, pump.h - 6))
+                surface.fill(outline, pygame.Rect(pump.right - 3, pump.bottom - 3, 2, 1))
             else:
                 pass
 
@@ -26317,6 +26533,7 @@ class HardcoreSurvivalState(State):
                             int(self.T_ELEVATOR),
                             int(self.T_STAIRS_UP),
                             int(self.T_STAIRS_DOWN),
+                            int(self.T_GAS_PUMP),
                         ):
                             pygame.draw.rect(surface, (120, 100, 60), rect, 1)
                             pygame.draw.rect(surface, (255, 220, 140), rect.inflate(-2, -2), 1)
@@ -27137,9 +27354,7 @@ class HardcoreSurvivalState(State):
     def _draw_rv(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         # When inside the RV interior (world-tile mode), hide the exterior sprite
         # so the stamped interior space is visible and walkable.
-        if bool(getattr(self, "rv_world_interior", False)) or (
-            self.mount == "rv" and str(getattr(self, "rv_drive_view", "outside")) == "cabin"
-        ):
+        if bool(getattr(self, "rv_world_interior", False)):
             return
         rvp = pygame.Vector2(self.rv.pos) - pygame.Vector2(cam_x, cam_y)        
         moving = self.mount == "rv" and abs(float(self.rv.speed)) > 6.0
@@ -27196,42 +27411,8 @@ class HardcoreSurvivalState(State):
                 self._hover_tooltip = (lines, (mx, my))
 
     def _draw_rv_drive_overlay(self, surface: pygame.Surface) -> None:
-        if self.mount != "rv":
-            return
-        if str(getattr(self, "rv_drive_view", "outside")) != "cabin":
-            return
-
-        overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
-
-        # Cabin frame (subtle; keeps world readable).
-        frame_a = 120
-        overlay.fill((0, 0, 0, frame_a), pygame.Rect(0, 0, INTERNAL_W, 16))
-        overlay.fill((0, 0, 0, frame_a), pygame.Rect(0, 0, 16, INTERNAL_H))
-        overlay.fill((0, 0, 0, frame_a), pygame.Rect(INTERNAL_W - 16, 0, 16, INTERNAL_H))
-
-        dash_h = 62
-        dash = pygame.Rect(0, INTERNAL_H - dash_h, INTERNAL_W, dash_h)
-        overlay.fill((0, 0, 0, 170), dash)
-        overlay.fill((28, 28, 34, 180), pygame.Rect(dash.x, dash.y, dash.w, 2))
-
-        # Steering wheel.
-        cx = int(INTERNAL_W // 2)
-        cy = int(dash.y + dash.h // 2 + 6)
-        r = 18
-        pygame.draw.circle(overlay, (18, 18, 22, 255), (cx, cy), r + 1, 1)
-        pygame.draw.circle(overlay, (40, 40, 46, 255), (cx, cy), r, 2)
-        pygame.draw.circle(overlay, (16, 16, 18, 255), (cx, cy), max(2, r - 6), 2)
-        pygame.draw.line(overlay, (40, 40, 46, 255), (cx - r + 4, cy), (cx + r - 4, cy), 2)
-        pygame.draw.line(overlay, (40, 40, 46, 255), (cx, cy - r + 4), (cx, cy + r - 4), 2)
-
-        # HUD.
-        spd = int(abs(float(getattr(self.rv, "speed", 0.0))))
-        fuel = int(max(0, float(getattr(self.rv, "fuel", 0.0))))
-        draw_text(overlay, self.app.font_s, f"SPD {spd}", (14, dash.y + 10), pygame.Color(230, 230, 235), anchor="topleft")
-        draw_text(overlay, self.app.font_s, f"FUEL {fuel}", (14, dash.y + 26), pygame.Color(200, 200, 210), anchor="topleft")
-        draw_text(overlay, self.app.font_s, "H View  |  F Exit", (INTERNAL_W - 14, dash.y + 10), pygame.Color(170, 170, 185), anchor="topright")
-
-        surface.blit(overlay, (0, 0))
+        # Disabled: RV cabin driving view removed (outside view only).
+        return
 
     def _draw_bike(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         bp = pygame.Vector2(self.bike.pos) - pygame.Vector2(cam_x, cam_y)       
@@ -29619,7 +29800,6 @@ class HardcoreSurvivalState(State):
         self._draw_roofs(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_world_lighting(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_weather_effects(surface, in_rv=False)
-        self._draw_rv_drive_overlay(surface)
         self._draw_home_move_mode_overlay(surface, cam_x, cam_y_draw)
         self._draw_survival_ui(surface)
         if getattr(self, "world_map_open", False):
