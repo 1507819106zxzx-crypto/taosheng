@@ -3907,8 +3907,9 @@ class HardcoreSurvivalState(State):
         "rv": _CarModel(
             id="rv",
             name="房车",
-            sprite_size=(52, 22),
-            collider=(36, 14),
+            # Larger RV so it can contain a small walkable interior space (world camera mode).
+            sprite_size=(100, 50),
+            collider=(100, 50),
             wheelbase=32.0,
             max_fwd=105.0,
             max_rev=38.0,
@@ -10168,7 +10169,7 @@ class HardcoreSurvivalState(State):
         # RV "interior" (world-map camera, NOT full-screen panel).
         self.rv_world_interior = False
         self._rv_world_return_pos: pygame.Vector2 | None = None
-        self._rv_world_int_size = (16, 10)  # w, h (tiles)
+        self._rv_world_int_size = (10, 5)  # w, h (tiles)
         self._rv_world_int_active_key: tuple[int, int, int, int] | None = None
         self._rv_world_int_restore_tiles: dict[tuple[int, int], int] | None = None
         self._rv_world_int_exit_tile: tuple[int, int] | None = None
@@ -10995,66 +10996,34 @@ class HardcoreSurvivalState(State):
         w = int(max(6, min(28, int(w))))
         h = int(max(6, min(20, int(h))))
 
-        rv_tx = int(math.floor(float(self.rv.pos.x) / float(self.TILE_SIZE)))
-        rv_ty = int(math.floor(float(self.rv.pos.y) / float(self.TILE_SIZE)))
+        # Stamp the room inside the RV's own footprint (not a separate far-away area).
+        rv_rect = self.rv.rect()
+        rv_tx0 = int(math.floor(float(rv_rect.left) / float(self.TILE_SIZE)))
+        rv_ty0 = int(math.floor(float(rv_rect.top) / float(self.TILE_SIZE)))
+        rv_tx1 = int(math.floor(float(rv_rect.right - 1) / float(self.TILE_SIZE)))
+        rv_ty1 = int(math.floor(float(rv_rect.bottom - 1) / float(self.TILE_SIZE)))
+        rv_w_tiles = int(rv_tx1 - rv_tx0 + 1)
+        rv_h_tiles = int(rv_ty1 - rv_ty0 + 1)
+        if int(rv_w_tiles) < int(w) or int(rv_h_tiles) < int(h):
+            self._set_hint("房车太小，无法生成内部空间", seconds=1.2)
+            return False
 
-        # Prefer stamping just north of the RV so entering/exiting feels local.
-        target_exit_tx = int(rv_tx)
-        target_exit_ty = int(rv_ty - 1)
-        base_tx0 = int(target_exit_tx - (w // 2))
-        base_ty0 = int(target_exit_ty - (h - 2))
+        tx0 = int(rv_tx0 + max(0, (int(rv_w_tiles) - int(w)) // 2))
+        ty0 = int(rv_ty0 + max(0, (int(rv_h_tiles) - int(h)) // 2))
 
-        def site_ok(tx0: int, ty0: int) -> bool:
-            tx0 = int(tx0)
-            ty0 = int(ty0)
-            for yy in range(int(h)):
-                for xx in range(int(w)):
-                    wx = int(tx0 + xx)
-                    wy = int(ty0 + yy)
-                    if self._peek_building_at_tile(int(wx), int(wy)) is not None:
-                        return False
-                    t = int(self.world.peek_tile(int(wx), int(wy), default=int(self.T_GRASS)))
-                    if int(t) == int(self.T_WATER):
-                        return False
-            return True
+        # Safety: if the RV is parked overlapping buildings/water, don't stamp.
+        for yy in range(int(h)):
+            for xx in range(int(w)):
+                wx = int(tx0 + xx)
+                wy = int(ty0 + yy)
+                if self._peek_building_at_tile(int(wx), int(wy)) is not None:
+                    self._set_hint("房车离建筑太近，换个地方停", seconds=1.2)
+                    return False
+                t = int(self.world.peek_tile(int(wx), int(wy), default=int(self.T_GRASS)))
+                if int(t) == int(self.T_WATER):
+                    self._set_hint("房车停在水上了", seconds=1.2)
+                    return False
 
-        chosen: tuple[int, int] | None = None
-        max_r = 24
-        for r in range(int(max_r) + 1):
-            if r == 0:
-                if site_ok(int(base_tx0), int(base_ty0)):
-                    chosen = (int(base_tx0), int(base_ty0))
-                    break
-                continue
-            # Scan the ring (keeps it fast and "closest first").
-            for dx in range(-r, r + 1):
-                for dy in (-r, r):
-                    tx0 = int(base_tx0 + dx)
-                    ty0 = int(base_ty0 + dy)
-                    if site_ok(int(tx0), int(ty0)):
-                        chosen = (int(tx0), int(ty0))
-                        break
-                if chosen is not None:
-                    break
-            if chosen is not None:
-                break
-            for dy in range(-r + 1, r):
-                for dx in (-r, r):
-                    tx0 = int(base_tx0 + dx)
-                    ty0 = int(base_ty0 + dy)
-                    if site_ok(int(tx0), int(ty0)):
-                        chosen = (int(tx0), int(ty0))
-                        break
-                if chosen is not None:
-                    break
-            if chosen is not None:
-                break
-
-        if chosen is None:
-            # Worst case: stamp at the base site (still restored on exit).
-            chosen = (int(base_tx0), int(base_ty0))
-
-        tx0, ty0 = (int(chosen[0]), int(chosen[1]))
         key = (int(tx0), int(ty0), int(w), int(h))
 
         restore: dict[tuple[int, int], int] = {}
@@ -26805,6 +26774,10 @@ class HardcoreSurvivalState(State):
         self._hover_tooltip = ([first, f"类型: {klabel}", "E 拾取"], (int(mouse[0]), int(mouse[1])))
 
     def _draw_rv(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        # When inside the RV interior (world-tile mode), hide the exterior sprite
+        # so the stamped interior space is visible and walkable.
+        if bool(getattr(self, "rv_world_interior", False)):
+            return
         rvp = pygame.Vector2(self.rv.pos) - pygame.Vector2(cam_x, cam_y)        
         moving = self.mount == "rv" and abs(float(self.rv.speed)) > 6.0
         frame = int(self.rv_anim) % 2 if moving else 0
@@ -29072,120 +29045,36 @@ class HardcoreSurvivalState(State):
                 tx0, ty0, w, h = (int(inside_key[0]), int(inside_key[1]), int(inside_key[2]), int(inside_key[3]))
                 ptx, pty = int(pt[0]), int(pt[1])
                 if int(w) > 0 and int(h) > 0 and int(tx0) <= int(ptx) < int(tx0) + int(w) and int(ty0) <= int(pty) < int(ty0) + int(h):
-                    # Special case for high-rises: if the player is in the public
-                    # corridor/lobby, don't hide locked apartments (you can *see*
-                    # them but not enter). If the player is inside an apartment,
-                    # keep other units hidden.
-                    style = -1
-                    hit = self._peek_building_at_tile(int(ptx), int(pty))
-                    if hit is not None and len(hit) >= 5:
-                        roof_kind = int(hit[4])
-                        style, _var = self._building_roof_style_var(int(roof_kind))
+                    # Reveal only the reachable connected component. This keeps
+                    # other apartments hidden in high-rises unless you can enter them.
+                    passable: set[tuple[int, int]] = set()
+                    stack = [(int(ptx), int(pty))]
+                    seen: set[tuple[int, int]] = set()
+                    while stack and len(passable) < int(w) * int(h):
+                        sx, sy = stack.pop()
+                        sx = int(sx)
+                        sy = int(sy)
+                        if (sx, sy) in seen:
+                            continue
+                        seen.add((sx, sy))
+                        if not (int(tx0) <= int(sx) < int(tx0) + int(w) and int(ty0) <= int(sy) < int(ty0) + int(h)):
+                            continue
+                        tid = int(self.world.peek_tile(int(sx), int(sy)))
+                        if bool(self._tile_solid(int(tid))):
+                            continue
+                        passable.add((sx, sy))
+                        stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
 
-                    handled = False
-                    if int(style) == 6:
-                        door_like = {
-                            int(self.T_DOOR),
-                            int(self.T_DOOR_HOME),
-                            int(self.T_DOOR_LOCKED),
-                            int(self.T_DOOR_HOME_LOCKED),
-                            int(self.T_DOOR_BROKEN),
-                        }
-
-                        elev: tuple[int, int] | None = None
-                        for sy in range(int(ty0), int(ty0) + int(h)):
-                            for sx in range(int(tx0), int(tx0) + int(w)):
-                                if int(self.world.peek_tile(int(sx), int(sy))) == int(self.T_ELEVATOR):
-                                    elev = (int(sx), int(sy))
-                                    break
-                            if elev is not None:
-                                break
-
-                        if elev is not None:
-                            public: set[tuple[int, int]] = set()
-                            stack = [(int(elev[0]), int(elev[1]))]
-                            seen: set[tuple[int, int]] = set()
-                            while stack and len(public) < int(w) * int(h):
-                                sx, sy = stack.pop()
-                                sx = int(sx)
-                                sy = int(sy)
-                                if (sx, sy) in seen:
-                                    continue
-                                seen.add((sx, sy))
-                                if not (int(tx0) <= int(sx) < int(tx0) + int(w) and int(ty0) <= int(sy) < int(ty0) + int(h)):
-                                    continue
-                                tid = int(self.world.peek_tile(int(sx), int(sy)))
-                                if bool(self._tile_solid(int(tid))):
-                                    continue
-                                if int(tid) in door_like:
-                                    continue
-                                public.add((sx, sy))
-                                stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
-
-                            if (int(ptx), int(pty)) in public:
-                                # In public area: show the whole floorplan.
-                                self._inside_building_visible = None
-                            else:
-                                # Inside an apartment: hide public corridor + other units.
-                                passable: set[tuple[int, int]] = set()
-                                stack = [(int(ptx), int(pty))]
-                                seen = set()
-                                while stack and len(passable) < int(w) * int(h):
-                                    sx, sy = stack.pop()
-                                    sx = int(sx)
-                                    sy = int(sy)
-                                    if (sx, sy) in seen:
-                                        continue
-                                    seen.add((sx, sy))
-                                    if not (int(tx0) <= int(sx) < int(tx0) + int(w) and int(ty0) <= int(sy) < int(ty0) + int(h)):
-                                        continue
-                                    if (sx, sy) in public:
-                                        continue
-                                    tid = int(self.world.peek_tile(int(sx), int(sy)))
-                                    if bool(self._tile_solid(int(tid))):
-                                        continue
-                                    passable.add((sx, sy))
-                                    stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
-
-                                visible: set[tuple[int, int]] = set(passable)
-                                for sx, sy in tuple(passable):
-                                    for ox, oy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
-                                        nx, ny = int(sx + ox), int(sy + oy)
-                                        if not (int(tx0) <= int(nx) < int(tx0) + int(w) and int(ty0) <= int(ny) < int(ty0) + int(h)):
-                                            continue
-                                        visible.add((nx, ny))
-                                self._inside_building_visible = visible
-                            handled = True
-
-                    if not handled:
-                        # Default: reveal only the reachable connected component.
-                        passable: set[tuple[int, int]] = set()
-                        stack = [(int(ptx), int(pty))]
-                        seen: set[tuple[int, int]] = set()
-                        while stack and len(passable) < int(w) * int(h):
-                            sx, sy = stack.pop()
-                            sx = int(sx)
-                            sy = int(sy)
-                            if (sx, sy) in seen:
+                    visible: set[tuple[int, int]] = set(passable)
+                    # Include adjacent furniture/doors so rooms look complete.
+                    for sx, sy in tuple(passable):
+                        for ox, oy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+                            nx, ny = int(sx + ox), int(sy + oy)
+                            if not (int(tx0) <= int(nx) < int(tx0) + int(w) and int(ty0) <= int(ny) < int(ty0) + int(h)):
                                 continue
-                            seen.add((sx, sy))
-                            if not (int(tx0) <= int(sx) < int(tx0) + int(w) and int(ty0) <= int(sy) < int(ty0) + int(h)):
-                                continue
-                            tid = int(self.world.peek_tile(int(sx), int(sy)))
-                            if bool(self._tile_solid(int(tid))):
-                                continue
-                            passable.add((sx, sy))
-                            stack.extend([(sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)])
+                            visible.add((nx, ny))
 
-                        visible: set[tuple[int, int]] = set(passable)
-                        for sx, sy in tuple(passable):
-                            for ox, oy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
-                                nx, ny = int(sx + ox), int(sy + oy)
-                                if not (int(tx0) <= int(nx) < int(tx0) + int(w) and int(ty0) <= int(ny) < int(ty0) + int(h)):
-                                    continue
-                                visible.add((nx, ny))
-
-                        self._inside_building_visible = visible
+                    self._inside_building_visible = visible
         except Exception:
             self._inside_building_visible = None
 
@@ -29446,8 +29335,11 @@ class HardcoreSurvivalState(State):
             return
 
         img = spr
-        if spr.get_width() <= 10 and spr.get_height() <= 10 and spr.get_width() * 2 <= 26 and spr.get_height() * 2 <= 26:
-            img = pygame.transform.scale(spr, (spr.get_width() * 2, spr.get_height() * 2))
+        # Flip some tools so the "held" side matches the player's hand.
+        flipped = False
+        if item_id in ("cup", "cup_water") and str(direction) == "left":
+            img = flip_x_pixel_sprite(img)
+            flipped = True
 
         d = str(direction)
         nodes = HardcoreSurvivalState._survivor_skeleton_nodes(
@@ -29462,14 +29354,24 @@ class HardcoreSurvivalState(State):
         if isinstance(hand, tuple) and len(hand) == 2:
             hx = int(player_rect.left + int(hand[0]))
             hy = int(player_rect.top + int(hand[1]))
-            if d == "left":
-                r.midright = (int(hx), int(hy))
-            elif d == "right":
-                r.midleft = (int(hx), int(hy))
-            elif d == "up":
-                r.midbottom = (int(hx), int(hy))
+            hold: tuple[int, int] | None = None
+            if item_id in ("cup", "cup_water"):
+                # Anchor at the handle center so it actually sits in the hand.
+                hold = (9, 7)
+                if flipped:
+                    hold = (int(img.get_width() - 1 - int(hold[0])), int(hold[1]))
+
+            if hold is not None:
+                r.topleft = (int(hx - int(hold[0])), int(hy - int(hold[1])))
             else:
-                r.midtop = (int(hx), int(hy))
+                if d == "left":
+                    r.midright = (int(hx), int(hy))
+                elif d == "right":
+                    r.midleft = (int(hx), int(hy))
+                elif d == "up":
+                    r.midbottom = (int(hx), int(hy))
+                else:
+                    r.midtop = (int(hx), int(hy))
         else:
             # Fallback: old offsets if skeleton nodes are unavailable.
             if d == "left":
