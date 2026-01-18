@@ -3908,9 +3908,9 @@ class HardcoreSurvivalState(State):
             id="rv",
             name="房车",
             # Larger RV so it can contain a small walkable interior space (world camera mode).
-            sprite_size=(160, 80),
-            collider=(160, 80),
-            wheelbase=46.0,
+            sprite_size=(100, 50),
+            collider=(100, 50),
+            wheelbase=32.0,
             max_fwd=105.0,
             max_rev=38.0,
             accel=165.0,
@@ -10137,7 +10137,7 @@ class HardcoreSurvivalState(State):
         self.home_storage.add("food_can", 4, self._ITEMS)
         self.home_storage.add("bandage", 6, self._ITEMS)
         self.home_storage.add("cup", 1, self._ITEMS)
-        self.home_storage.add("key_rv", 1, self._ITEMS)
+        self.inventory.add("key_rv", 1, self._ITEMS)
         self.home_storage.add("key_moto", 1, self._ITEMS)
         self.inventory.add("key_house", 1, self._ITEMS)
         self.fridge_storage.add("water", 2, self._ITEMS)
@@ -10203,7 +10203,7 @@ class HardcoreSurvivalState(State):
         # RV "interior" (world-map camera, NOT full-screen panel).
         self.rv_world_interior = False
         self._rv_world_return_pos: pygame.Vector2 | None = None
-        self._rv_world_int_size = (16, 8)  # w, h (tiles)
+        self._rv_world_int_size = (10, 5)  # w, h (tiles)
         self._rv_world_int_active_key: tuple[int, int, int, int] | None = None
         self._rv_world_int_restore_tiles: dict[tuple[int, int], int] | None = None
         self._rv_world_int_exit_tile: tuple[int, int] | None = None
@@ -11081,15 +11081,13 @@ class HardcoreSurvivalState(State):
         self._rv_world_int_restore_tiles = restore
         self._rv_world_int_active_key = key
 
-        # Stamp: walls + floor.
+        # Stamp: floor everywhere. The RV room is "enclosed" via thin collision bounds
+        # (so the 1-tile wall border doesn't eat 2/3 of the usable space on small RVs).
         for yy in range(int(h)):
             for xx in range(int(w)):
                 wx = int(tx0 + xx)
                 wy = int(ty0 + yy)
-                if xx == 0 or yy == 0 or xx == int(w) - 1 or yy == int(h) - 1:
-                    self._world_set_tile(int(wx), int(wy), int(self.T_WALL))
-                else:
-                    self._world_set_tile(int(wx), int(wy), int(self.T_FLOOR))
+                self._world_set_tile(int(wx), int(wy), int(self.T_FLOOR))
 
         # Exit marker tile (press E/H to leave).
         exit_tx = int(tx0 + (w // 2))
@@ -18329,6 +18327,30 @@ class HardcoreSurvivalState(State):
                         hits.append(brect)
             except Exception:
                 pass
+
+        # RV world-interior: add thin boundary colliders so the stamped floor area stays enclosed,
+        # without spending a full 1-tile wall border (which makes small RVs feel tiny).
+        if bool(getattr(self, "rv_world_interior", False)):
+            key = getattr(self, "_rv_world_int_active_key", None)
+            if isinstance(key, tuple) and len(key) == 4:
+                try:
+                    rx0, ry0, rw, rh = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+                    pw = int(rw * int(self.TILE_SIZE))
+                    ph = int(rh * int(self.TILE_SIZE))
+                    if pw > 0 and ph > 0:
+                        px0 = int(rx0 * int(self.TILE_SIZE))
+                        py0 = int(ry0 * int(self.TILE_SIZE))
+                        walls = [
+                            pygame.Rect(int(px0), int(py0), int(pw), 1),
+                            pygame.Rect(int(px0), int(py0 + ph - 1), int(pw), 1),
+                            pygame.Rect(int(px0), int(py0), 1, int(ph)),
+                            pygame.Rect(int(px0 + pw - 1), int(py0), 1, int(ph)),
+                        ]
+                        for wrect in walls:
+                            if rect.colliderect(wrect):
+                                hits.append(wrect)
+                except Exception:
+                    pass
         return hits
 
     def _collide_rect_world_vehicle(self, rect: pygame.Rect) -> list[pygame.Rect]:
@@ -25620,10 +25642,10 @@ class HardcoreSurvivalState(State):
         except Exception:
             pass
 
-        # RV world-interior: draw border wall tiles as thin lines so the RV
-        # doesn't look like it has "thick black blocks" as walls.
+        # RV world-interior: draw the room border as thin lines so the RV doesn't
+        # waste a full wall tile thickness on each edge.
         try:
-            if bool(getattr(self, "rv_world_interior", False)) and int(tile_id) == int(self.T_WALL):
+            if bool(getattr(self, "rv_world_interior", False)):
                 key = getattr(self, "_rv_world_int_active_key", None)
                 if isinstance(key, tuple) and len(key) == 4:
                     rx0, ry0, rw, rh = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
