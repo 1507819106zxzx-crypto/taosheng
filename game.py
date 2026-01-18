@@ -3910,9 +3910,9 @@ class HardcoreSurvivalState(State):
             id="rv",
             name="房车",
             # Larger RV so it can contain a small walkable interior space (world camera mode).
-            sprite_size=(100, 50),
-            collider=(100, 50),
-            wheelbase=32.0,
+            sprite_size=(90, 40),
+            collider=(90, 40),
+            wheelbase=30.0,
             max_fwd=105.0,
             max_rev=38.0,
             accel=165.0,
@@ -10334,7 +10334,7 @@ class HardcoreSurvivalState(State):
         # RV "interior" (world-map camera, NOT full-screen panel).
         self.rv_world_interior = False
         self._rv_world_return_pos: pygame.Vector2 | None = None
-        self._rv_world_int_size = (10, 5)  # w, h (tiles)
+        self._rv_world_int_size = (9, 4)  # w, h (tiles)
         self._rv_world_int_active_key: tuple[int, int, int, int] | None = None
         self._rv_world_int_restore_tiles: dict[tuple[int, int], int] | None = None
         self._rv_world_int_exit_tile: tuple[int, int] | None = None
@@ -11170,8 +11170,8 @@ class HardcoreSurvivalState(State):
         except Exception:
             w, h = 16, 10
         w = int(max(6, min(28, int(w))))
-        # Allow 5-tile height so the default RV collider (50px @ TILE_SIZE=10) can fit.
-        h = int(max(5, min(20, int(h))))
+        # Allow smaller RVs to still have a walkable interior.
+        h = int(max(3, min(20, int(h))))
 
         # Stamp the room inside the RV's own footprint (not a separate far-away area).
         rv_rect = self.rv.rect()
@@ -18337,6 +18337,18 @@ class HardcoreSurvivalState(State):
         top = int(math.floor(rect.top / self.TILE_SIZE))
         bottom = int(math.floor((rect.bottom - 1) / self.TILE_SIZE))
 
+        # RV world-interior: ignore outside props/parked vehicles that fall inside the stamped RV room,
+        # otherwise things like a sidewalk streetlamp can appear/collide "inside" the RV.
+        rv_hide: tuple[int, int, int, int] | None = None
+        if bool(getattr(self, "rv_world_interior", False)):
+            key = getattr(self, "_rv_world_int_active_key", None)
+            if isinstance(key, tuple) and len(key) == 4:
+                try:
+                    rv_hide = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+                except Exception:
+                    rv_hide = None
+        ts = int(self.TILE_SIZE)
+
         hits: list[pygame.Rect] = []
         for ty in range(top, bottom + 1):
             for tx in range(left, right + 1):
@@ -18367,6 +18379,17 @@ class HardcoreSurvivalState(State):
             for cx in range(int(start_cx), int(end_cx) + 1):
                 chunk = self.world.get_chunk(int(cx), int(cy))
                 for pr in getattr(chunk, "props", []):
+                    if rv_hide is not None and ts > 0:
+                        try:
+                            px = float(getattr(getattr(pr, "pos", pygame.Vector2(0, 0)), "x", 0.0))
+                            py = float(getattr(getattr(pr, "pos", pygame.Vector2(0, 0)), "y", 0.0))
+                            tx = int(math.floor(px / float(ts)))
+                            ty = int(math.floor(py / float(ts)))
+                            rx0, ry0, rw, rh = rv_hide
+                            if int(rx0) <= int(tx) < int(rx0) + int(rw) and int(ry0) <= int(ty) < int(ry0) + int(rh):
+                                continue
+                        except Exception:
+                            pass
                     pdef = self._PROP_DEFS.get(str(getattr(pr, "prop_id", "")))
                     if pdef is None or not bool(getattr(pdef, "solid", False)):
                         continue
@@ -18384,6 +18407,16 @@ class HardcoreSurvivalState(State):
 
                 # Parked vehicles (cars + bikes) are solid in the world.
                 for car in getattr(chunk, "cars", []):
+                    if rv_hide is not None and ts > 0:
+                        try:
+                            cpos = pygame.Vector2(getattr(car, "pos", pygame.Vector2(0, 0)))
+                            tx = int(math.floor(float(cpos.x) / float(ts)))
+                            ty = int(math.floor(float(cpos.y) / float(ts)))
+                            rx0, ry0, rw, rh = rv_hide
+                            if int(rx0) <= int(tx) < int(rx0) + int(rw) and int(ry0) <= int(ty) < int(ry0) + int(rh):
+                                continue
+                        except Exception:
+                            pass
                     mid = str(getattr(car, "model_id", "rv"))
                     model = self._CAR_MODELS.get(mid) or self._CAR_MODELS.get("rv")
                     if model is None:
@@ -18402,6 +18435,16 @@ class HardcoreSurvivalState(State):
                         hits.append(crect)
 
                 for b in getattr(chunk, "bikes", []):
+                    if rv_hide is not None and ts > 0:
+                        try:
+                            bpos = pygame.Vector2(getattr(b, "pos", pygame.Vector2(0, 0)))
+                            tx = int(math.floor(float(bpos.x) / float(ts)))
+                            ty = int(math.floor(float(bpos.y) / float(ts)))
+                            rx0, ry0, rw, rh = rv_hide
+                            if int(rx0) <= int(tx) < int(rx0) + int(rw) and int(ry0) <= int(ty) < int(ry0) + int(rh):
+                                continue
+                        except Exception:
+                            pass
                     mid = str(getattr(b, "model_id", "bike"))
                     bw, bh = self._two_wheel_collider_px(mid)
                     d = str(getattr(b, "dir", "right"))
@@ -19451,13 +19494,41 @@ class HardcoreSurvivalState(State):
             self.rv.speed = speed
 
             wheelbase = float(max(8.0, getattr(model, "wheelbase", 20.0)))
+            heading0 = float(getattr(self.rv, "heading", 0.0))
+            forward0 = pygame.Vector2(math.cos(heading0), math.sin(heading0))
+            if forward0.length_squared() <= 0.001:
+                forward0 = pygame.Vector2(1, 0)
+            else:
+                forward0 = forward0.normalize()
+
             turn = 0.0
             if abs(speed) > 0.5:
                 turn = (speed / wheelbase) * math.tan(float(self.rv.steer))
-            self.rv.heading = float((float(self.rv.heading) + turn * dt) % math.tau)
+            heading1 = float((heading0 + turn * dt) % math.tau)
+            self.rv.heading = float(heading1)
 
-            forward = pygame.Vector2(math.cos(float(self.rv.heading)), math.sin(float(self.rv.heading)))
-            self.rv.vel = forward * speed
+            forward1 = pygame.Vector2(math.cos(float(heading1)), math.sin(float(heading1)))
+            if forward1.length_squared() <= 0.001:
+                forward1 = pygame.Vector2(1, 0)
+            else:
+                forward1 = forward1.normalize()
+
+            # Move the vehicle as if steering is applied at the front axle (rear-axle anchored),
+            # so it doesn't feel like turning around its center.
+            length_px = float(max(int(getattr(self.rv, "w", 0)), int(getattr(self.rv, "h", 0))))
+            half_len = float(length_px * 0.5) if length_px > 0.0 else float(wheelbase * 0.5)
+            rear_ref = float(max(6.0, float(wheelbase * 0.5)))
+            if half_len > 0.0:
+                rear_ref = float(max(rear_ref, half_len - 6.0))
+                rear_ref = float(min(rear_ref, max(6.0, half_len - 2.0)))
+
+            rear0 = pygame.Vector2(self.rv.pos) - forward0 * float(rear_ref)
+            rear1 = rear0 + forward1 * speed * dt
+            center1 = rear1 + forward1 * float(rear_ref)
+            if dt > 0.0:
+                self.rv.vel = (center1 - pygame.Vector2(self.rv.pos)) / float(dt)
+            else:
+                self.rv.vel = pygame.Vector2(0, 0)
 
             if abs(speed) > 4.0:
                 self.rv_anim += dt * (2.0 + abs(speed) * 0.06)
@@ -19466,7 +19537,10 @@ class HardcoreSurvivalState(State):
 
             before = pygame.Vector2(self.rv.pos)
             self.rv.pos = self._move_box_vehicle(self.rv.pos, self.rv.vel, dt, w=self.rv.w, h=self.rv.h)
-            dist = float((self.rv.pos - before).length())
+            moved = pygame.Vector2(self.rv.pos) - before
+            if dt > 0.0:
+                self.rv.vel = moved / float(dt)
+            dist = float(moved.length())
             if dist > 0.001:
                 self.rv.fuel = max(0.0, float(self.rv.fuel) - dist * float(getattr(model, "fuel_per_px", 0.0125)))
             self.player.pos.update(self.rv.pos)
@@ -24844,6 +24918,15 @@ class HardcoreSurvivalState(State):
                 lamps.append((int(tx), int(ty), bool(restrict_home)))
 
         # Streetlamps are props, not tiles (so sidewalks remain sidewalks).
+        rv_hide: tuple[int, int, int, int] | None = None
+        if bool(getattr(self, "rv_world_interior", False)):
+            key = getattr(self, "_rv_world_int_active_key", None)
+            if isinstance(key, tuple) and len(key) == 4:
+                try:
+                    rv_hide = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+                except Exception:
+                    rv_hide = None
+
         start_cx = int(start_tx) // int(self.CHUNK_SIZE)
         end_cx = int(end_tx) // int(self.CHUNK_SIZE)
         start_cy = int(start_ty) // int(self.CHUNK_SIZE)
@@ -24860,6 +24943,10 @@ class HardcoreSurvivalState(State):
                     py = float(getattr(getattr(pr, "pos", pygame.Vector2(0, 0)), "y", 0.0))
                     tx = int(math.floor(px / float(ts)))
                     ty = int(math.floor(py / float(ts)))
+                    if rv_hide is not None:
+                        rx0, ry0, rw, rh = rv_hide
+                        if int(rx0) <= int(tx) < int(rx0) + int(rw) and int(ry0) <= int(ty) < int(ry0) + int(rh):
+                            continue
                     if tx < int(start_tx) or tx > int(end_tx) or ty < int(start_ty) or ty > int(end_ty):
                         continue
                     key = (int(tx), int(ty))
@@ -25123,6 +25210,15 @@ class HardcoreSurvivalState(State):
                 lamps.append((int(tx), int(ty), bool(restrict_home)))
 
         # Streetlamps are props, not tiles (so sidewalks remain sidewalks).
+        rv_hide: tuple[int, int, int, int] | None = None
+        if bool(getattr(self, "rv_world_interior", False)):
+            key = getattr(self, "_rv_world_int_active_key", None)
+            if isinstance(key, tuple) and len(key) == 4:
+                try:
+                    rv_hide = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+                except Exception:
+                    rv_hide = None
+
         start_cx = int(start_tx) // int(self.CHUNK_SIZE)
         end_cx = int(end_tx) // int(self.CHUNK_SIZE)
         start_cy = int(start_ty) // int(self.CHUNK_SIZE)
@@ -25139,6 +25235,10 @@ class HardcoreSurvivalState(State):
                     py = float(getattr(getattr(pr, "pos", pygame.Vector2(0, 0)), "y", 0.0))
                     tx = int(math.floor(px / float(ts)))
                     ty = int(math.floor(py / float(ts)))
+                    if rv_hide is not None:
+                        rx0, ry0, rw, rh = rv_hide
+                        if int(rx0) <= int(tx) < int(rx0) + int(rw) and int(ry0) <= int(ty) < int(ry0) + int(rh):
+                            continue
                     if tx < int(start_tx) or tx > int(end_tx) or ty < int(start_ty) or ty > int(end_ty):
                         continue
                     key = (int(tx), int(ty))
@@ -27181,6 +27281,18 @@ class HardcoreSurvivalState(State):
         ):
             mouse = self.app.screen_to_internal(pygame.mouse.get_pos())
 
+        # RV world-interior: hide outside props that fall inside the stamped interior area
+        # (e.g., streetlamps on the sidewalk shouldn't appear inside the RV).
+        rv_hide: tuple[int, int, int, int] | None = None
+        if bool(getattr(self, "rv_world_interior", False)):
+            key = getattr(self, "_rv_world_int_active_key", None)
+            if isinstance(key, tuple) and len(key) == 4:
+                try:
+                    rv_hide = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+                except Exception:
+                    rv_hide = None
+
+        ts = int(self.TILE_SIZE)
         start_cx = start_tx // self.CHUNK_SIZE
         end_cx = end_tx // self.CHUNK_SIZE
         start_cy = start_ty // self.CHUNK_SIZE
@@ -27192,6 +27304,17 @@ class HardcoreSurvivalState(State):
                 if chunk is None:
                     continue
                 for pr in getattr(chunk, "props", []):
+                    if rv_hide is not None and ts > 0:
+                        try:
+                            px = float(getattr(getattr(pr, "pos", pygame.Vector2(0, 0)), "x", 0.0))
+                            py = float(getattr(getattr(pr, "pos", pygame.Vector2(0, 0)), "y", 0.0))
+                            tx = int(math.floor(px / float(ts)))
+                            ty = int(math.floor(py / float(ts)))
+                            rx0, ry0, rw, rh = rv_hide
+                            if int(rx0) <= int(tx) < int(rx0) + int(rw) and int(ry0) <= int(ty) < int(ry0) + int(rh):
+                                continue
+                        except Exception:
+                            pass
                     sx = int(round(pr.pos.x - cam_x))
                     sy = int(round(pr.pos.y - cam_y))
                     if sx < -64 or sx > INTERNAL_W + 64 or sy < -64 or sy > INTERNAL_H + 64:
