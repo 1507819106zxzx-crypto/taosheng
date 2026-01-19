@@ -2267,6 +2267,7 @@ class HardcoreSurvivalState(State):
     T_SINK = 37
     T_DOOR_BROKEN = 38
     T_GAS_PUMP = 39
+    T_STEER = 40
 
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
@@ -2335,6 +2336,7 @@ class HardcoreSurvivalState(State):
         T_SINK: _TileDef("sink", (184, 188, 196), solid=True),
         T_DOOR_BROKEN: _TileDef("door_broken", (120, 96, 52), solid=False),
         T_GAS_PUMP: _TileDef("gas_pump", (200, 70, 70), solid=True),
+        T_STEER: _TileDef("steer", (90, 90, 96), solid=True),
     }
 
     _PLAYER_PAL = {
@@ -3904,6 +3906,10 @@ class HardcoreSurvivalState(State):
         brake: float
         fuel_per_px: float
         steer_max: float = 0.62
+        # Optional tighter collision box while driving (px).
+        # Use this when the visual/footprint collider is intentionally large (e.g. RV interior stamping),
+        # but driving would feel "stuck" in dense city streets/building facades.
+        drive_collider: tuple[int, int] | None = None
 
     _CAR_MODELS: dict[str, _CarModel] = {
         "rv": _CarModel(
@@ -3912,6 +3918,11 @@ class HardcoreSurvivalState(State):
             # Larger RV so it can contain a small walkable interior space (world camera mode).
             sprite_size=(90, 40),
             collider=(90, 40),
+            # City roads are 5 tiles wide (+1 tile sidewalk each side). A 9-tile-wide RV footprint
+            # tends to constantly collide with adjacent building facades, making it feel immobile.
+            # Keep the big footprint for RV interior stamping, but drive with a tighter box.
+            # NOTE: Must be <= 5 tiles wide (<= 50px) to reliably move on the main road grid.
+            drive_collider=(46, 24),
             wheelbase=30.0,
             max_fwd=105.0,
             max_rev=38.0,
@@ -4722,11 +4733,25 @@ class HardcoreSurvivalState(State):
 
     _RV_INT_LAYOUT: list[str] = [
         "WWVWWWVWWWVWWWVWWWVWW",
-        "WBBBBBBB..KKKKK..CC.W",
-        "WBBBBBBB..KKKKKS.CC.W",
-        "W..SS......TT..CC...D",
-        "W....HH....TT....CC.W",
-        "W..SS............SS.W",
+        # Cabin (right) is separated from living (left) by a partition wall.
+        # Use a small opening (row 3) as a "sliding door" passage.
+        "WBBBBBBB..KKKKW..CCRW",
+        "WBBBBBBB..KKKSW..CC.W",
+        "W..SS......TT.......D",
+        "W....HH....TT.W.....W",
+        "W..SS.........W.....W",
+        "WWWWVWWWVWWWVWWWVWWWW",
+    ]
+    # Generic car interior (non-RV): cockpit + trunk, separated by a partition.
+    # Same dimensions as RV so we can reuse the interior scene/UI code.
+    _CAR_INT_LAYOUT: list[str] = [
+        "WWVWWWVWWWVWWWVWWWVWW",
+        "W....SS.....W..CCTR.W",
+        "W....SS.....W..CC...W",
+        # Partition opening (middle) so you can step between cabin/trunk.
+        "W...................D",
+        "W...........W.......W",
+        "W...........W.......W",
         "WWWWVWWWVWWWVWWWVWWWW",
     ]
     _RV_INT_W = 21
@@ -4746,6 +4771,7 @@ class HardcoreSurvivalState(State):
         "T": T_TABLE,
         "B": T_BED,
         "C": T_TABLE,  # cab seats (placeholder)
+        "R": T_STEER,  # steering wheel (cockpit)
     }
 
     # High-rise apartment (multi-floor) interior.
@@ -6285,6 +6311,7 @@ class HardcoreSurvivalState(State):
         heading: float = 0.0
         steer_state: int = 0
         frame: int = 0
+        fuel: float = 0.0
 
     @dataclass
     class _ParkedBike:
@@ -6647,6 +6674,20 @@ class HardcoreSurvivalState(State):
             sprites=(_make_prop_sprite_swing(variant=0), _make_prop_sprite_swing(variant=1)),
         ),
     }
+    # Streetlamps must be solid so vehicles can't drive through them.
+    try:
+        _sl = _PROP_DEFS.get("streetlamp")
+        if _sl is not None and not bool(getattr(_sl, "solid", False)):
+            _PROP_DEFS["streetlamp"] = _PropDef(
+                id=str(getattr(_sl, "id", "streetlamp")),
+                name=str(getattr(_sl, "name", "streetlamp")),
+                category=str(getattr(_sl, "category", "streetlamp")),
+                solid=True,
+                collider=tuple(getattr(_sl, "collider", (10, 10))),
+                sprites=tuple(getattr(_sl, "sprites", ())),
+            )
+    except Exception:
+        pass
 
     @dataclass
     class _Inventory:
@@ -6820,6 +6861,10 @@ class HardcoreSurvivalState(State):
     _PUNCH_DAMAGE = 7
     _PUNCH_STAGGER_S = 0.18
     _PUNCH_STAGGER_SPEED = 95.0
+    # Zombie corpse/decay (keep bodies for a while instead of despawning instantly).
+    _ZOMBIE_CORPSE_TOTAL_S = 14.0
+    _ZOMBIE_FALL_S = 0.22
+    _ZOMBIE_VEHICLE_HIT_CD_S = 0.18
 
     _BODY_PART_NAMES: dict[str, str] = {
         "head": "头部",
@@ -6847,6 +6892,12 @@ class HardcoreSurvivalState(State):
         wander_left: float = 0.0
         stagger_left: float = 0.0
         stagger_vel: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
+        # Death/decay (corpse stays for a while; used for vehicle kills too).
+        corpse_total: float = 0.0
+        corpse_left: float = 0.0
+        death_t: float = 0.0
+        # Cooldown so vehicles don't multi-hit the same zombie every tick while overlapping.
+        vehicle_hit_left: float = 0.0
 
         def rect(self) -> pygame.Rect:
             return pygame.Rect(
@@ -8386,7 +8437,15 @@ class HardcoreSurvivalState(State):
                 py = (float(ty) + 0.5) * float(self.state.TILE_SIZE)
                 model_id = str(rng.choice(car_pool))
                 heading = 0.0 if (i % 2 == 0) else (math.pi / 2)
-                cars.append(HardcoreSurvivalState._ParkedCar(pos=pygame.Vector2(px, py), model_id=model_id, heading=float(heading)))
+                fuel = float(rng.uniform(18.0, 96.0)) if rng.random() < 0.85 else float(rng.uniform(0.0, 28.0))
+                cars.append(
+                    HardcoreSurvivalState._ParkedCar(
+                        pos=pygame.Vector2(px, py),
+                        model_id=model_id,
+                        heading=float(heading),
+                        fuel=float(fuel),
+                    )
+                )
 
             if school:
                 # A few bikes near the parking lot.
@@ -10324,6 +10383,7 @@ class HardcoreSurvivalState(State):
             model_id="bike_mountain",
         )
         self._apply_bike_model()
+        self._place_spawn_vehicles_safely()
         self.bike_dir = "right"
         self.bike_anim = 0.0
         self.aim_dir = pygame.Vector2(1, 0)
@@ -10338,6 +10398,9 @@ class HardcoreSurvivalState(State):
         self._rv_world_int_active_key: tuple[int, int, int, int] | None = None
         self._rv_world_int_restore_tiles: dict[tuple[int, int], int] | None = None
         self._rv_world_int_exit_tile: tuple[int, int] | None = None
+        self._rv_world_floor_base: dict[tuple[int, int], int] | None = None
+        self._rv_world_fixed_furniture: set[tuple[int, int]] = set()
+        self._rv_world_dash_tile: tuple[int, int] | None = None
         self.rv_int_pos = pygame.Vector2(0, 0)
         self.rv_int_vel = pygame.Vector2(0, 0)
         self.rv_int_facing = pygame.Vector2(0, 1)
@@ -10850,8 +10913,8 @@ class HardcoreSurvivalState(State):
                 # H: driving RV -> toggle headlights; otherwise near RV -> enter/exit RV interior; elsewhere -> quick home teleport.
                 if self.mount == "rv":
                     self.rv_headlights_on = not bool(getattr(self, "rv_headlights_on", True))
-                    self._set_hint("��Ƶ�" if bool(self.rv_headlights_on) else "�ص�", seconds=0.9)
-                elif bool(getattr(self, "rv_world_interior", False)) or self._can_access_rv():
+                    self._set_hint("车灯：开" if bool(self.rv_headlights_on) else "车灯：关", seconds=0.9)
+                elif (bool(getattr(self, "rv_world_interior", False)) or self._can_access_rv()) and str(getattr(self.rv, "model_id", "rv")) == "rv":
                     self._rv_world_interior_toggle()
                 else:
                     self._teleport_to_bathroom()
@@ -10861,8 +10924,8 @@ class HardcoreSurvivalState(State):
                 return
             if not self.inv_open and event.key in (pygame.K_f,):
                 if bool(getattr(self, "rv_world_interior", False)):
-                    # In RV world-interior: F only tries to start driving.
-                    self._rv_world_try_drive_from_seat()
+                    # In RV world-interior: start driving immediately (no need to find the seat).
+                    self._rv_world_try_drive_from_anywhere()
                     return
                 self._toggle_vehicle()
                 return
@@ -11004,6 +11067,296 @@ class HardcoreSurvivalState(State):
         w, h = self._two_wheel_collider_px(mid)
         self.bike.w = int(w)
         self.bike.h = int(h)
+
+    def _place_spawn_vehicles_safely(self) -> None:
+        # Ensure the spawned RV/bike don't start overlapped with buildings/walls,
+        # which would make vehicles appear "unable to move".
+        if not hasattr(self, "world") or self.world is None:
+            return
+        if not hasattr(self, "player") or self.player is None:
+            return
+        rv_obj = getattr(self, "rv", None)
+        bike_obj = getattr(self, "bike", None)
+        if rv_obj is None and bike_obj is None:
+            return
+
+        try:
+            base_tx = int(math.floor(float(self.player.pos.x) / float(self.TILE_SIZE)))
+            base_ty = int(math.floor(float(self.player.pos.y) / float(self.TILE_SIZE)))
+        except Exception:
+            return
+
+        player_rect = self.player.rect_at(self.player.pos)
+        ts = int(self.TILE_SIZE)
+        if ts <= 0:
+            return
+
+        prefer_score = {
+            int(self.T_ROAD): 0,
+            int(self.T_HIGHWAY): 0,
+            int(self.T_PARKING): 1,
+            int(self.T_PAVEMENT): 1,
+            int(self.T_CONCRETE): 1,
+            int(self.T_SIDEWALK): 1,
+            int(self.T_BRICK): 1,
+        }
+
+        def find_free_center_for_mount(mount: str, *, w: int, h: int, min_r: int, max_r: int) -> pygame.Vector2 | None:
+            w = int(w)
+            h = int(h)
+            if w <= 0 or h <= 0:
+                return None
+            min_r = int(max(0, int(min_r)))
+            max_r = int(max(int(min_r), int(max_r)))
+
+            saved_mount = getattr(self, "mount", None)
+            self.mount = str(mount)
+            try:
+                best: pygame.Vector2 | None = None
+                best_key: tuple[int, int, int] | None = None
+                for r in range(int(min_r), int(max_r) + 1):
+                    for dy in range(-int(r), int(r) + 1):
+                        for dx in range(-int(r), int(r) + 1):
+                            if max(abs(int(dx)), abs(int(dy))) != int(r):
+                                continue
+                            tx = int(base_tx + int(dx))
+                            ty = int(base_ty + int(dy))
+                            try:
+                                tid = int(self.world.get_tile(int(tx), int(ty)))
+                            except Exception:
+                                tid = int(self.T_GRASS)
+                            score = int(prefer_score.get(int(tid), 3))
+
+                            cx = (float(tx) + 0.5) * float(ts)
+                            cy = (float(ty) + 0.5) * float(ts)
+                            rect = pygame.Rect(
+                                iround(float(cx) - float(w) / 2.0),
+                                iround(float(cy) - float(h) / 2.0),
+                                int(w),
+                                int(h),
+                            )
+                            if rect.colliderect(player_rect.inflate(8, 8)):
+                                continue
+                            if self._collide_rect_world_vehicle(rect):
+                                continue
+
+                            key = (int(score), int(r), int(abs(int(dx)) + abs(int(dy))))
+                            if best_key is None or key < best_key:
+                                best_key = key
+                                best = pygame.Vector2(float(cx), float(cy))
+
+                    # Early exit if we found a very good candidate.
+                    if best is not None and best_key is not None and int(best_key[0]) == 0 and int(r) <= int(min_r) + 2:
+                        break
+                return best
+            finally:
+                self.mount = saved_mount
+
+        # Place RV first (bike is treated as solid during the search).
+        if rv_obj is not None:
+            try:
+                rv_w0 = int(getattr(rv_obj, "w", 0))
+                rv_h0 = int(getattr(rv_obj, "h", 0))
+                rv_sizes: list[tuple[int, int]] = []
+                if rv_w0 > 0 and rv_h0 > 0:
+                    rv_sizes.append((int(rv_w0), int(rv_h0)))
+                # Fallback: if the visual footprint is too large to fit common roads,
+                # search using the driving collider (tighter).
+                try:
+                    mid = str(getattr(rv_obj, "model_id", "rv"))
+                    model = self._CAR_MODELS.get(mid) or self._CAR_MODELS.get("rv")
+                    dc = getattr(model, "drive_collider", None) if model is not None else None
+                    if isinstance(dc, tuple) and len(dc) == 2:
+                        dcw, dch = int(dc[0]), int(dc[1])
+                        if dcw > 0 and dch > 0:
+                            rv_sizes.append((int(dcw), int(dch)))
+                except Exception:
+                    pass
+                # De-dup while preserving order.
+                seen_sz: set[tuple[int, int]] = set()
+                rv_sizes2: list[tuple[int, int]] = []
+                for s in rv_sizes:
+                    key = (int(s[0]), int(s[1]))
+                    if key in seen_sz:
+                        continue
+                    seen_sz.add(key)
+                    rv_sizes2.append(key)
+
+                for w, h in rv_sizes2:
+                    rv_pos = find_free_center_for_mount("rv", w=int(w), h=int(h), min_r=3, max_r=40)
+                    if rv_pos is not None:
+                        rv_obj.pos.update(rv_pos)
+                        break
+            except Exception:
+                pass
+
+        # Then place the bike (RV treated as solid).
+        if bike_obj is not None:
+            try:
+                bike_w = int(getattr(bike_obj, "w", 0))
+                bike_h = int(getattr(bike_obj, "h", 0))
+                bike_pos = find_free_center_for_mount("bike", w=bike_w, h=bike_h, min_r=2, max_r=24)
+                if bike_pos is not None:
+                    bike_obj.pos.update(bike_pos)
+            except Exception:
+                pass
+
+    def _rv_try_unstuck_nearby(self) -> bool:
+        """Try to relocate the RV to a nearby free road-ish tile.
+
+        This is a safety net for situations where the RV can become effectively immobile
+        due to dense city facades/props or unlucky placement near solid geometry.
+        """
+        if not hasattr(self, "world") or self.world is None:
+            return False
+        if not hasattr(self, "rv") or self.rv is None:
+            return False
+        try:
+            ts = int(self.TILE_SIZE)
+            if ts <= 0:
+                return False
+            base_tx = int(math.floor(float(self.rv.pos.x) / float(ts)))
+            base_ty = int(math.floor(float(self.rv.pos.y) / float(ts)))
+        except Exception:
+            return False
+
+        # Use the driving collider if defined; it better represents the "drivable" envelope.
+        try:
+            mid = str(getattr(self.rv, "model_id", "rv"))
+            model = self._CAR_MODELS.get(mid) or self._CAR_MODELS.get("rv")
+        except Exception:
+            model = None
+
+        w = int(max(2, int(getattr(self.rv, "w", 0))))
+        h = int(max(2, int(getattr(self.rv, "h", 0))))
+        try:
+            dc = getattr(model, "drive_collider", None) if model is not None else None
+            if isinstance(dc, tuple) and len(dc) == 2:
+                dw, dh = int(dc[0]), int(dc[1])
+                if dw > 0 and dh > 0:
+                    w = int(max(2, min(int(w), int(dw))))
+                    h = int(max(2, min(int(h), int(dh))))
+        except Exception:
+            pass
+
+        prefer_score = {
+            int(self.T_ROAD): 0,
+            int(self.T_HIGHWAY): 0,
+            int(self.T_PARKING): 1,
+            int(self.T_PAVEMENT): 2,
+            int(self.T_CONCRETE): 2,
+            int(self.T_SIDEWALK): 3,
+            int(self.T_BRICK): 3,
+            int(self.T_GRASS): 4,
+        }
+
+        def rect_at_center(cx: float, cy: float) -> pygame.Rect:
+            return pygame.Rect(
+                iround(float(cx) - float(w) / 2.0),
+                iround(float(cy) - float(h) / 2.0),
+                int(w),
+                int(h),
+            )
+
+        def rect_at_center_wh(cx: float, cy: float, ww: int, hh: int) -> pygame.Rect:
+            ww = int(max(2, int(ww)))
+            hh = int(max(2, int(hh)))
+            return pygame.Rect(
+                iround(float(cx) - float(ww) / 2.0),
+                iround(float(cy) - float(hh) / 2.0),
+                int(ww),
+                int(hh),
+            )
+
+        def ang_diff(a: float, b: float) -> float:
+            d = float((float(a) - float(b) + math.pi) % (math.tau) - math.pi)
+            return abs(float(d))
+
+        def corridor_ok(cx: float, cy: float, heading: float, ww: int, hh: int) -> bool:
+            try:
+                base = rect_at_center_wh(float(cx), float(cy), int(ww), int(hh))
+                if self._collide_rect_world_vehicle(base):
+                    return False
+                fwd = pygame.Vector2(math.cos(float(heading)), math.sin(float(heading)))
+                if fwd.length_squared() <= 0.001:
+                    fwd = pygame.Vector2(1, 0)
+                else:
+                    fwd = fwd.normalize()
+                step = float(max(6.0, float(ts) * 0.85))
+                for sgn in (1.0, -1.0):
+                    nx = float(cx) + float(fwd.x) * float(step) * float(sgn)
+                    ny = float(cy) + float(fwd.y) * float(step) * float(sgn)
+                    r2 = rect_at_center_wh(float(nx), float(ny), int(ww), int(hh))
+                    if not self._collide_rect_world_vehicle(r2):
+                        return True
+                return False
+            except Exception:
+                return False
+
+        best: tuple[pygame.Vector2, float, int, int] | None = None  # (pos, heading, score, r)
+        best_key: tuple[int, int, int, int] | None = None
+        max_r = 16  # tiles
+        cur_heading = float(getattr(self.rv, "heading", 0.0))
+        headings = (0.0, math.pi / 2.0, math.pi, 3.0 * math.pi / 2.0)
+        for r in range(0, int(max_r) + 1):
+            for dy in range(-int(r), int(r) + 1):
+                for dx in range(-int(r), int(r) + 1):
+                    if max(abs(int(dx)), abs(int(dy))) != int(r):
+                        continue
+                    tx = int(base_tx + int(dx))
+                    ty = int(base_ty + int(dy))
+                    try:
+                        tid = int(self.world.get_tile(int(tx), int(ty)))
+                    except Exception:
+                        tid = int(self.T_GRASS)
+                    score = int(prefer_score.get(int(tid), 5))
+
+                    cx = (float(tx) + 0.5) * float(ts)
+                    cy = (float(ty) + 0.5) * float(ts)
+                    # Pick a cardinal heading that has some forward/back clearance so the RV
+                    # can actually start moving immediately after relocation.
+                    picked_heading: float | None = None
+                    picked_diff: float | None = None
+                    for hd in headings:
+                        # Driving uses a stable AABB; swap dims when driving mostly vertical.
+                        if hd in (math.pi / 2.0, 3.0 * math.pi / 2.0):
+                            ww, hh = int(h), int(w)
+                        else:
+                            ww, hh = int(w), int(h)
+                        if not corridor_ok(float(cx), float(cy), float(hd), int(ww), int(hh)):
+                            continue
+                        diff = float(ang_diff(float(cur_heading), float(hd)))
+                        if picked_diff is None or diff < float(picked_diff):
+                            picked_diff = float(diff)
+                            picked_heading = float(hd)
+
+                    if picked_heading is None:
+                        continue
+
+                    key = (int(score), int(r), int(abs(int(dx)) + abs(int(dy))), int(round(float(picked_diff or 0.0) * 1000.0)))
+                    if best_key is None or key < best_key:
+                        best_key = key
+                        best = (pygame.Vector2(float(cx), float(cy)), float(picked_heading), int(score), int(r))
+
+            # Early exit if we found a great road/highway candidate quickly.
+            if best is not None and best_key is not None and int(best_key[0]) == 0 and int(r) <= 5:
+                break
+
+        if best is None:
+            return False
+
+        try:
+            pos, hd, _score, _r = best
+            self.rv.pos.update(pos)
+            self.rv.heading = float(hd)
+            # Keep the axis hint consistent with the snapped heading.
+            self._rv_drive_axis = 1 if float(hd) in (math.pi / 2.0, 3.0 * math.pi / 2.0) else 0
+            self.rv.vel.update(0, 0)
+            self.rv.speed = 0.0
+            self.rv.steer = 0.0
+        except Exception:
+            return False
+        return True
 
     def _bike_base_speed(self) -> float:
         mid = str(getattr(getattr(self, "bike", None), "model_id", "bike"))
@@ -11152,12 +11505,53 @@ class HardcoreSurvivalState(State):
         cache[key] = spr
         return spr
 
+    def _rv_collider_rect_at(self, pos: pygame.Vector2 | None = None) -> pygame.Rect:
+        # RV sprite rotates, but collisions used to stay as a fixed axis-aligned box.
+        # That made it feel like you can't walk close to the RV (especially when the
+        # RV faces up/down). Use the rotated AABB instead.
+        try:
+            if pos is None:
+                pos = pygame.Vector2(getattr(self.rv, "pos", pygame.Vector2(0, 0)))
+            else:
+                pos = pygame.Vector2(pos)
+            w0 = float(getattr(self.rv, "w", 0.0))
+            h0 = float(getattr(self.rv, "h", 0.0))
+            heading = float(getattr(self.rv, "heading", 0.0))
+            if w0 <= 0.0 or h0 <= 0.0:
+                return pygame.Rect(int(round(float(pos.x))), int(round(float(pos.y))), 1, 1)
+            c = abs(math.cos(float(heading)))
+            s = abs(math.sin(float(heading)))
+            ww = w0 * c + h0 * s
+            hh = w0 * s + h0 * c
+            w = int(max(1, int(round(float(ww)))))
+            h = int(max(1, int(round(float(hh)))))
+            return pygame.Rect(
+                iround(float(pos.x) - float(w) / 2.0),
+                iround(float(pos.y) - float(h) / 2.0),
+                int(w),
+                int(h),
+            )
+        except Exception:
+            try:
+                if pos is None:
+                    pos = pygame.Vector2(getattr(self.rv, "pos", pygame.Vector2(0, 0)))
+                w = int(max(1, int(getattr(self.rv, "w", 1))))
+                h = int(max(1, int(getattr(self.rv, "h", 1))))
+                return pygame.Rect(
+                    iround(float(pos.x) - float(w) / 2.0),
+                    iround(float(pos.y) - float(h) / 2.0),
+                    int(w),
+                    int(h),
+                )
+            except Exception:
+                return pygame.Rect(0, 0, 1, 1)
+
     def _can_access_rv(self) -> bool:
         if self.mount == "rv":
             return True
         try:
             pad = 24
-            r = self.rv.rect().inflate(int(pad * 2), int(pad * 2))
+            r = self._rv_collider_rect_at().inflate(int(pad * 2), int(pad * 2))
             return bool(r.collidepoint(int(round(float(self.player.pos.x))), int(round(float(self.player.pos.y)))))
         except Exception:
             return (self.player.pos - self.rv.pos).length_squared() <= (36.0 * 36.0)
@@ -11217,6 +11611,11 @@ class HardcoreSurvivalState(State):
         self._rv_world_int_restore_tiles = restore
         self._rv_world_int_active_key = key
 
+        # Reset RV interior helpers (rebuilt each time).
+        self._rv_world_floor_base = None
+        self._rv_world_fixed_furniture = set()
+        self._rv_world_dash_tile = None
+
         # Stamp: floor everywhere. The RV room is "enclosed" via thin collision bounds
         # (so the 1-tile wall border doesn't eat 2/3 of the usable space on small RVs).
         for yy in range(int(h)):
@@ -11246,59 +11645,141 @@ class HardcoreSurvivalState(State):
             cand_part = int(cabin_x0 - 1)
             if int(fx0 + 2) <= int(cand_part) <= int(fx1 - 2):
                 part_x = int(cand_part)
-                door_y = int(ty0 + max(1, int(h) // 2))
+                # Door opening near the middle of the usable interior band.
+                door_y = int((int(fy0) + int(fy1)) // 2)
                 door_y = int(clamp(int(door_y), int(fy0), int(fy1)))
                 for yy in range(int(fy0), int(fy1) + 1):
                     if int(yy) == int(door_y):
                         continue
                     self._world_set_tile(int(part_x), int(yy), int(self.T_WALL))
-                for yy in range(int(fy0), int(fy1) + 1):
-                    for xx in range(int(part_x + 1), int(fx1) + 1):
-                        if int(self.world.peek_tile(int(xx), int(yy))) == int(self.T_FLOOR):
-                            self._world_set_tile(int(xx), int(yy), int(self.T_CONCRETE))
+                # Mark the opening as a (passable) door/curtain so the separation reads visually.
+                try:
+                    if int(self.world.peek_tile(int(part_x), int(door_y), default=int(self.T_FLOOR))) == int(self.T_FLOOR):
+                        self._world_set_tile(int(part_x), int(door_y), int(self.T_DOOR_BROKEN))
+                except Exception:
+                    pass
         except Exception:
             part_x = None
             cabin_x0 = None
 
+        # Cabin floor tone: make the cockpit read as a different material.
+        try:
+            if cabin_x0 is not None:
+                for yy in range(int(fy0), int(fy1) + 1):
+                    for xx in range(int(cabin_x0), int(fx1) + 1):
+                        if int(self.world.peek_tile(int(xx), int(yy), default=int(self.T_FLOOR))) == int(self.T_FLOOR):
+                            self._world_set_tile(int(xx), int(yy), int(self.T_CONCRETE))
+        except Exception:
+            pass
+
         living_x1 = int(fx1 if part_x is None else int(part_x - 1))
+
+        # Base floor map (for RV furniture moving): record the intended walkable tile under furniture.
+        try:
+            base: dict[tuple[int, int], int] = {}
+            for yy in range(int(h)):
+                for xx in range(int(w)):
+                    wx = int(tx0 + xx)
+                    wy = int(ty0 + yy)
+                    tid = int(self.world.peek_tile(int(wx), int(wy), default=int(self.T_FLOOR)))
+                    if tid in (int(self.T_FLOOR), int(self.T_BOARDWALK), int(self.T_CONCRETE)):
+                        base[(int(wx), int(wy))] = int(tid)
+            self._rv_world_floor_base = base
+        except Exception:
+            self._rv_world_floor_base = None
 
         # Bed (2 tiles, living area).
         bed_y = int(clamp(int(fy0 + 1), int(fy0), int(fy1)))
         bed_x0 = int(clamp(int(fx0 + 1), int(fx0), int(living_x1 - 1)))
         if int(bed_x0 + 1) <= int(living_x1) and int(fy0) <= int(bed_y) <= int(fy1):
             for bx in (int(bed_x0), int(bed_x0 + 1)):
-                if int(self.world.peek_tile(int(bx), int(bed_y))) == int(self.T_FLOOR):
+                if int(self.world.peek_tile(int(bx), int(bed_y))) in (
+                    int(self.T_FLOOR),
+                    int(self.T_BOARDWALK),
+                    int(self.T_CONCRETE),
+                ):
                     self._world_set_tile(int(bx), int(bed_y), int(self.T_BED))
 
         # Cabinet (living area, away from the exit tile).
         cab_x = int(clamp(int(fx0 + 1), int(fx0), int(living_x1)))
         cab_y = int(clamp(int(fy1 - 1), int(fy0), int(fy1)))
         if (int(cab_x), int(cab_y)) != (int(exit_tx), int(exit_ty)):
-            if int(self.world.peek_tile(int(cab_x), int(cab_y))) == int(self.T_FLOOR):
+            if int(self.world.peek_tile(int(cab_x), int(cab_y))) in (
+                int(self.T_FLOOR),
+                int(self.T_BOARDWALK),
+                int(self.T_CONCRETE),
+            ):
                 self._world_set_tile(int(cab_x), int(cab_y), int(self.T_CABINET))
 
-        # Cabin seats + dashboard (right side).
+        # Cabin seats + dashboard (right side). These are fixed (not movable).
         self._rv_world_driver_seat_tile = None
         try:
-            if part_x is not None and cabin_x0 is not None:
-                seat_x = int(clamp(int(cabin_x0 + 1), int(cabin_x0), int(fx1)))
-            else:
-                seat_x = int(clamp(int(fx1 - 1), int(fx0), int(fx1)))
-            driver_y = int(clamp(int(fy0 + 1), int(fy0), int(fy1)))
-            pass_y = int(clamp(int(driver_y + 2), int(fy0), int(fy1)))
-            if int(self.world.peek_tile(int(seat_x), int(driver_y))) in (int(self.T_FLOOR), int(self.T_CONCRETE)):
+            fixed: set[tuple[int, int]] = getattr(self, "_rv_world_fixed_furniture", set())
+            dash_x = int(fx1)
+            # Prefer putting the driver seat near the cabin partition, so the cockpit
+            # reads as: seat -> steering wheel -> dash, from left to right.
+            cab0 = None
+            try:
+                if cabin_x0 is not None:
+                    cab0 = int(cabin_x0)
+                elif part_x is not None:
+                    cab0 = int(part_x + 1)
+            except Exception:
+                cab0 = None
+            if cab0 is None:
+                cab0 = int(max(int(fx0), int(dash_x) - 2))
+
+            seat_x = int(clamp(int(cab0), int(fx0), int(max(int(fx0), int(dash_x) - 2))))
+            wheel_x = int(clamp(int(seat_x + 1), int(fx0), int(max(int(fx0), int(dash_x) - 1))))
+
+            driver_y = int(fy0)
+            pass_y = int(fy1)
+
+            if int(self.world.peek_tile(int(seat_x), int(driver_y))) in (
+                int(self.T_FLOOR),
+                int(self.T_BOARDWALK),
+                int(self.T_CONCRETE),
+            ):
                 self._world_set_tile(int(seat_x), int(driver_y), int(self.T_CHAIR))
                 self._rv_world_driver_seat_tile = (int(seat_x), int(driver_y))
-            if int(self.world.peek_tile(int(seat_x), int(pass_y))) in (int(self.T_FLOOR), int(self.T_CONCRETE)):
-                if (int(seat_x), int(pass_y)) != (int(exit_tx), int(exit_ty)):
+                fixed.add((int(seat_x), int(driver_y)))
+            if int(self.world.peek_tile(int(seat_x), int(pass_y))) in (
+                int(self.T_FLOOR),
+                int(self.T_BOARDWALK),
+                int(self.T_CONCRETE),
+            ):
+                if (int(seat_x), int(pass_y)) != (int(exit_tx), int(exit_ty)) and (int(seat_x), int(pass_y)) != (int(seat_x), int(driver_y)):
                     self._world_set_tile(int(seat_x), int(pass_y), int(self.T_CHAIR))
-            dash_x = int(fx1)
-            dash_y = int(clamp(int(driver_y + 1), int(fy0), int(fy1)))
-            if (int(dash_x), int(dash_y)) not in ((int(exit_tx), int(exit_ty)), (int(seat_x), int(driver_y)), (int(seat_x), int(pass_y))):
-                if int(self.world.peek_tile(int(dash_x), int(dash_y))) in (int(self.T_FLOOR), int(self.T_CONCRETE)):
-                    self._world_set_tile(int(dash_x), int(dash_y), int(self.T_TABLE))
+                    fixed.add((int(seat_x), int(pass_y)))
+
+            # Steering wheel (driver side) + dash console (rightmost).
+            if (int(wheel_x), int(driver_y)) not in ((int(exit_tx), int(exit_ty)), (int(seat_x), int(driver_y)), (int(seat_x), int(pass_y))):
+                if int(self.world.peek_tile(int(wheel_x), int(driver_y))) in (
+                    int(self.T_FLOOR),
+                    int(self.T_BOARDWALK),
+                    int(self.T_CONCRETE),
+                ):
+                    self._world_set_tile(int(wheel_x), int(driver_y), int(self.T_STEER))
+                    fixed.add((int(wheel_x), int(driver_y)))
+
+            self._rv_world_dash_tile = None
+            for dy2 in (int(driver_y), int(pass_y)):
+                if (int(dash_x), int(dy2)) in ((int(exit_tx), int(exit_ty)), (int(seat_x), int(driver_y)), (int(seat_x), int(pass_y)), (int(wheel_x), int(driver_y))):
+                    continue
+                if int(self.world.peek_tile(int(dash_x), int(dy2))) in (
+                    int(self.T_FLOOR),
+                    int(self.T_BOARDWALK),
+                    int(self.T_CONCRETE),
+                ):
+                    self._world_set_tile(int(dash_x), int(dy2), int(self.T_TABLE))
+                    fixed.add((int(dash_x), int(dy2)))
+                    if self._rv_world_dash_tile is None:
+                        self._rv_world_dash_tile = (int(dash_x), int(dy2))
+            self._rv_world_fixed_furniture = set(fixed)
         except Exception:
             self._rv_world_driver_seat_tile = None
+            self._rv_world_dash_tile = None
+            self._rv_world_fixed_furniture = set()
 
         return True
 
@@ -11307,13 +11788,15 @@ class HardcoreSurvivalState(State):
             return False
         seat = getattr(self, "_rv_world_driver_seat_tile", None)
         if not (isinstance(seat, tuple) and len(seat) == 2):
-            return False
+            # Fallback: if the seat marker is missing for any reason, still allow driving.
+            return bool(self._rv_world_try_drive_from_anywhere())
         tx, ty = self._player_tile()
         sx, sy = int(seat[0]), int(seat[1])
         if abs(int(tx) - int(sx)) > 1 or abs(int(ty) - int(sy)) > 1:
-            return False
+            self._set_hint("到驾驶座旁按F开车", seconds=1.2)
+            return True
         if int(self.inventory.count("key_rv")) <= 0:
-            self._set_hint("Need: RV key", seconds=1.1)
+            self._set_hint("需要车钥匙", seconds=1.1)
             return True
 
         # Teardown interior tiles but keep the player on the RV so driving starts immediately.
@@ -11338,14 +11821,14 @@ class HardcoreSurvivalState(State):
         self.rv.speed = 0.0
         self.player.pos.update(self.rv.pos)
         self.player.vel.update(0, 0)
-        self._set_hint("Drive", seconds=0.9)
+        self._set_hint("开始驾驶", seconds=0.9)
         return True
 
     def _rv_world_try_drive_from_anywhere(self) -> bool:
         if not bool(getattr(self, "rv_world_interior", False)):
             return False
         if int(self.inventory.count("key_rv")) <= 0:
-            self._set_hint("Need: RV key", seconds=1.1)
+            self._set_hint("需要车钥匙", seconds=1.1)
             return True
 
         # Teardown interior tiles but keep the player on the RV so driving starts immediately.
@@ -11370,12 +11853,15 @@ class HardcoreSurvivalState(State):
         self.rv.speed = 0.0
         self.player.pos.update(self.rv.pos)
         self.player.vel.update(0, 0)
-        self._set_hint("Drive", seconds=0.9)
+        self._set_hint("开始驾驶", seconds=0.9)
         return True
 
     def _rv_world_interior_toggle(self) -> None:
         if bool(getattr(self, "rv_world_interior", False)):
             self._rv_world_interior_exit()
+            return
+        if str(getattr(self.rv, "model_id", "rv")) != "rv":
+            self._set_hint("只有房车能进内部", seconds=1.1)
             return
         if not self._can_access_rv():
             self._set_hint("靠近房车再按H", seconds=1.2)
@@ -11386,6 +11872,9 @@ class HardcoreSurvivalState(State):
         self._rv_world_interior_enter()
 
     def _rv_world_interior_enter(self) -> None:
+        if str(getattr(self.rv, "model_id", "rv")) != "rv":
+            self._set_hint("只有房车能进内部", seconds=1.1)
+            return
         self.inv_open = False
         self.world_map_open = False
         self._gallery_open = False
@@ -11394,7 +11883,88 @@ class HardcoreSurvivalState(State):
         self.player.vel.update(0, 0)
         self.player.walk_phase *= 0.85
 
-        self._rv_world_return_pos = pygame.Vector2(self.player.pos)
+        # Remember where to return when leaving the RV interior.
+        # If we entered from driving mode, the player is at the RV center (inside its collider),
+        # so pick a safe "outside the RV" return position.
+        was_driving = getattr(self, "mount", None) == "rv"
+        ret_pos = pygame.Vector2(self.player.pos)
+        if was_driving:
+            try:
+                vehicle_pos = pygame.Vector2(self.rv.pos)
+                vw, vh = float(getattr(self.rv, "w", 0)), float(getattr(self.rv, "h", 0))
+                ph = float(max(int(self.player.w), int(getattr(self.player, "collider_h", self.player.h)))) / 2.0
+                heading = float(getattr(self.rv, "heading", 0.0))
+                fwd = pygame.Vector2(math.cos(float(heading)), math.sin(float(heading)))
+                if fwd.length_squared() < 0.001:
+                    fwd = pygame.Vector2(1, 0)
+                fwd = fwd.normalize()
+                right = pygame.Vector2(-float(fwd.y), float(fwd.x))
+                side_margin = float(vh) / 2.0 + float(ph) + 8.0
+                fwd_margin = float(vw) / 2.0 + float(ph) + 8.0
+                candidates = [
+                    right * float(side_margin),
+                    -right * float(side_margin),
+                    fwd * float(fwd_margin),
+                    -fwd * float(fwd_margin),
+                    pygame.Vector2(float(vw) / 2.0 + float(ph) + 10.0, 0),
+                    pygame.Vector2(-(float(vw) / 2.0 + float(ph) + 10.0), 0),
+                    pygame.Vector2(0, float(vh) / 2.0 + float(ph) + 10.0),
+                    pygame.Vector2(0, -(float(vh) / 2.0 + float(ph) + 10.0)),
+                ]
+                # Make the RV solid for collision checks.
+                self.mount = None
+                ignore_rect: pygame.Rect | None = None
+                try:
+                    ignore_rect = self._rv_collider_rect_at(vehicle_pos)
+                except Exception:
+                    ignore_rect = None
+
+                def path_clear(dst: pygame.Vector2) -> bool:
+                    try:
+                        a = pygame.Vector2(vehicle_pos)
+                        b = pygame.Vector2(dst)
+                        d = b - a
+                        dist = float(d.length())
+                        if dist <= 0.5:
+                            return True
+                        step_len = max(1.0, float(self.TILE_SIZE) / 4.0)
+                        steps = int(clamp(int(math.ceil(dist / step_len)), 1, 80))
+                        for i in range(1, int(steps) + 1):
+                            t = float(i) / float(steps)
+                            p2 = a + d * t
+                            hits = self._collide_rect_world(self.player.rect_at(p2))
+                            if not hits:
+                                continue
+                            for hh in hits:
+                                if ignore_rect is not None and hh == ignore_rect:
+                                    continue
+                                return False
+                        return True
+                    except Exception:
+                        return False
+
+                for off in candidates:
+                    p = vehicle_pos + off
+                    if not self._collide_rect_world(self.player.rect_at(p)) and path_clear(p):
+                        ret_pos = pygame.Vector2(p)
+                        break
+            except Exception:
+                pass
+
+        if was_driving:
+            # If we couldn't find a safe "outside" spot, don't enter the interior.
+            # Otherwise the player can end up clipped into walls/buildings when exiting.
+            try:
+                vehicle_pos = pygame.Vector2(self.rv.pos)
+                if (pygame.Vector2(ret_pos) - vehicle_pos).length_squared() <= 0.75:
+                    self.mount = "rv"
+                    self.player.pos.update(self.rv.pos)
+                    self._set_hint("No space to leave RV here", seconds=1.2)
+                    return
+            except Exception:
+                pass
+
+        self._rv_world_return_pos = pygame.Vector2(ret_pos)
         self.mount = None
         self.rv.vel.update(0, 0)
         self.bike.vel.update(0, 0)
@@ -11463,9 +12033,24 @@ class HardcoreSurvivalState(State):
             return True
         return False
 
+    def _vehicle_int_template_layout(self) -> list[str]:
+        """Return the default interior layout for the current vehicle model."""
+        mid = str(getattr(self.rv, "model_id", "rv"))
+        if mid == "rv":
+            return self._RV_INT_LAYOUT
+        return self._CAR_INT_LAYOUT
+
+    def _vehicle_int_layout(self) -> list:
+        """Return the active (possibly edited) interior layout for current model."""
+        mid = str(getattr(self.rv, "model_id", "rv"))
+        layout = getattr(self, "rv_int_layout", None)
+        if isinstance(layout, list) and str(getattr(self, "_rv_int_layout_model_id", "")) == mid:
+            return layout
+        return self._vehicle_int_template_layout()
+
     def _rv_int_find(self, ch: str) -> tuple[int, int] | None:
         ch = str(ch)[:1]
-        layout = getattr(self, "rv_int_layout", self._RV_INT_LAYOUT)
+        layout = self._vehicle_int_layout()
         for y, row in enumerate(layout):
             for x in range(min(len(row), int(self._RV_INT_W))):
                 if row[x] == ch:
@@ -11477,10 +12062,10 @@ class HardcoreSurvivalState(State):
             self._rv_interior_exit()
             return
         if not self._can_access_rv():
-            self._set_hint("靠近房车按 H 进入房车内部", seconds=1.2)
+            self._set_hint("靠近车辆按 G 进入车辆内部", seconds=1.2)
             return
         if self.mount == "rv" and abs(float(getattr(self.rv, "speed", 0.0))) > 1.0:
-            self._set_hint("先停车再进房车内部", seconds=1.2)
+            self._set_hint("先停车再进车辆内部", seconds=1.2)
             return
         self._rv_interior_enter()
 
@@ -11495,8 +12080,10 @@ class HardcoreSurvivalState(State):
         self.rv.vel.update(0, 0)
         self.bike.vel.update(0, 0)
 
-        if not isinstance(getattr(self, "rv_int_layout", None), list):
-            self.rv_int_layout = [list(row) for row in self._RV_INT_LAYOUT]
+        mid = str(getattr(self.rv, "model_id", "rv"))
+        if not isinstance(getattr(self, "rv_int_layout", None), list) or str(getattr(self, "_rv_int_layout_model_id", "")) != mid:
+            self.rv_int_layout = [list(row) for row in self._vehicle_int_template_layout()]
+            self._rv_int_layout_model_id = mid
         self.rv_edit_mode = False
         self.rv_edit_dragging = False
         self.rv_edit_blocks: list[tuple[str, list[tuple[int, int]]]] = []
@@ -11545,7 +12132,8 @@ class HardcoreSurvivalState(State):
             self.rv_int_facing = pygame.Vector2(0, 1)
         self.rv_int_walk_phase = 0.0
         self.player.pos.update(self.rv.pos)
-        self._set_hint("房车内部：WASD 走动  E 互动  H/ESC 退出", seconds=1.6)
+        label = "房车" if str(getattr(self.rv, "model_id", "rv")) == "rv" else "汽车"
+        self._set_hint(f"{label}内部：WASD 走动  E 互动  H/ESC 退出", seconds=1.6)
 
     def _rv_interior_exit(self) -> None:
         if not getattr(self, "rv_interior", False):
@@ -11587,7 +12175,45 @@ class HardcoreSurvivalState(State):
             placed = True
             break
         if not placed:
-            self.player.pos.update(base)
+            # Fallback: spiral search around the RV for a clear spot (never snap into its center).
+            ts = int(max(1, int(self.TILE_SIZE)))
+            base_tx = int(math.floor(float(base.x) / float(ts)))
+            base_ty = int(math.floor(float(base.y) / float(ts)))
+            for r in range(1, 16):
+                found = False
+                for dy2 in (-r, r):
+                    for dx2 in range(-r, r + 1):
+                        tx2 = int(base_tx + dx2)
+                        ty2 = int(base_ty + dy2)
+                        p2 = pygame.Vector2((float(tx2) + 0.5) * float(ts), (float(ty2) + 0.5) * float(ts))
+                        if not self._collide_rect_world(self.player.rect_at(p2)):
+                            self.player.pos.update(p2)
+                            placed = True
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+                for dx2 in (-r, r):
+                    for dy2 in range(-r + 1, r):
+                        tx2 = int(base_tx + dx2)
+                        ty2 = int(base_ty + dy2)
+                        p2 = pygame.Vector2((float(tx2) + 0.5) * float(ts), (float(ty2) + 0.5) * float(ts))
+                        if not self._collide_rect_world(self.player.rect_at(p2)):
+                            self.player.pos.update(p2)
+                            placed = True
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+
+            if not placed:
+                vw = float(getattr(self.rv, "w", 0))
+                ph = float(max(int(self.player.w), int(getattr(self.player, "collider_h", self.player.h)))) / 2.0
+                self.player.pos.update(base + pygame.Vector2(float(vw) / 2.0 + float(ph) + 16.0, 0))
 
         self._set_hint("离开房车", seconds=0.9)
 
@@ -13831,7 +14457,7 @@ class HardcoreSurvivalState(State):
         y = int(y)
         if not (0 <= x < int(self._RV_INT_W) and 0 <= y < int(self._RV_INT_H)):
             return "W"
-        layout = getattr(self, "rv_int_layout", self._RV_INT_LAYOUT)
+        layout = self._vehicle_int_layout()
         row = layout[y]
         if 0 <= x < len(row):
             return row[x]
@@ -14240,8 +14866,11 @@ class HardcoreSurvivalState(State):
 
         surf = pygame.Surface((w, h))
 
-        if kind in ("home", "rv", "wood"):
-            base = (102, 90, 72) if kind == "home" else (92, 82, 68)     
+        if kind == "rv":
+            # RV interior: perfectly uniform floor color (no seams/boards), per user request.
+            surf.fill((92, 82, 68))
+        elif kind in ("home", "wood"):
+            base = (102, 90, 72) if kind == "home" else (92, 82, 68)
             seam = _tint(base, (-20, -20, -22))
             seam2 = _tint(base, (-10, -10, -12))
             knot = _tint(base, (-28, -22, -18))
@@ -14570,32 +15199,7 @@ class HardcoreSurvivalState(State):
         glass_w = max(4, int(tile - 6))
         glass_h = max(4, int(tile - 8))
         win_view = self._window_view_surface(glass_w, glass_h)
-        layout = getattr(self, "rv_int_layout", self._RV_INT_LAYOUT)
-
-        # Rug under the table.
-        t_tiles: list[tuple[int, int]] = []
-        for yy, row in enumerate(layout):
-            for xx, ch in enumerate(row[: int(self._RV_INT_W)]):
-                if ch == "T":
-                    t_tiles.append((int(xx), int(yy)))
-        if t_tiles:
-            min_tx = min(p[0] for p in t_tiles)
-            max_tx = max(p[0] for p in t_tiles)
-            min_ty = min(p[1] for p in t_tiles)
-            max_ty = max(p[1] for p in t_tiles)
-            rug = pygame.Rect(
-                map_x + min_tx * tile - 2,
-                map_y + min_ty * tile + 8,
-                (max_tx - min_tx + 1) * tile + 4,
-                (max_ty - min_ty + 1) * tile + 6,
-            )
-            rug.clamp_ip(map_rect.inflate(-4, -4))
-            rug_s = pygame.Surface((rug.w, rug.h), pygame.SRCALPHA)
-            rug_s.fill((160, 82, 92, 190))
-            for y in range(2, rug.h, 5):
-                pygame.draw.line(rug_s, (210, 150, 150, 60), (2, y), (rug.w - 3, y), 1)
-            pygame.draw.rect(rug_s, (40, 18, 20, 220), rug_s.get_rect(), 2, border_radius=4)
-            surface.blit(rug_s, rug.topleft)
+        layout = self._vehicle_int_layout()
 
         bed_done: set[tuple[int, int]] = set()
         for y, row in enumerate(layout):
@@ -14858,6 +15462,39 @@ class HardcoreSurvivalState(State):
                     pygame.draw.rect(surface, wood, pygame.Rect(bench.x + 1, bench.y + 1, bench.w - 2, 3))
                     pygame.draw.line(surface, steel2, (bench.x + 2, bench.y), (bench.right - 3, bench.y + 5), 1)
                     pygame.draw.rect(surface, steel2, pygame.Rect(bench.x + 4, bench.y + 6, 5, 2), border_radius=1)
+                    continue
+
+                if ch == "R":
+                    # Steering wheel + dashboard (cab).
+                    wheel = (34, 34, 42)
+                    wheel_hi = self._tint(wheel, add=(34, 34, 40))
+                    wheel_lo = self._tint(wheel, add=(-18, -18, -18))
+
+                    cx = int(r.centerx - 2)
+                    cy = int(r.centery + 1)
+                    outer = 7
+                    try:
+                        bg = surface.get_at((int(cx), int(cy)))[:3]
+                    except Exception:
+                        bg = (48, 46, 44)
+
+                    pygame.draw.circle(surface, wheel, (cx, cy), int(outer))
+                    pygame.draw.circle(surface, outline, (cx, cy), int(outer), 1)
+                    pygame.draw.circle(surface, bg, (cx, cy), int(max(1, outer - 3)))
+
+                    pygame.draw.line(surface, wheel_lo, (cx, cy), (cx, cy - outer + 2), 2)
+                    pygame.draw.line(surface, wheel_lo, (cx, cy), (cx - outer + 2, cy + 1), 2)
+                    pygame.draw.line(surface, wheel_lo, (cx, cy), (cx + outer - 2, cy + 1), 2)
+
+                    hub = pygame.Rect(cx - 2, cy - 2, 5, 5)
+                    pygame.draw.rect(surface, wheel_hi, hub, border_radius=2)
+                    pygame.draw.rect(surface, outline, hub, 1, border_radius=2)
+
+                    dash = pygame.Rect(r.right - 6, r.y + 6, 5, r.h - 12)
+                    pygame.draw.rect(surface, (28, 28, 34), dash, border_radius=3)
+                    pygame.draw.rect(surface, outline, dash, 1, border_radius=3)
+                    pygame.draw.circle(surface, (180, 200, 220), (dash.centerx, dash.y + 4), 2)
+                    pygame.draw.circle(surface, outline, (dash.centerx, dash.y + 4), 2, 1)
                     continue
 
                 if ch == "C":
@@ -17936,7 +18573,7 @@ class HardcoreSurvivalState(State):
 
     def _rv_ui_open(self) -> None:
         if not self._can_access_rv():
-            self._set_hint("靠近房车按 H 打开房车内部", seconds=1.2)
+            self._set_hint("靠近车辆按 H 打开车辆内部", seconds=1.2)
             return
         self.inv_open = False
         self.rv_ui_open = True
@@ -17946,7 +18583,8 @@ class HardcoreSurvivalState(State):
             self.rv_ui_map = (1, 1)
         else:
             self.rv_ui_map = door
-        self._set_rv_ui_status("房车内部：方向键移动 | Enter互动 | Tab切换区域 | Esc关闭", seconds=2.0)
+        label = "房车" if str(getattr(self.rv, "model_id", "rv")) == "rv" else "汽车"
+        self._set_rv_ui_status(f"{label}内部：方向键移动 | Enter互动 | Tab切换区域 | Esc关闭", seconds=2.0)
 
     def _rv_ui_close(self) -> None:
         self.rv_ui_open = False
@@ -17963,7 +18601,7 @@ class HardcoreSurvivalState(State):
         y = int(y)
         if not (0 <= x < int(self._RV_INT_W) and 0 <= y < int(self._RV_INT_H)):
             return "W"
-        layout = getattr(self, "rv_int_layout", self._RV_INT_LAYOUT)
+        layout = self._vehicle_int_layout()
         row = layout[y]
         if 0 <= x < len(row):
             return row[x]
@@ -18461,11 +19099,18 @@ class HardcoreSurvivalState(State):
                     if cw <= 0 or ch <= 0:
                         continue
                     cpos = pygame.Vector2(getattr(car, "pos", pygame.Vector2(0, 0)))
+                    chead = float(getattr(car, "heading", 0.0))
+                    c = abs(math.cos(float(chead)))
+                    s = abs(math.sin(float(chead)))
+                    ww = float(cw) * c + float(ch) * s
+                    hh = float(cw) * s + float(ch) * c
+                    w = int(max(2, int(round(float(ww)))))
+                    h = int(max(2, int(round(float(hh)))))
                     crect = pygame.Rect(
-                        int(round(float(cpos.x) - float(cw) / 2.0)),
-                        int(round(float(cpos.y) - float(ch) / 2.0)),
-                        int(cw),
-                        int(ch),
+                        int(round(float(cpos.x) - float(w) / 2.0)),
+                        int(round(float(cpos.y) - float(h) / 2.0)),
+                        int(w),
+                        int(h),
                     )
                     if rect.colliderect(crect):
                         hits.append(crect)
@@ -18502,17 +19147,9 @@ class HardcoreSurvivalState(State):
         # Exception: when inside the RV world-interior, allow walking within the RV footprint.
         if self.mount != "rv" and not bool(getattr(self, "rv_world_interior", False)):
             try:
-                vw, vh = int(getattr(self.rv, "w", 0)), int(getattr(self.rv, "h", 0))
-                if vw > 0 and vh > 0:
-                    vpos = pygame.Vector2(getattr(self.rv, "pos", pygame.Vector2(0, 0)))
-                    vrect = pygame.Rect(
-                        int(round(float(vpos.x) - float(vw) / 2.0)),
-                        int(round(float(vpos.y) - float(vh) / 2.0)),
-                        int(vw),
-                        int(vh),
-                    )
-                    if rect.colliderect(vrect):
-                        hits.append(vrect)
+                vrect = self._rv_collider_rect_at()
+                if rect.colliderect(vrect):
+                    hits.append(vrect)
             except Exception:
                 pass
         if self.mount != "bike":
@@ -18567,7 +19204,17 @@ class HardcoreSurvivalState(State):
             for tx in range(left, right + 1):
                 tile = int(self.world.get_tile(tx, ty))
                 # Vehicles must not enter buildings: treat interior floor/doors as solid.
-                if tile in (int(self.T_FLOOR), int(self.T_DOOR)):
+                if tile in (
+                    int(self.T_FLOOR),
+                    int(self.T_DOOR),
+                    int(self.T_DOOR_HOME),
+                    int(self.T_DOOR_LOCKED),
+                    int(self.T_DOOR_HOME_LOCKED),
+                    int(self.T_DOOR_BROKEN),
+                    int(self.T_ELEVATOR),
+                    int(self.T_STAIRS_UP),
+                    int(self.T_STAIRS_DOWN),
+                ):
                     solid = True
                 else:
                     solid = bool(self._tile_solid(tile))
@@ -18640,11 +19287,18 @@ class HardcoreSurvivalState(State):
                     if cw <= 0 or ch <= 0:
                         continue
                     cpos = pygame.Vector2(getattr(car, "pos", pygame.Vector2(0, 0)))
+                    chead = float(getattr(car, "heading", 0.0))
+                    c = abs(math.cos(float(chead)))
+                    s = abs(math.sin(float(chead)))
+                    ww = float(cw) * c + float(ch) * s
+                    hh = float(cw) * s + float(ch) * c
+                    w = int(max(2, int(round(float(ww)))))
+                    h = int(max(2, int(round(float(hh)))))
                     crect = pygame.Rect(
-                        int(round(float(cpos.x) - float(cw) / 2.0)),
-                        int(round(float(cpos.y) - float(ch) / 2.0)),
-                        int(cw),
-                        int(ch),
+                        int(round(float(cpos.x) - float(w) / 2.0)),
+                        int(round(float(cpos.y) - float(h) / 2.0)),
+                        int(w),
+                        int(h),
                     )
                     if rect.colliderect(crect):
                         hits.append(crect)
@@ -18670,17 +19324,9 @@ class HardcoreSurvivalState(State):
         # Player-owned vehicles block other vehicles (but never collide with themselves).
         if self.mount != "rv":
             try:
-                vw, vh = int(getattr(self.rv, "w", 0)), int(getattr(self.rv, "h", 0))
-                if vw > 0 and vh > 0:
-                    vpos = pygame.Vector2(getattr(self.rv, "pos", pygame.Vector2(0, 0)))
-                    vrect = pygame.Rect(
-                        int(round(float(vpos.x) - float(vw) / 2.0)),
-                        int(round(float(vpos.y) - float(vh) / 2.0)),
-                        int(vw),
-                        int(vh),
-                    )
-                    if rect.colliderect(vrect):
-                        hits.append(vrect)
+                vrect = self._rv_collider_rect_at()
+                if rect.colliderect(vrect):
+                    hits.append(vrect)
             except Exception:
                 pass
         if self.mount != "bike":
@@ -19123,18 +19769,6 @@ class HardcoreSurvivalState(State):
         if dt > 0.25:
             dt = 0.25
 
-        dx_total = float(vel.x) * dt
-        dy_total = float(vel.y) * dt
-        if abs(dx_total) < 1e-6 and abs(dy_total) < 1e-6:
-            return pygame.Vector2(float(pos.x), float(pos.y))
-
-        # Keep per-step movement small (px) so collisions can't be skipped.
-        max_step = 2.0
-        steps = int(max(1, math.ceil(max(abs(dx_total), abs(dy_total)) / max_step)))
-        steps = int(clamp(int(steps), 1, 80))
-        step_dx = float(dx_total) / float(steps)
-        step_dy = float(dy_total) / float(steps)
-
         p = pygame.Vector2(pos)
         rect = pygame.Rect(
             iround(float(p.x) - float(w) / 2.0),
@@ -19143,28 +19777,285 @@ class HardcoreSurvivalState(State):
             int(h),
         )
 
+        def _rect_at_center(center: pygame.Vector2) -> pygame.Rect:
+            return pygame.Rect(
+                iround(float(center.x) - float(w) / 2.0),
+                iround(float(center.y) - float(h) / 2.0),
+                int(w),
+                int(h),
+            )
+
+        def _resolve_vehicle_overlap(r: pygame.Rect, *, iters: int = 14) -> pygame.Rect:
+            r = pygame.Rect(r)
+            for _ in range(int(iters)):
+                try:
+                    hits2 = self._collide_rect_world_vehicle(r)
+                except Exception:
+                    hits2 = []
+                if not hits2:
+                    break
+                best: tuple[float, str, pygame.Rect] | None = None
+                for hit in hits2:
+                    if not r.colliderect(hit):
+                        continue
+                    dl = float(r.right - hit.left)
+                    dr = float(hit.right - r.left)
+                    du = float(r.bottom - hit.top)
+                    dd = float(hit.bottom - r.top)
+                    for d, axis in ((dl, "L"), (dr, "R"), (du, "U"), (dd, "D")):
+                        if d <= 0.0:
+                            continue
+                        if best is None or float(d) < float(best[0]):
+                            best = (float(d), str(axis), hit)
+                if best is None:
+                    break
+                _d, axis, hit = best
+                if axis == "L":
+                    r.right = int(hit.left)
+                elif axis == "R":
+                    r.left = int(hit.right)
+                elif axis == "U":
+                    r.bottom = int(hit.top)
+                else:
+                    r.top = int(hit.bottom)
+            return r
+
+        # If the vehicle starts overlapped (e.g., after a collision snap), depenetrate
+        # so it doesn't become permanently stuck with zero velocity.
+        try:
+            init_hits = self._collide_rect_world_vehicle(rect)
+        except Exception:
+            init_hits = []
+        if init_hits:
+            # Prefer snapping back to a known-safe position if we have one.
+            last_safe_global = None
+            if self.mount == "rv":
+                last_safe_global = getattr(self, "_rv_last_safe_pos", None)
+            elif self.mount == "bike":
+                last_safe_global = getattr(self, "_bike_last_safe_pos", None)
+            if isinstance(last_safe_global, pygame.Vector2):
+                cand = _rect_at_center(pygame.Vector2(last_safe_global))
+                try:
+                    if not self._collide_rect_world_vehicle(cand):
+                        rect = cand
+                        p.update(float(rect.centerx), float(rect.centery))
+                        init_hits = []
+                except Exception:
+                    pass
+
+            if init_hits:
+                rect = _resolve_vehicle_overlap(rect, iters=18)
+                p.update(float(rect.centerx), float(rect.centery))
+                try:
+                    init_hits = self._collide_rect_world_vehicle(rect)
+                except Exception:
+                    init_hits = []
+
+            if init_hits:
+                # Final fallback: small radial search for any nearby free spot.
+                step = int(max(1, int(self.TILE_SIZE) // 2))
+                max_r = int(self.TILE_SIZE) * 4
+                found = False
+                for r in range(int(step), int(max_r) + 1, int(step)):
+                    for ox, oy in (
+                        (r, 0),
+                        (-r, 0),
+                        (0, r),
+                        (0, -r),
+                        (r, r),
+                        (r, -r),
+                        (-r, r),
+                        (-r, -r),
+                    ):
+                        cand_pos = pygame.Vector2(float(p.x) + float(ox), float(p.y) + float(oy))
+                        cand_rect = _rect_at_center(cand_pos)
+                        try:
+                            if not self._collide_rect_world_vehicle(cand_rect):
+                                rect = cand_rect
+                                p.update(float(rect.centerx), float(rect.centery))
+                                found = True
+                                break
+                        except Exception:
+                            continue
+                    if found:
+                        break
+
+        dx_total = float(vel.x) * dt
+        dy_total = float(vel.y) * dt
+        if abs(dx_total) < 1e-6 and abs(dy_total) < 1e-6:
+            # Persist a safe position for un-sticking.
+            try:
+                if not self._collide_rect_world_vehicle(rect):
+                    if self.mount == "rv":
+                        self._rv_last_safe_pos = pygame.Vector2(float(rect.centerx), float(rect.centery))
+                    elif self.mount == "bike":
+                        self._bike_last_safe_pos = pygame.Vector2(float(rect.centerx), float(rect.centery))
+            except Exception:
+                pass
+            return pygame.Vector2(p)
+
+        # Keep per-step movement small (px) so collisions can't be skipped.
+        max_step = 2.0
+        steps = int(max(1, math.ceil(max(abs(dx_total), abs(dy_total)) / max_step)))
+        steps = int(clamp(int(steps), 1, 80))
+        step_dx = float(dx_total) / float(steps)
+        step_dy = float(dy_total) / float(steps)
+
+        last_safe: pygame.Vector2 | None = None
+        try:
+            if not self._collide_rect_world_vehicle(rect):
+                last_safe = pygame.Vector2(p)
+        except Exception:
+            last_safe = pygame.Vector2(p)
+
+        skin = int(clamp(int(self.TILE_SIZE) // 6, 1, 2))
+        max_jump = max(float(self.TILE_SIZE) * 2.0, float(max_step) * 8.0)
+
         for _ in range(int(steps)):
+            step_prev = pygame.Vector2(p)
+            prev_rect = pygame.Rect(rect)
+            had_hit = False
+
             if abs(step_dx) > 1e-9:
+                prev_x = pygame.Rect(rect)
                 p.x += float(step_dx)
                 rect.x = iround(float(p.x) - float(w) / 2.0)
-                for hit in self._collide_rect_world_vehicle(rect):
+                hits = self._collide_rect_world_vehicle(rect)
+                if hits:
+                    had_hit = True
+                    # First clamp along X as usual.
                     if step_dx > 0.0:
-                        rect.right = hit.left
+                        blocks = [int(hit.left) for hit in hits if int(prev_x.right) <= int(hit.left) + int(skin)]
+                        limit = int(min(blocks)) if blocks else int(min(int(hit.left) for hit in hits))
+                        rect.right = int(limit)
                     else:
-                        rect.left = hit.right
-                p.x = float(rect.centerx)
+                        blocks = [int(hit.right) for hit in hits if int(prev_x.left) >= int(hit.right) - int(skin)]
+                        limit = int(max(blocks)) if blocks else int(max(int(hit.right) for hit in hits))
+                        rect.left = int(limit)
+
+                # Preserve sub-pixel remainder so shallow headings don't "snap" to axis movement.
+                try:
+                    fx = float(clamp(float(p.x) - float(rect.centerx), -0.49, 0.49))
+                except Exception:
+                    fx = 0.0
+                p.x = float(rect.centerx) + float(fx)
 
             if abs(step_dy) > 1e-9:
+                prev_y = pygame.Rect(rect)
                 p.y += float(step_dy)
                 rect.y = iround(float(p.y) - float(h) / 2.0)
-                for hit in self._collide_rect_world_vehicle(rect):
+                hits = self._collide_rect_world_vehicle(rect)
+                if hits:
+                    had_hit = True
+                    # First clamp along Y as usual.
                     if step_dy > 0.0:
-                        rect.bottom = hit.top
+                        blocks = [int(hit.top) for hit in hits if int(prev_y.bottom) <= int(hit.top) + int(skin)]
+                        limit = int(min(blocks)) if blocks else int(min(int(hit.top) for hit in hits))
+                        rect.bottom = int(limit)
                     else:
-                        rect.top = hit.bottom
-                p.y = float(rect.centery)
+                        blocks = [int(hit.bottom) for hit in hits if int(prev_y.top) >= int(hit.bottom) - int(skin)]
+                        limit = int(max(blocks)) if blocks else int(max(int(hit.bottom) for hit in hits))
+                        rect.top = int(limit)
 
-        return pygame.Vector2(float(rect.centerx), float(rect.centery))
+                try:
+                    fy = float(clamp(float(p.y) - float(rect.centery), -0.49, 0.49))
+                except Exception:
+                    fy = 0.0
+                p.y = float(rect.centery) + float(fy)
+
+            # If we still overlap after resolution (e.g., due to large colliders like
+            # whole-building rects), depenetrate a bit; otherwise revert to the last
+            # known safe position to prevent visible "teleport" snaps.
+            if had_hit:
+                try:
+                    post_hits = self._collide_rect_world_vehicle(rect)
+                except Exception:
+                    post_hits = []
+                if post_hits:
+                    r = pygame.Rect(rect)
+                    for _j in range(10):
+                        try:
+                            hits2 = self._collide_rect_world_vehicle(r)
+                        except Exception:
+                            hits2 = []
+                        if not hits2:
+                            break
+                        best: tuple[float, str, pygame.Rect] | None = None
+                        for hit in hits2:
+                            if not r.colliderect(hit):
+                                continue
+                            dl = float(r.right - hit.left)
+                            dr = float(hit.right - r.left)
+                            du = float(r.bottom - hit.top)
+                            dd = float(hit.bottom - r.top)
+                            for d, axis in ((dl, "L"), (dr, "R"), (du, "U"), (dd, "D")):
+                                if d <= 0.0:
+                                    continue
+                                if best is None or d < best[0]:
+                                    best = (float(d), str(axis), hit)
+                        if best is None:
+                            break
+                        _d, axis, hit = best
+                        if axis == "L":
+                            r.right = int(hit.left)
+                        elif axis == "R":
+                            r.left = int(hit.right)
+                        elif axis == "U":
+                            r.bottom = int(hit.top)
+                        else:
+                            r.top = int(hit.bottom)
+                    rect = r
+                    p.update(float(rect.centerx), float(rect.centery))
+
+                    try:
+                        post_hits = self._collide_rect_world_vehicle(rect)
+                    except Exception:
+                        post_hits = []
+                    if post_hits:
+                        if last_safe is not None:
+                            rect.x = iround(float(last_safe.x) - float(w) / 2.0)
+                            rect.y = iround(float(last_safe.y) - float(h) / 2.0)
+                            p.update(float(last_safe.x), float(last_safe.y))
+                        else:
+                            rect = prev_rect
+                            p.update(float(step_prev.x), float(step_prev.y))
+                        break
+
+            # Anti-teleport guard: collision resolution should never move a vehicle
+            # multiple tiles in a single sub-step. If it does, snap back.
+            try:
+                step_jump = float((pygame.Vector2(float(rect.centerx), float(rect.centery)) - step_prev).length())
+            except Exception:
+                step_jump = 0.0
+            allowed_jump = float(max_jump) if last_safe is not None else float(max(float(self.TILE_SIZE) * 6.0, float(max_jump)))
+            if float(step_jump) > float(allowed_jump):
+                if last_safe is not None:
+                    rect.x = iround(float(last_safe.x) - float(w) / 2.0)
+                    rect.y = iround(float(last_safe.y) - float(h) / 2.0)
+                    p.update(float(last_safe.x), float(last_safe.y))
+                else:
+                    rect = prev_rect
+                    p.update(float(step_prev.x), float(step_prev.y))
+                break
+
+            # Record a "safe" (non-overlapping) position for fallback.
+            if not had_hit:
+                last_safe = pygame.Vector2(p)
+            else:
+                try:
+                    if not self._collide_rect_world_vehicle(rect):
+                        last_safe = pygame.Vector2(p)
+                except Exception:
+                    last_safe = pygame.Vector2(p)
+
+        # Persist a safe position for un-sticking.
+        if last_safe is not None:
+            if self.mount == "rv":
+                self._rv_last_safe_pos = pygame.Vector2(last_safe)
+            elif self.mount == "bike":
+                self._bike_last_safe_pos = pygame.Vector2(last_safe)
+
+        return pygame.Vector2(p)
 
     def _update_world_door_open_anim(self, dt: float) -> None:
         # Visual-only door open/close animation for world-map doors.
@@ -19524,11 +20415,9 @@ class HardcoreSurvivalState(State):
             if model is None:
                 model = self._CAR_MODELS.get("rv") or next(iter(self._CAR_MODELS.values()))
 
-            throttle = 0.0
-            if keys[pygame.K_w] or keys[pygame.K_UP]:
-                throttle += 1.0
-            if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-                throttle -= 1.0
+            want_fwd = bool(keys[pygame.K_w] or keys[pygame.K_UP])
+            want_rev = bool(keys[pygame.K_s] or keys[pygame.K_DOWN])
+            throttle = (1.0 if want_fwd else 0.0) + (-1.0 if want_rev else 0.0)
             steer_in = 0.0
             if keys[pygame.K_a] or keys[pygame.K_LEFT]:
                 steer_in -= 1.0
@@ -19551,27 +20440,50 @@ class HardcoreSurvivalState(State):
             else:
                 self._rv_no_fuel_warned = False
 
-            max_fwd = float(model.max_fwd) * traction * boost
-            max_rev = float(model.max_rev) * traction
-            accel = float(model.accel) * traction * (0.0 if fuel_empty else boost)
+            # Out of fuel: allow very slow pushing so vehicles never feel completely dead.
+            push_mult = 0.65 if fuel_empty else 1.0
+            accel_mult = 0.70 if fuel_empty else boost
+
+            max_fwd = float(model.max_fwd) * traction * float(push_mult) * (1.0 if fuel_empty else boost)
+            max_rev = float(model.max_rev) * traction * float(push_mult)
+            accel = float(model.accel) * traction * float(accel_mult)
             brake = float(model.brake) * traction
             drag = 1.8 + (1.0 - traction) * 2.2
 
             max_steer = float(getattr(model, "steer_max", 0.62))  # radians
-            steer_resp = 10.0
+            # Faster return-to-center reduces "drift" when releasing A/D.
+            steer_resp = 16.0
             target_steer = float(clamp(steer_in, -1.0, 1.0)) * max_steer        
             self.rv.steer = float(self.rv.steer + (target_steer - float(self.rv.steer)) * clamp(dt * steer_resp, 0.0, 1.0))
+            # Snap small residual steer to zero so straight driving stays straight.
+            if abs(float(steer_in)) < 1e-6 and abs(float(self.rv.steer)) < 0.0035:
+                self.rv.steer = 0.0
 
             speed = float(self.rv.speed)
+            # W = accelerate forward, S = brake (and reverse only after stopping).
             if throttle > 0.0:
-                speed += accel * dt
-            elif throttle < 0.0:
-                if speed > 8.0:
-                    speed -= brake * dt
+                if speed < -0.5:
+                    # Braking while reversing.
+                    speed = min(0.0, speed + brake * dt)
                 else:
-                    speed -= (accel * 0.75) * dt
+                    speed += accel * dt
+                self._rv_reverse_hold = 0.0
+            elif throttle < 0.0:
+                if speed > 0.5:
+                    # Braking while moving forward.
+                    speed = max(0.0, speed - brake * dt)
+                    self._rv_reverse_hold = 0.0
+                else:
+                    # Reverse is gated: hold S briefly after stopping.
+                    hold = float(getattr(self, "_rv_reverse_hold", 0.0)) + float(dt)
+                    self._rv_reverse_hold = float(hold)
+                    if float(hold) >= 0.25:
+                        speed -= (accel * 0.75) * dt
+                    else:
+                        speed = 0.0
             else:
                 speed *= max(0.0, 1.0 - drag * dt)
+                self._rv_reverse_hold = 0.0
 
             speed = float(clamp(speed, -max_rev, max_fwd))
             self.rv.speed = speed
@@ -19585,7 +20497,7 @@ class HardcoreSurvivalState(State):
                 forward0 = forward0.normalize()
 
             turn = 0.0
-            if abs(speed) > 0.5:
+            if abs(speed) > 0.5 and abs(float(self.rv.steer)) > 1e-6:
                 turn = (speed / wheelbase) * math.tan(float(self.rv.steer))
             heading1 = float((heading0 + turn * dt) % math.tau)
             self.rv.heading = float(heading1)
@@ -19606,7 +20518,14 @@ class HardcoreSurvivalState(State):
                 rear_ref = float(min(rear_ref, max(6.0, half_len - 2.0)))
 
             rear0 = pygame.Vector2(self.rv.pos) - forward0 * float(rear_ref)
-            rear1 = rear0 + forward1 * speed * dt
+            # Midpoint integration so the RV doesn't "slide" sideways while turning.
+            heading_mid = float(heading0 + turn * dt * 0.5)
+            forward_mid = pygame.Vector2(math.cos(float(heading_mid)), math.sin(float(heading_mid)))
+            if forward_mid.length_squared() <= 0.001:
+                forward_mid = forward0
+            else:
+                forward_mid = forward_mid.normalize()
+            rear1 = rear0 + forward_mid * speed * dt
             center1 = rear1 + forward1 * float(rear_ref)
             if dt > 0.0:
                 self.rv.vel = (center1 - pygame.Vector2(self.rv.pos)) / float(dt)
@@ -19619,17 +20538,97 @@ class HardcoreSurvivalState(State):
                 self.rv_anim *= 0.85
 
             before = pygame.Vector2(self.rv.pos)
-            self.rv.pos = self._move_box_vehicle(self.rv.pos, self.rv.vel, dt, w=self.rv.w, h=self.rv.h)
+            desired_vel = pygame.Vector2(self.rv.vel)
+            try:
+                desired_step = float((pygame.Vector2(desired_vel) * float(dt)).length())
+            except Exception:
+                desired_step = 0.0
+            # Driving collision: use a stable axis-aligned collider (swap on near-vertical)
+            # instead of the rotated AABB, which becomes overly conservative at ~45° and
+            # makes vehicles feel like they hit buildings too early.
+            try:
+                cw = int(max(2, int(getattr(self.rv, "w", 0))))
+                ch = int(max(2, int(getattr(self.rv, "h", 0))))
+                # Allow per-model driving collider (e.g. RV uses a smaller box to avoid
+                # feeling blocked by dense city building facades while keeping a big footprint
+                # for its interior stamping).
+                try:
+                    dc = getattr(model, "drive_collider", None)
+                    if isinstance(dc, tuple) and len(dc) == 2:
+                        dcw, dch = int(dc[0]), int(dc[1])
+                        if dcw > 0 and dch > 0:
+                            cw = int(max(2, min(int(cw), int(dcw))))
+                            ch = int(max(2, min(int(ch), int(dch))))
+                except Exception:
+                    pass
+                heading = float(getattr(self.rv, "heading", 0.0))
+                c = abs(float(math.cos(float(heading))))
+                s = abs(float(math.sin(float(heading))))
+                ratio = float(s / max(1e-6, c))
+                axis = int(getattr(self, "_rv_drive_axis", 0))  # 0=horiz, 1=vert
+                if axis == 0:
+                    if ratio > 1.18:
+                        axis = 1
+                else:
+                    if ratio < 0.85:
+                        axis = 0
+                self._rv_drive_axis = int(axis)
+                if axis == 1:
+                    vw, vh = int(ch), int(cw)
+                else:
+                    vw, vh = int(cw), int(ch)
+            except Exception:
+                vw = int(max(2, int(getattr(self.rv, "w", 0))))
+                vh = int(max(2, int(getattr(self.rv, "h", 0))))
+            self.rv.pos = self._move_box_vehicle(self.rv.pos, self.rv.vel, dt, w=vw, h=vh)
             moved = pygame.Vector2(self.rv.pos) - before
+            dist = float(moved.length())
             if dt > 0.0:
                 self.rv.vel = moved / float(dt)
-            dist = float(moved.length())
+                # If we hit something, the kinematic model will keep "pushing" unless we
+                # sync the signed speed to the *actual* movement. This prevents the
+                # spin-in-place exploit that can creep vehicles through walls/buildings.
+                # BUT: vehicle movement is quantized to pixels for crisp rendering. If we always
+                # sync speed to the quantized movement, braking/accel will feel "steppy" and
+                # can even get stuck at exactly 60px/s (1px per frame). Only sync when we were
+                # meaningfully blocked (i.e., forward progress is much less than intended).
+                try:
+                    desired_fwd_step = float(abs(float(speed)) * float(dt))
+                    actual_fwd_step = float(abs(float(moved.dot(forward1))))
+                except Exception:
+                    desired_fwd_step = float(desired_step)
+                    actual_fwd_step = float(dist)
+                if float(desired_fwd_step) >= 0.51 and (float(actual_fwd_step) + 0.15) < float(desired_fwd_step):
+                    try:
+                        self.rv.speed = float(clamp(float(self.rv.vel.dot(forward1)), -max_rev, max_fwd))
+                    except Exception:
+                        pass
             if dist > 0.001:
                 self.rv.fuel = max(0.0, float(self.rv.fuel) - dist * float(getattr(model, "fuel_per_px", 0.0125)))
             self.player.pos.update(self.rv.pos)
             self.player.vel.update(self.rv.vel)
             self.player.walk_phase *= 0.85
             self.player_sprinting = False
+
+            # If the player is clearly trying to move but the RV doesn't translate for a while,
+            # auto-unstuck to a nearby road-like tile so the vehicle never feels permanently dead.
+            try:
+                stuck_t = float(getattr(self, "_rv_stuck_t", 0.0))
+                trying = abs(float(throttle)) > 0.10
+                # Consider it "stuck" when the player intends meaningful movement this frame,
+                # but the quantized movement stays near-zero.
+                want_move = bool(trying and float(desired_step) >= 0.35)
+                if want_move and float(dist) <= 0.05:
+                    stuck_t += float(dt)
+                else:
+                    stuck_t = max(0.0, float(stuck_t) - float(dt) * 2.5)
+                if stuck_t >= 0.85:
+                    if self._rv_try_unstuck_nearby():
+                        self._set_hint("房车已脱困", seconds=0.9)
+                    stuck_t = 0.0
+                self._rv_stuck_t = float(stuck_t)
+            except Exception:
+                pass
         elif self.mount == "bike":
             base_speed = float(self._bike_base_speed())
             tx = int(math.floor(self.bike.pos.x / self.TILE_SIZE))       
@@ -20748,6 +21747,29 @@ class HardcoreSurvivalState(State):
 
         return best_chunk, best_bike, best_d2
 
+    def _find_nearest_parked_car(
+        self, *, radius_px: float
+    ) -> tuple["_Chunk | None", "_ParkedCar | None", float]:
+        cx, cy = self._player_chunk()
+        best_d2 = float(radius_px * radius_px)
+        best_car: HardcoreSurvivalState._ParkedCar | None = None
+        best_chunk: HardcoreSurvivalState._Chunk | None = None
+
+        for oy in (-1, 0, 1):
+            for ox in (-1, 0, 1):
+                chunk = self.world.get_chunk(cx + ox, cy + oy)
+                for car in getattr(chunk, "cars", []):
+                    pos = getattr(car, "pos", None)
+                    if pos is None:
+                        continue
+                    d2 = float((pygame.Vector2(pos) - self.player.pos).length_squared())
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        best_car = car
+                        best_chunk = chunk
+
+        return best_chunk, best_car, best_d2
+
     def _stash_personal_bike_as_parked(self) -> None:
         if not hasattr(self, "bike") or self.bike is None:
             return
@@ -20816,6 +21838,78 @@ class HardcoreSurvivalState(State):
                 dir=d,
                 frame=0,
                 fuel=float(getattr(self.bike, "fuel", 0.0)),
+            )
+        )
+
+    def _stash_personal_car_as_parked(self) -> None:
+        if not hasattr(self, "rv") or self.rv is None:
+            return
+        mid = str(getattr(self.rv, "model_id", "rv"))
+        pos = pygame.Vector2(self.rv.pos)
+        heading = float(getattr(self.rv, "heading", 0.0))
+        fuel = float(getattr(self.rv, "fuel", 0.0))
+
+        def rect_at(p: pygame.Vector2) -> pygame.Rect:
+            return self._rv_collider_rect_at(p)
+
+        def inside_any_building(tx: int, ty: int) -> bool:
+            ch = self.world.get_chunk(int(tx) // self.CHUNK_SIZE, int(ty) // self.CHUNK_SIZE)
+            for bx0, by0, bw, bh, _roof_kind, _floors in getattr(ch, "buildings", []):
+                if int(bx0) <= int(tx) < int(bx0) + int(bw) and int(by0) <= int(ty) < int(by0) + int(bh):
+                    return True
+            return False
+
+        tx0 = int(math.floor(pos.x / self.TILE_SIZE))
+        ty0 = int(math.floor(pos.y / self.TILE_SIZE))
+
+        saved_mount = getattr(self, "mount", None)
+        try:
+            # Ignore self-car collision when checking for a safe parked spot.
+            self.mount = "rv"
+            if inside_any_building(tx0, ty0) or self._collide_rect_world_vehicle(rect_at(pos)):
+                found: pygame.Vector2 | None = None
+                search_r = 10
+                for r in range(int(search_r) + 1):
+                    for dy in range(-int(r), int(r) + 1):
+                        for dx in range(-int(r), int(r) + 1):
+                            if max(abs(int(dx)), abs(int(dy))) != int(r):
+                                continue
+                            tx = int(tx0 + int(dx))
+                            ty = int(ty0 + int(dy))
+                            if inside_any_building(tx, ty):
+                                continue
+                            p = pygame.Vector2(
+                                (float(tx) + 0.5) * float(self.TILE_SIZE),
+                                (float(ty) + 0.5) * float(self.TILE_SIZE),
+                            )
+                            if self._collide_rect_world_vehicle(rect_at(p)):
+                                continue
+                            found = p
+                            break
+                        if found is not None:
+                            break
+                    if found is not None:
+                        break
+                if found is None:
+                    return
+                pos = found
+        finally:
+            self.mount = saved_mount
+
+        tx = int(math.floor(pos.x / self.TILE_SIZE))
+        ty = int(math.floor(pos.y / self.TILE_SIZE))
+        chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
+        for pc in getattr(chunk, "cars", []):
+            if (pygame.Vector2(getattr(pc, "pos", pos)) - pos).length_squared() <= (8.0 * 8.0):
+                return
+        chunk.cars.append(
+            HardcoreSurvivalState._ParkedCar(
+                pos=pos,
+                model_id=mid,
+                heading=float(heading),
+                steer_state=0,
+                frame=0,
+                fuel=float(fuel),
             )
         )
 
@@ -21565,6 +22659,9 @@ class HardcoreSurvivalState(State):
             int(self.T_CHAIR),
             int(self.T_PC),
             int(self.T_LAMP),
+            int(self.T_SWITCH),
+            int(self.T_TOILET),
+            int(self.T_SINK),
         }
 
         carry = getattr(self, "home_move_carry", None)
@@ -21693,6 +22790,9 @@ class HardcoreSurvivalState(State):
         if action == "tv":
             self._try_watch_tv_world()
             return
+        if action == "drive":
+            self._rv_world_try_drive_from_anywhere()
+            return
         if action == "water":
             if not self._fill_sink_water_world_at(int(tx), int(ty)):
                 self._set_hint("靠近水龙头", seconds=0.9)
@@ -21736,7 +22836,9 @@ class HardcoreSurvivalState(State):
         ptx, pty = self._player_tile()
         if abs(int(tx) - int(ptx)) > 1 or abs(int(ty) - int(pty)) > 1:
             return False
-        if not self._tile_in_home_world(int(tx), int(ty)):
+        in_home = bool(self._tile_in_home_world(int(tx), int(ty)))
+        in_rv = bool(self._tile_in_rv_world(int(tx), int(ty)))
+        if not (in_home or in_rv):
             return False
         if int(self.world.get_tile(int(tx), int(ty))) != int(self.T_TOILET):
             return False
@@ -21916,6 +23018,9 @@ class HardcoreSurvivalState(State):
             key = str(key)
 
             if key == "life":
+                if str(getattr(self.rv, "model_id", "rv")) != "rv":
+                    self._set_hint("只有房车能进内部", seconds=1.0)
+                    return True
                 if bool(getattr(self, "rv_world_interior", False)):
                     return True
                 if getattr(self, "mount", None) == "rv":
@@ -21938,14 +23043,14 @@ class HardcoreSurvivalState(State):
                     self._set_hint("靠近房车", seconds=0.9)
                     return True
                 if int(self.inventory.count("key_rv")) <= 0:
-                    self._set_hint("Need: RV key", seconds=1.1)
+                    self._set_hint("需要车钥匙", seconds=1.1)
                     return True
                 self.mount = "rv"
                 self.rv.vel.update(0, 0)
                 self.rv.speed = 0.0
                 self.player.pos.update(self.rv.pos)
                 self.player.vel.update(0, 0)
-                self._set_hint("Drive", seconds=0.9)
+                self._set_hint("开始驾驶", seconds=0.9)
                 return True
 
             return True
@@ -24260,13 +25365,13 @@ class HardcoreSurvivalState(State):
             best.stagger_left = max(float(getattr(best, "stagger_left", 0.0)), float(self._PUNCH_STAGGER_S))
             best.stagger_vel = pygame.Vector2(pdir) * float(self._PUNCH_STAGGER_SPEED)
         else:
-            self._on_zombie_killed(best)
+            self._kill_zombie(best, impact_dir=pdir)
 
         self._spawn_hit_fx(pygame.Vector2(best.pos), dir=pdir)
         self.app.play_sfx("hit")
         self.noise_left = max(float(getattr(self, "noise_left", 0.0)), 0.22)
         self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), 120.0)
-        self.zombies = [z for z in self.zombies if int(z.hp) > 0]
+        # Zombies become corpses (decay later) instead of being removed immediately.
 
     def _spawn_hit_fx(self, pos: pygame.Vector2, *, dir: pygame.Vector2) -> None:
         pos = pygame.Vector2(pos)
@@ -24330,6 +25435,7 @@ class HardcoreSurvivalState(State):
 
     def _toggle_vehicle(self) -> None:
         if self.mount is not None:
+            mount_kind = str(self.mount)
             if self.mount == "rv":
                 vehicle_pos = pygame.Vector2(self.rv.pos)
                 vw, vh = float(self.rv.w), float(self.rv.h)
@@ -24341,21 +25447,86 @@ class HardcoreSurvivalState(State):
                 vw, vh = float(self.bike.w), float(self.bike.h)
                 self.bike.vel.update(0, 0)
 
-            exits = [
-                pygame.Vector2(vw / 2 + self.player.w / 2 + 4, 0),
-                pygame.Vector2(-(vw / 2 + self.player.w / 2 + 4), 0),
-                pygame.Vector2(0, vh / 2 + float(getattr(self.player, "collider_h", self.player.h)) / 2 + 4),
-                pygame.Vector2(0, -(vh / 2 + float(getattr(self.player, "collider_h", self.player.h)) / 2 + 4)),
-            ]
+            # Dismount: choose a nearby free spot. RV uses heading-relative exits so the
+            # player doesn't overlap the rotated sprite.
+            ph = float(max(int(self.player.w), int(getattr(self.player, "collider_h", self.player.h)))) / 2.0
+            if self.mount == "rv":
+                heading = float(getattr(self.rv, "heading", 0.0))
+                fwd = pygame.Vector2(math.cos(float(heading)), math.sin(float(heading)))
+                if fwd.length_squared() < 0.001:
+                    fwd = pygame.Vector2(1, 0)
+                fwd = fwd.normalize()
+                right = pygame.Vector2(-float(fwd.y), float(fwd.x))
+                side_margin = float(vh) / 2.0 + float(ph) + 8.0
+                fwd_margin = float(vw) / 2.0 + float(ph) + 8.0
+                exits = [
+                    right * float(side_margin),
+                    -right * float(side_margin),
+                    fwd * float(fwd_margin),
+                    -fwd * float(fwd_margin),
+                ]
+            else:
+                exits = [
+                    pygame.Vector2(vw / 2 + float(ph) + 4, 0),
+                    pygame.Vector2(-(vw / 2 + float(ph) + 4), 0),
+                    pygame.Vector2(0, vh / 2 + float(ph) + 4),
+                    pygame.Vector2(0, -(vh / 2 + float(ph) + 4)),
+                ]
+
+            # Treat the vehicle as solid (as it will be after dismount) while searching.
+            self.mount = None
             placed = False
+            # Prevent dismount/teleporting through walls: require the path from the
+            # vehicle center to the exit point to be unobstructed (except for the vehicle itself).
+            ignore_rect: pygame.Rect | None = None
+            try:
+                if str(mount_kind) == "rv":
+                    ignore_rect = self._rv_collider_rect_at(vehicle_pos)
+                elif str(mount_kind) == "bike":
+                    ignore_rect = pygame.Rect(
+                        iround(float(vehicle_pos.x) - float(vw) / 2.0),
+                        iround(float(vehicle_pos.y) - float(vh) / 2.0),
+                        int(vw),
+                        int(vh),
+                    )
+            except Exception:
+                ignore_rect = None
+
+            def path_clear(dst: pygame.Vector2) -> bool:
+                try:
+                    a = pygame.Vector2(vehicle_pos)
+                    b = pygame.Vector2(dst)
+                    d = b - a
+                    dist = float(d.length())
+                    if dist <= 0.5:
+                        return True
+                    step_len = max(1.0, float(self.TILE_SIZE) / 4.0)
+                    steps = int(clamp(int(math.ceil(dist / step_len)), 1, 80))
+                    for i in range(1, int(steps) + 1):
+                        t = float(i) / float(steps)
+                        p2 = a + d * t
+                        hits = self._collide_rect_world(self.player.rect_at(p2))
+                        if not hits:
+                            continue
+                        for hh in hits:
+                            if ignore_rect is not None and hh == ignore_rect:
+                                continue
+                            return False
+                    return True
+                except Exception:
+                    return False
+
             for off in exits:
                 p = vehicle_pos + off
-                if not self._collide_rect_world(self.player.rect_at(p)):
+                if not self._collide_rect_world(self.player.rect_at(p)) and path_clear(p):
                     self.player.pos.update(p)
                     placed = True
                     break
             if not placed:
-                self.player.pos.update(vehicle_pos + pygame.Vector2(vw / 2 + 12, 0))
+                self.mount = mount_kind
+                self.player.pos.update(vehicle_pos)
+                self._set_hint("下车位置被挡住", seconds=1.0)
+                return
 
             self.mount = None
             self._set_hint("下车")
@@ -24364,22 +25535,102 @@ class HardcoreSurvivalState(State):
         rv_d2 = float((self.player.pos - self.rv.pos).length_squared())
         bike_d2 = float((self.player.pos - self.bike.pos).length_squared())
         parked_chunk, parked_bike, parked_d2 = self._find_nearest_parked_bike(radius_px=18.0)
+        # Cars are large; use a bigger pickup radius than bikes so you can interact near the doors.
+        parked_car_chunk, parked_car, parked_car_d2 = self._find_nearest_parked_car(radius_px=70.0)
         try:
             pad = 22
             can_rv = bool(
-                self.rv.rect()
+                self._rv_collider_rect_at()
                 .inflate(int(pad * 2), int(pad * 2))
                 .collidepoint(int(round(float(self.player.pos.x))), int(round(float(self.player.pos.y))))
             )
         except Exception:
             can_rv = rv_d2 <= (22.0 * 22.0)
         can_bike = bike_d2 <= (18.0 * 18.0)
-        can_parked = parked_bike is not None and parked_chunk is not None
-        if not can_rv and not can_bike and not can_parked:
+        can_parked_bike = parked_bike is not None and parked_chunk is not None
+        can_parked_car = parked_car is not None and parked_car_chunk is not None
+        if not can_rv and not can_bike and not can_parked_bike and not can_parked_car:
             self._set_hint("离载具太远")
             return
 
-        if can_parked and (not can_rv or parked_d2 <= rv_d2) and (not can_bike or parked_d2 < bike_d2):
+        # Choose the nearest available vehicle (parked beats personal when closer).
+        choice: tuple[str, float] | None = None
+        for kind, ok, d2 in (
+            ("parked_car", bool(can_parked_car), float(parked_car_d2)),
+            ("parked_bike", bool(can_parked_bike), float(parked_d2)),
+            ("bike", bool(can_bike), float(bike_d2)),
+            ("car", bool(can_rv), float(rv_d2)),
+        ):
+            if not ok:
+                continue
+            if choice is None or float(d2) < float(choice[1]):
+                choice = (str(kind), float(d2))
+        if choice is None:
+            self._set_hint("离载具太远")
+            return
+        pick = str(choice[0])
+
+        if pick == "parked_car":
+            pc = parked_car
+            if pc is None or parked_car_chunk is None:
+                self._set_hint("离载具太远")
+                return
+            # Need to be actually close to the car, not just within the scan radius.
+            try:
+                pad = 22
+                wpos = pygame.Vector2(getattr(pc, "pos", self.player.pos))
+                mid = str(getattr(pc, "model_id", "rv"))
+                cmodel = self._CAR_MODELS.get(str(mid)) or self._CAR_MODELS.get("rv")
+                cw, ch = (cmodel.collider if cmodel is not None else (22, 14))
+                chead = float(getattr(pc, "heading", 0.0))
+                c = abs(math.cos(float(chead)))
+                s = abs(math.sin(float(chead)))
+                ww = float(cw) * c + float(ch) * s
+                hh = float(cw) * s + float(ch) * c
+                aabb = pygame.Rect(
+                    iround(float(wpos.x) - float(ww) / 2.0),
+                    iround(float(wpos.y) - float(hh) / 2.0),
+                    int(max(2, int(round(float(ww))))),
+                    int(max(2, int(round(float(hh))))),
+                )
+                near = bool(
+                    aabb.inflate(int(pad * 2), int(pad * 2)).collidepoint(
+                        int(round(float(self.player.pos.x))), int(round(float(self.player.pos.y)))
+                    )
+                )
+            except Exception:
+                near = (self.player.pos - pygame.Vector2(getattr(pc, "pos", self.player.pos))).length_squared() <= (22.0 * 22.0)
+            if not near:
+                self._set_hint("靠近后: F 开车", seconds=1.0)
+                return
+            if int(self.inventory.count("key_rv")) <= 0:
+                self._set_hint("需要车钥匙", seconds=1.1)
+                return
+            try:
+                self._stash_personal_car_as_parked()
+            except Exception:
+                pass
+            self.rv.pos.update(pygame.Vector2(getattr(pc, "pos", self.player.pos)))
+            self.rv.vel.update(0, 0)
+            self.rv.model_id = str(getattr(pc, "model_id", "rv"))
+            self.rv.fuel = float(getattr(pc, "fuel", 0.0))
+            self.rv.heading = float(getattr(pc, "heading", 0.0))
+            self.rv.speed = 0.0
+            self.rv.steer = 0.0
+            self._apply_rv_model()
+            try:
+                parked_car_chunk.cars.remove(pc)
+            except Exception:
+                pass
+            self.mount = "rv"
+            self.player.pos.update(self.rv.pos)
+            self.player.vel.update(0, 0)
+            model = self._CAR_MODELS.get(str(self.rv.model_id))
+            name = model.name if model is not None else str(self.rv.model_id)
+            self._set_hint(f"上车：{name}", seconds=1.0)
+            return
+
+        if pick == "parked_bike":
             # Take a parked two-wheeler (including motorcycles) and mount it.
             pb = parked_bike
             pb_mid = str(getattr(pb, "model_id", "bike")) if pb is not None else "bike"
@@ -24406,7 +25657,7 @@ class HardcoreSurvivalState(State):
             self._set_hint(f"骑上 {self._two_wheel_name(self.bike.model_id)}")
             return
 
-        if can_bike and (not can_rv or bike_d2 <= rv_d2):
+        if pick == "bike":
             mid = str(getattr(self.bike, "model_id", "bike"))
             if mid.startswith("moto") and int(self.inventory.count("key_moto")) <= 0:
                 self._set_hint("需要摩托钥匙", seconds=1.1)
@@ -24416,18 +25667,16 @@ class HardcoreSurvivalState(State):
             self._set_hint(f"骑上 {self._two_wheel_name(getattr(self.bike, 'model_id', 'bike'))}")
             return
 
-        # RV: enter world-interior first (life mode). Driving remains key-gated below.
-        if not bool(getattr(self, "rv_world_interior", False)):
-            self._rv_world_interior_enter()
-            if bool(getattr(self, "rv_world_interior", False)):
-                return
+        # Car (personal): F is always mount/drive. Use H to enter the RV interior.
 
         if int(self.inventory.count("key_rv")) <= 0:
-            self._set_hint("需要房车钥匙", seconds=1.1)
+            self._set_hint("需要车钥匙", seconds=1.1)
             return
         self.mount = "rv"
         self.player.pos.update(self.rv.pos)
-        self._set_hint("上房车")
+        model = self._CAR_MODELS.get(str(getattr(self.rv, "model_id", "rv")))
+        name = model.name if model is not None else str(getattr(self.rv, "model_id", "rv"))
+        self._set_hint(f"上车：{name}", seconds=1.0)
 
     def _compute_aim_dir(self) -> pygame.Vector2:
         m = self.app.screen_to_internal(pygame.mouse.get_pos())
@@ -24550,6 +25799,8 @@ class HardcoreSurvivalState(State):
 
             hit = False
             for z in self.zombies:
+                if int(getattr(z, "hp", 0)) <= 0:
+                    continue
                 if z.rect().collidepoint(int(round(b.pos.x)), int(round(b.pos.y))):
                     z.hp = int(z.hp) - int(b.dmg)
                     if int(z.hp) > 0:
@@ -24557,14 +25808,142 @@ class HardcoreSurvivalState(State):
                         if b.vel.length_squared() > 0.1:
                             z.stagger_vel = pygame.Vector2(b.vel).normalize() * 85.0
                     else:
-                        self._on_zombie_killed(z)
+                        self._kill_zombie(z, impact_dir=pygame.Vector2(b.vel))
                     hit = True
                     break
             if hit:
                 continue
             alive.append(b)
         self.bullets = alive
-        self.zombies = [z for z in self.zombies if int(z.hp) > 0]
+        # Zombies become corpses (decay later) instead of being removed immediately.
+
+    def _kill_zombie(self, z: "HardcoreSurvivalState._Zombie", *, impact_dir: pygame.Vector2 | None = None) -> None:
+        # Convert a zombie into a corpse that slowly decays away.
+        try:
+            if int(getattr(z, "hp", 0)) <= 0 and float(getattr(z, "corpse_left", 0.0)) > 0.0:
+                return
+        except Exception:
+            pass
+
+        try:
+            z.hp = 0
+        except Exception:
+            return
+
+        try:
+            z.vel.update(0, 0)
+        except Exception:
+            z.vel = pygame.Vector2(0, 0)
+        try:
+            z.stagger_left = 0.0
+            z.stagger_vel.update(0, 0)
+        except Exception:
+            pass
+
+        try:
+            z.death_t = 0.0
+            total = float(getattr(self, "_ZOMBIE_CORPSE_TOTAL_S", 14.0))
+            z.corpse_total = float(total)
+            z.corpse_left = float(total)
+        except Exception:
+            pass
+
+        # Orient the corpse based on the impact direction (purely visual).
+        try:
+            if isinstance(impact_dir, pygame.Vector2) and impact_dir.length_squared() > 0.001:
+                v = pygame.Vector2(impact_dir)
+                if abs(float(v.x)) >= abs(float(v.y)):
+                    z.dir = "right" if float(v.x) >= 0 else "left"
+                else:
+                    z.dir = "down" if float(v.y) >= 0 else "up"
+        except Exception:
+            pass
+
+        self._on_zombie_killed(z)
+
+    def _push_corpse_off_vehicle(
+        self,
+        z: "HardcoreSurvivalState._Zombie",
+        *,
+        vehicle_rect: pygame.Rect,
+        dir_vec: pygame.Vector2,
+    ) -> None:
+        """Prevent vehicle-killed corpses from sitting on top of the vehicle."""
+        try:
+            if int(getattr(z, "hp", 0)) > 0:
+                return
+            if float(getattr(z, "corpse_left", 0.0)) <= 0.0:
+                return
+        except Exception:
+            return
+
+        try:
+            if not z.rect().colliderect(vehicle_rect):
+                return
+        except Exception:
+            return
+
+        base = pygame.Vector2(getattr(z, "pos", pygame.Vector2(0, 0)))
+        try:
+            d = pygame.Vector2(dir_vec)
+            if d.length_squared() <= 0.001:
+                d = pygame.Vector2(1, 0)
+            else:
+                d = d.normalize()
+        except Exception:
+            d = pygame.Vector2(1, 0)
+        right = pygame.Vector2(-float(d.y), float(d.x))
+
+        # Prefer pushing forward far enough to clear the vehicle AABB.
+        try:
+            push = float(max(int(vehicle_rect.w), int(vehicle_rect.h))) * 0.55 + 10.0
+        except Exception:
+            push = 58.0
+        push = float(clamp(push, 24.0, 140.0))
+
+        offsets = [
+            d * push,
+            d * push + right * 14.0,
+            d * push - right * 14.0,
+            d * (push * 1.25),
+            right * (push * 0.55),
+            -right * (push * 0.55),
+        ]
+
+        for off in offsets:
+            try:
+                cand = pygame.Vector2(base) + pygame.Vector2(off)
+                tx = int(math.floor(float(cand.x) / float(self.TILE_SIZE)))
+                ty = int(math.floor(float(cand.y) / float(self.TILE_SIZE)))
+                tid = int(self.world.get_tile(int(tx), int(ty)))
+                if bool(self._tile_solid(int(tid))):
+                    continue
+                z.pos.update(cand)
+                if not z.rect().colliderect(vehicle_rect):
+                    return
+            except Exception:
+                continue
+
+        # Last resort: march forward until clear.
+        try:
+            for i in range(1, 30):
+                cand = pygame.Vector2(base) + d * float(push + i * 6.0)
+                tx = int(math.floor(float(cand.x) / float(self.TILE_SIZE)))
+                ty = int(math.floor(float(cand.y) / float(self.TILE_SIZE)))
+                tid = int(self.world.get_tile(int(tx), int(ty)))
+                if bool(self._tile_solid(int(tid))):
+                    continue
+                z.pos.update(cand)
+                if not z.rect().colliderect(vehicle_rect):
+                    return
+        except Exception:
+            pass
+
+        # Restore if we couldn't find a better spot.
+        try:
+            z.pos.update(base)
+        except Exception:
+            pass
 
     def _drop_world_item(self, pos: pygame.Vector2, item_id: str, qty: int) -> None:
         item_id = str(item_id)
@@ -24710,15 +26089,79 @@ class HardcoreSurvivalState(State):
         except Exception:
             suppress_gather = False
 
+        # Update corpse decay + vehicle-hit cooldown, and drop fully decayed corpses.
+        if self.zombies:
+            kept: list[HardcoreSurvivalState._Zombie] = []
+            for z in self.zombies:
+                try:
+                    z.vehicle_hit_left = max(0.0, float(getattr(z, "vehicle_hit_left", 0.0)) - dt)
+                except Exception:
+                    pass
+
+                if int(getattr(z, "hp", 0)) > 0:
+                    kept.append(z)
+                    continue
+
+                corpse_left = float(getattr(z, "corpse_left", 0.0))
+                if corpse_left <= 0.0:
+                    continue
+                try:
+                    z.corpse_left = max(0.0, float(corpse_left) - dt)
+                    z.death_t = float(getattr(z, "death_t", 0.0)) + dt
+                except Exception:
+                    pass
+                if float(getattr(z, "corpse_left", 0.0)) > 0.0:
+                    kept.append(z)
+            self.zombies = kept
+
+        # Vehicle collision: drive into zombies to damage/kill them (they become corpses).
+        try:
+            if self.mount == "rv" and self.zombies:
+                v = pygame.Vector2(getattr(self.rv, "vel", pygame.Vector2(0, 0)))
+                spd = float(v.length())
+                if spd >= 12.0:
+                    vrect = self._rv_collider_rect_at()
+                    hitrect = vrect.inflate(-max(0, int(vrect.w // 4)), -max(0, int(vrect.h // 4)))
+                    if hitrect.w <= 0 or hitrect.h <= 0:
+                        hitrect = vrect
+                    dir_vec = v.normalize() if v.length_squared() > 0.001 else pygame.Vector2(1, 0)
+                    hit_cd = float(getattr(self, "_ZOMBIE_VEHICLE_HIT_CD_S", 0.18))
+                    for z in self.zombies:
+                        if int(getattr(z, "hp", 0)) <= 0:
+                            continue
+                        if float(getattr(z, "vehicle_hit_left", 0.0)) > 0.0:
+                            continue
+                        if hitrect.colliderect(z.rect()):
+                            z.vehicle_hit_left = float(hit_cd)
+                            dmg = int(clamp(spd * 0.45, 10.0, 120.0))
+                            z.hp = int(z.hp) - int(dmg)
+                            if int(z.hp) <= 0:
+                                self._kill_zombie(z, impact_dir=v)
+                                try:
+                                    self._push_corpse_off_vehicle(z, vehicle_rect=vrect, dir_vec=dir_vec)
+                                except Exception:
+                                    pass
+                            else:
+                                z.stagger_left = max(float(getattr(z, "stagger_left", 0.0)), 0.22)
+                                z.stagger_vel = pygame.Vector2(dir_vec) * min(260.0, spd * 1.35)
+                                self._spawn_hit_fx(pygame.Vector2(z.pos), dir=dir_vec)
+        except Exception:
+            pass
+
         cap = max(0, int(getattr(self, "zombie_cap", 8)))
         if cap <= 0:
             return
+
+        alive_n = 0
+        for z in self.zombies:
+            if int(getattr(z, "hp", 0)) > 0:
+                alive_n += 1
 
         self.spawn_left -= dt
         if suppress_gather:
             # High floors shouldn't endlessly pull/spawn hordes at the building base.
             self.spawn_left = max(float(self.spawn_left), 3.0)
-        elif self.spawn_left <= 0.0 and len(self.zombies) < cap:
+        elif self.spawn_left <= 0.0 and int(alive_n) < int(cap):
             tx = int(math.floor(target.x / self.TILE_SIZE))
             ty = int(math.floor(target.y / self.TILE_SIZE))
             chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
@@ -24727,6 +26170,11 @@ class HardcoreSurvivalState(State):
             spawn_n = 1
             for _ in range(spawn_n):
                 self._spawn_one_zombie(target, in_town=in_town)
+                # Re-count alive zombies so corpses don't block spawns.
+                alive_n = 0
+                for zz in self.zombies:
+                    if int(getattr(zz, "hp", 0)) > 0:
+                        alive_n += 1
 
         if getattr(self, "zombie_frozen", False):
             for z in self.zombies:
@@ -24734,6 +26182,8 @@ class HardcoreSurvivalState(State):
             return
 
         for z in self.zombies:
+            if int(getattr(z, "hp", 0)) <= 0:
+                continue
             kind = str(getattr(z, "kind", "walker"))
             mdef = self._MONSTER_DEFS.get(kind, self._MONSTER_DEFS["walker"])
 
@@ -24762,11 +26212,18 @@ class HardcoreSurvivalState(State):
             if alerted:
                 if kind == "screamer" and float(z.scream_left) <= 0.0 and d2 <= float(mdef.scream_radius) ** 2:
                     z.scream_left = float(mdef.scream_cd)
-                    if len(self.zombies) < cap:
+                    if int(alive_n) < int(cap):
                         for _ in range(int(mdef.scream_spawn)):
-                            if len(self.zombies) >= cap:
+                            if int(alive_n) >= int(cap):
                                 break
                             self._spawn_one_zombie(target, in_town=True)
+                            before = int(alive_n)
+                            alive_n = 0
+                            for zz in self.zombies:
+                                if int(getattr(zz, "hp", 0)) > 0:
+                                    alive_n += 1
+                            if int(alive_n) <= int(before):
+                                break
                     self._set_hint("尖叫声……更多怪物来了！", seconds=1.3)
 
                 if d2 > 1.0:
@@ -25693,7 +27150,7 @@ class HardcoreSurvivalState(State):
                 rv_clips.append(pygame.Rect(panel.right, panel.top, INTERNAL_W - panel.right, panel.h))
 
             # Let precipitation be visible through RV windows (clipped to glass).
-            layout = getattr(self, "rv_int_layout", self._RV_INT_LAYOUT)
+            layout = self._vehicle_int_layout()
             if isinstance(layout, list):
                 for y, row in enumerate(layout):
                     for x in range(min(len(row), int(getattr(self, "_RV_INT_W", 21)))):
@@ -25888,6 +27345,7 @@ class HardcoreSurvivalState(State):
             int(self.T_PC),
             int(self.T_LAMP),
             int(self.T_SWITCH),
+            int(self.T_STEER),
             int(self.T_TOILET),
             int(self.T_ELEVATOR),
             int(self.T_BARRICADE),
@@ -26028,6 +27486,7 @@ class HardcoreSurvivalState(State):
                 int(self.T_PC),
                 int(self.T_LAMP),
                 int(self.T_SWITCH),
+                int(self.T_STEER),
                 int(self.T_TOILET),
                 int(self.T_SINK),
             ):
@@ -26077,6 +27536,7 @@ class HardcoreSurvivalState(State):
                             int(self.T_PC),
                             int(self.T_LAMP),
                             int(self.T_SWITCH),
+                            int(self.T_STEER),
                             int(self.T_TOILET),
                             int(self.T_SINK),
                         ):
@@ -26097,8 +27557,7 @@ class HardcoreSurvivalState(State):
                         relx = int(tx) - int(rx0)
                         rely = int(ty) - int(ry0)
                         if int(relx) in (0, int(rw) - 1) or int(rely) in (0, int(rh) - 1):
-                            base = self._tint(self._tile_color(int(self.T_FLOOR)), add=(-18, -18, -18))
-                            surface.fill(base, rect)
+                            surface.fill(self._tile_color(int(self.T_FLOOR)), rect)
                             line = (10, 10, 12)
                             if int(rely) == 0:
                                 surface.fill(line, pygame.Rect(rect.x, rect.y, rect.w, 1))
@@ -26111,8 +27570,20 @@ class HardcoreSurvivalState(State):
                             return
         except Exception:
             pass
+
         col = self._tile_color(tile_id)
         surface.fill(col, rect)
+        # RV world-interior: keep the interior floor perfectly flat (no noise/grit),
+        # so it reads as a single uniform color.
+        try:
+            if bool(getattr(self, "rv_world_interior", False)) and int(tile_id) == int(self.T_FLOOR):
+                key = getattr(self, "_rv_world_int_active_key", None)
+                if isinstance(key, tuple) and len(key) == 4:
+                    rx0, ry0, rw, rh = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+                    if int(rx0) <= int(tx) < int(rx0) + int(rw) and int(ry0) <= int(ty) < int(ry0) + int(rh):
+                        return
+        except Exception:
+            pass
 
         seed = int(self.seed) ^ (tile_id * 0x9E3779B9) ^ 0xB5297A4D
         h = int(self._hash2_u32(tx, ty, seed))
@@ -26342,6 +27813,7 @@ class HardcoreSurvivalState(State):
             self.T_SWITCH,
             self.T_TOILET,
             self.T_SINK,
+            self.T_STEER,
         ):
             outline = (10, 10, 12)
             hi = self._tint(col, add=(24, 24, 26))
@@ -26498,6 +27970,33 @@ class HardcoreSurvivalState(State):
                 dot = pygame.Rect(plate.centerx - 1, plate.centery - 1, 3, 3)
                 surface.fill((120, 200, 140) if on else (220, 90, 70), dot)
                 pygame.draw.rect(surface, outline, dot, 1)
+            elif tile_id == self.T_STEER:
+                # Steering wheel (cockpit). Used in the RV world-interior.
+                cx, cy = int(rect.centerx), int(rect.centery)
+                outer = 4  # fits TILE_SIZE=10 with a 1px margin
+                wheel = (34, 34, 42)
+                wheel_hi = self._tint(wheel, add=(34, 34, 40))
+                wheel_lo = self._tint(wheel, add=(-18, -18, -18))
+                try:
+                    floor_col = self._tile_color(int(self.T_FLOOR))
+                except Exception:
+                    floor_col = (58, 56, 52)
+
+                # Outer ring + inner hole (so it reads as a wheel, not a blob).
+                pygame.draw.circle(surface, wheel, (cx, cy), int(outer))
+                pygame.draw.circle(surface, outline, (cx, cy), int(outer), 1)
+                pygame.draw.circle(surface, floor_col, (cx, cy), int(max(1, outer - 2)))
+
+                # Spokes + hub.
+                pygame.draw.line(surface, wheel_lo, (cx, cy), (cx, rect.y + 2), 1)
+                pygame.draw.line(surface, wheel_lo, (cx, cy), (rect.x + 2, cy + 1), 1)
+                pygame.draw.line(surface, wheel_lo, (cx, cy), (rect.right - 3, cy + 1), 1)
+                hub = pygame.Rect(cx - 1, cy - 1, 3, 3)
+                surface.fill(wheel_hi, hub)
+                pygame.draw.rect(surface, outline, hub, 1)
+
+                # Column hint (bottom).
+                surface.fill(wheel_lo, pygame.Rect(cx, cy + 2, 1, 2))
             elif tile_id == self.T_LAMP:
                 base = pygame.Rect(rect.centerx - 2, rect.bottom - 3, 4, 2)
                 stem = pygame.Rect(rect.centerx, rect.y + 4, 1, rect.h - 7)
@@ -26869,6 +28368,20 @@ class HardcoreSurvivalState(State):
                 return False
         return True
 
+    def _tile_in_rv_world(self, tx: int, ty: int) -> bool:
+        if not bool(getattr(self, "rv_world_interior", False)):
+            return False
+        key = getattr(self, "_rv_world_int_active_key", None)
+        if not (isinstance(key, tuple) and len(key) == 4):
+            return False
+        try:
+            rx0, ry0, rw, rh = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+        except Exception:
+            return False
+        tx = int(tx)
+        ty = int(ty)
+        return int(rx0) <= int(tx) < int(rx0) + int(rw) and int(ry0) <= int(ty) < int(ry0) + int(rh)
+
     def _world_tile_screen_rect(self, tx: int, ty: int, cam_x: int, cam_y: int) -> pygame.Rect:
         tx = int(tx)
         ty = int(ty)
@@ -26942,7 +28455,9 @@ class HardcoreSurvivalState(State):
         ptx, pty = self._player_tile()
         if abs(int(tx) - int(ptx)) > 1 or abs(int(ty) - int(pty)) > 1:
             return False
-        if not self._tile_in_home_world(int(tx), int(ty)):
+        in_home = bool(self._tile_in_home_world(int(tx), int(ty)))
+        in_rv = bool(self._tile_in_rv_world(int(tx), int(ty)))
+        if not (in_home or in_rv):
             return False
 
         movable = {
@@ -26956,10 +28471,17 @@ class HardcoreSurvivalState(State):
             int(self.T_CHAIR),
             int(self.T_PC),
             int(self.T_LAMP),
+            int(self.T_SWITCH),
+            int(self.T_TOILET),
+            int(self.T_SINK),
         }
         tid = int(self.world.get_tile(int(tx), int(ty)))
         if tid not in movable:
             return False
+        if in_rv:
+            fixed = getattr(self, "_rv_world_fixed_furniture", None)
+            if isinstance(fixed, set) and (int(tx), int(ty)) in fixed:
+                return False
 
         seen: set[tuple[int, int]] = set()
         stack = [(int(tx), int(ty))]
@@ -26971,17 +28493,37 @@ class HardcoreSurvivalState(State):
             if (cx, cy) in seen:
                 continue
             seen.add((cx, cy))
+            if in_rv:
+                if not self._tile_in_rv_world(int(cx), int(cy)):
+                    continue
+            else:
+                if not self._tile_in_home_world(int(cx), int(cy)):
+                    continue
             if int(self.world.get_tile(int(cx), int(cy))) != int(tid):
                 continue
+            if in_rv:
+                fixed = getattr(self, "_rv_world_fixed_furniture", None)
+                if isinstance(fixed, set) and (int(cx), int(cy)) in fixed:
+                    return False
             cells.append((int(cx), int(cy)))
             stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
 
         if not cells:
             return False
         offsets = [(int(cx - tx), int(cy - ty)) for cx, cy in cells]
-        self.home_move_carry = {"tid": int(tid), "offsets": offsets, "origin_cells": list(cells)}
+        space = "rv" if in_rv else "home"
+        self.home_move_carry = {"tid": int(tid), "offsets": offsets, "origin_cells": list(cells), "space": str(space)}
         for cx, cy in cells:
-            self._world_set_tile(int(cx), int(cy), int(self.T_FLOOR))
+            if in_rv:
+                base = getattr(self, "_rv_world_floor_base", None)
+                base_tid = None
+                if isinstance(base, dict):
+                    base_tid = base.get((int(cx), int(cy)))
+                if base_tid is None:
+                    base_tid = int(self.T_FLOOR)
+                self._world_set_tile(int(cx), int(cy), int(base_tid))
+            else:
+                self._world_set_tile(int(cx), int(cy), int(self.T_FLOOR))
         self._set_hint("搬运：左键放下 | 右键取消", seconds=1.4)
         return True
 
@@ -26994,14 +28536,29 @@ class HardcoreSurvivalState(State):
         if not isinstance(offsets, list) or tid <= 0:
             return False, []
 
+        space = str(carry.get("space", "home"))
+        if space not in ("home", "rv"):
+            space = "home"
         anchor_tx = int(anchor_tx)
         anchor_ty = int(anchor_ty)
         cells = [(int(anchor_tx + int(dx)), int(anchor_ty + int(dy))) for dx, dy in offsets]
         for tx, ty in cells:
-            if not self._tile_in_home_world(int(tx), int(ty)):
-                return False, cells
-            if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_FLOOR):
-                return False, cells
+            if space == "rv":
+                if not self._tile_in_rv_world(int(tx), int(ty)):
+                    return False, cells
+                base = getattr(self, "_rv_world_floor_base", None)
+                if not isinstance(base, dict):
+                    return False, cells
+                want = base.get((int(tx), int(ty)))
+                if want is None:
+                    return False, cells
+                if int(self.world.peek_tile(int(tx), int(ty))) != int(want):
+                    return False, cells
+            else:
+                if not self._tile_in_home_world(int(tx), int(ty)):
+                    return False, cells
+                if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_FLOOR):
+                    return False, cells
         return True, cells
 
     def _home_furniture_place_at(self, anchor_tx: int, anchor_ty: int) -> bool:
@@ -27102,6 +28659,7 @@ class HardcoreSurvivalState(State):
             (tx - 1, ty - 1),
         ]
         interact = {
+            int(self.T_TABLE),
             int(self.T_SOFA),
             int(self.T_CHAIR),
             int(self.T_BED),
@@ -27120,6 +28678,7 @@ class HardcoreSurvivalState(State):
             int(self.T_FRIDGE): 1,
             int(self.T_SHELF): 1,
             int(self.T_CABINET): 1,
+            int(self.T_TABLE): 1,
             int(self.T_SINK): 1,
             int(self.T_BED): 2,
             int(self.T_TOILET): 2,
@@ -27135,7 +28694,7 @@ class HardcoreSurvivalState(State):
             tid = int(self.world.get_tile(int(cx), int(cy)))
             if tid not in interact:
                 continue
-            if not self._tile_in_home_world(int(cx), int(cy)):
+            if not (self._tile_in_home_world(int(cx), int(cy)) or self._tile_in_rv_world(int(cx), int(cy))):
                 continue
             d = max(abs(int(cx) - int(tx)), abs(int(cy) - int(ty)))
             key = (int(pri.get(int(tid), 9)), int(d), int(cy), int(cx))
@@ -27197,18 +28756,22 @@ class HardcoreSurvivalState(State):
         elif int(tid) in (int(self.T_FRIDGE), int(self.T_SHELF), int(self.T_CABINET)):
             opts = [("打开", "open"), ("搬运", "move")]
         elif int(tid) == int(self.T_SINK):
-            opts = [("接水", "water")]
+            opts = [("接水", "water"), ("搬运", "move")]
+        elif int(tid) == int(self.T_TABLE):
+            opts = [("搬运", "move")]
         elif int(tid) == int(self.T_PC):
             opts = [("用电脑", "pc"), ("搬运", "move")]
+        elif int(tid) == int(self.T_STEER):
+            opts = [("开车", "drive")]
         elif int(tid) == int(self.T_TV):
             tv_on = bool(getattr(self, "world_tv_states", {}).get((int(cx), int(cy)), False))
             opts = [("关电视" if tv_on else "开电视", "tv"), ("搬运", "move")]
         elif int(tid) == int(self.T_LAMP):
             opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("设置", "lamp_cfg"), ("搬运", "move")]
         elif int(tid) == int(self.T_SWITCH):
-            opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("设置", "lamp_cfg")]
+            opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("设置", "lamp_cfg"), ("搬运", "move")]
         elif int(tid) == int(self.T_TOILET):
-            opts = [("小便", "pee"), ("大便", "poop")]
+            opts = [("小便", "pee"), ("大便", "poop"), ("搬运", "move")]
         if not opts:
             return
 
@@ -27356,7 +28919,36 @@ class HardcoreSurvivalState(State):
                         if rect.collidepoint(mx, my):
                             model = self._CAR_MODELS.get(str(mid))
                             name = model.name if model is not None else str(mid)
-                            lines = [f"{name}", "类型: 载具(停放)"]
+                            wpos = pygame.Vector2(getattr(car, "pos", pygame.Vector2(0, 0)))
+                            try:
+                                pad = 22
+                                cmodel = self._CAR_MODELS.get(str(mid)) or self._CAR_MODELS.get("rv")
+                                cw, ch = (cmodel.collider if cmodel is not None else (22, 14))
+                                chead = float(getattr(car, "heading", 0.0))
+                                c = abs(math.cos(float(chead)))
+                                s = abs(math.sin(float(chead)))
+                                ww = float(cw) * c + float(ch) * s
+                                hh = float(cw) * s + float(ch) * c
+                                aabb = pygame.Rect(
+                                    iround(float(wpos.x) - float(ww) / 2.0),
+                                    iround(float(wpos.y) - float(hh) / 2.0),
+                                    int(max(2, int(round(float(ww))))),
+                                    int(max(2, int(round(float(hh))))),
+                                )
+                                near = bool(
+                                    aabb.inflate(int(pad * 2), int(pad * 2)).collidepoint(
+                                        int(round(float(self.player.pos.x))), int(round(float(self.player.pos.y)))
+                                    )
+                                )
+                            except Exception:
+                                near = (self.player.pos - wpos).length_squared() <= (22.0 * 22.0)
+                            if self.mount is None:
+                                prompt = "F 开车" if near else "靠近后: F 开车"
+                            else:
+                                prompt = "先下车再换车"
+                            lines = [f"{name}", "类型: 载具(停放)", prompt]
+                            if hasattr(car, "fuel"):
+                                lines.insert(1, f"燃油: {int(getattr(car, 'fuel', 0.0))}")
                             d2 = float((mx - sx) * (mx - sx) + (my - sy) * (my - sy))
                             if hovered is None or d2 < float(hovered[0]):
                                 hovered = (d2, spr, rect.copy(), lines, (mx, my))
@@ -27662,20 +29254,24 @@ class HardcoreSurvivalState(State):
             if rect.collidepoint(mx, my):
                 model = self._CAR_MODELS.get(str(mid))
                 name = model.name if model is not None else str(mid)
+                is_rv_model = str(mid) == "rv"
                 try:
                     pad = 22
                     near = bool(
-                        self.rv.rect()
+                        self._rv_collider_rect_at()
                         .inflate(int(pad * 2), int(pad * 2))
                         .collidepoint(int(round(float(self.player.pos.x))), int(round(float(self.player.pos.y))))
                     )
                 except Exception:
                     near = (self.player.pos - self.rv.pos).length_squared() <= (22.0 * 22.0)
                 if self.mount == "rv":
-                    prompt = "F 下车  |  H 视角"
+                    prompt = "F 下车  |  H 车灯"
                 else:
-                    prompt = "F 上车  |  H 内部" if near else "靠近后: F 上车 / H 内部"
-                lines = [f"房车：{name}", f"燃油: {int(self.rv.fuel)}", prompt]
+                    if is_rv_model:
+                        prompt = "F 上车  |  H 内部" if near else "靠近后: F 上车 / H 内部"
+                    else:
+                        prompt = "F 上车" if near else "靠近后: F 上车"
+                lines = [f"车辆：{name}", f"燃油: {int(self.rv.fuel)}", prompt]
                 hi = (255, 245, 140)
                 self._blit_sprite_outline(surface, spr, rect, color=hi)
                 self._hover_tooltip = (lines, (mx, my))
@@ -29168,7 +30764,15 @@ class HardcoreSurvivalState(State):
                         surface.blit(sh, (int(rx + 2), int(ry + 2)))
                     surface.blit(roof_draw, (int(rx), int(ry)))
 
-    def _draw_zombies(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+    def _draw_zombies(
+        self,
+        surface: pygame.Surface,
+        cam_x: int,
+        cam_y: int,
+        *,
+        corpses: bool = True,
+        alive: bool = True,
+    ) -> None:
         for z in self.zombies:
             p = pygame.Vector2(z.pos) - pygame.Vector2(cam_x, cam_y)
             sx = iround(float(p.x))
@@ -29181,6 +30785,58 @@ class HardcoreSurvivalState(State):
             d = str(getattr(z, "dir", "down"))
             frames = by_kind.get(d) or by_kind.get("down")
             if not frames:
+                continue
+
+            # Corpse rendering (do not despawn immediately).
+            is_corpse = int(getattr(z, "hp", 0)) <= 0 and float(getattr(z, "corpse_left", 0.0)) > 0.0
+            if bool(is_corpse):
+                if not bool(corpses):
+                    continue
+                spr = frames[0]
+                sx2 = int(sx)
+                sy2 = int(sy)
+                ground_y = iround(float(sy2) + float(getattr(z, "h", 0)) / 2.0)
+
+                total = float(getattr(z, "corpse_total", 0.0)) or float(getattr(self, "_ZOMBIE_CORPSE_TOTAL_S", 14.0))
+                left = float(getattr(z, "corpse_left", 0.0))
+                fade = float(clamp(left / max(1e-6, float(total)), 0.0, 1.0))
+                alpha = int(round(255.0 * (fade**0.45)))
+
+                fall_s = float(getattr(self, "_ZOMBIE_FALL_S", 0.22))
+                t_dead = float(getattr(z, "death_t", 0.0))
+                corpse_surf: pygame.Surface
+                if fall_s > 1e-6 and t_dead < fall_s:
+                    t = float(clamp(t_dead / float(fall_s), 0.0, 1.0))
+                    sx_scale = 1.0 + 0.18 * t
+                    sy_scale = 1.0 - 0.58 * t
+                    ww = max(1, int(round(float(spr.get_width()) * float(sx_scale))))
+                    hh = max(1, int(round(float(spr.get_height()) * float(sy_scale))))
+                    corpse_surf = pygame.transform.scale(spr, (int(ww), int(hh)))
+                else:
+                    corpse_surf = pygame.transform.rotate(spr, 90)
+
+                corpse_surf = corpse_surf.copy()
+                # Darken as it "rots", keep alpha shape.
+                mul = int(round(140.0 + 115.0 * float(fade)))
+                corpse_surf.fill((mul, mul, mul, 255), special_flags=pygame.BLEND_RGBA_MULT)
+                corpse_surf.set_alpha(alpha)
+
+                rect = corpse_surf.get_rect()
+                rect.midbottom = (int(sx2), int(ground_y))
+                # Corpse shadow: anchor to the *opaque* pixel bounds so it stays glued to the body
+                # even after rotate/scale (surfaces include transparent margins).
+                try:
+                    br = corpse_surf.get_bounding_rect()  # local to corpse_surf
+                    body_rect = br.move(int(rect.left), int(rect.top))
+                except Exception:
+                    body_rect = rect
+                shadow = pygame.Rect(0, 0, max(6, int(body_rect.w) - 2), 4)
+                shadow.center = (int(body_rect.centerx), int(body_rect.centery + max(1, int(body_rect.h) // 6)))
+                pygame.draw.ellipse(surface, (0, 0, 0), shadow)
+                surface.blit(corpse_surf, rect)
+                continue
+
+            if not bool(alive):
                 continue
 
             moving = z.vel.length_squared() > 1.0
@@ -29403,7 +31059,8 @@ class HardcoreSurvivalState(State):
         pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=12)
         pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=12)
 
-        draw_text(surface, self.app.font_m, "房车内部", (panel.centerx, panel.top + 14), pygame.Color(240, 240, 240), anchor="center")
+        label = "房车" if str(getattr(self.rv, "model_id", "rv")) == "rv" else "汽车"
+        draw_text(surface, self.app.font_m, f"{label}内部", (panel.centerx, panel.top + 14), pygame.Color(240, 240, 240), anchor="center")
 
         # Floor plan (tile map).
         tile_px = 14
@@ -29415,7 +31072,7 @@ class HardcoreSurvivalState(State):
         pygame.draw.rect(surface, (24, 24, 30), map_rect.inflate(8, 8), border_radius=10)
         pygame.draw.rect(surface, (60, 60, 76), map_rect.inflate(8, 8), 2, border_radius=10)
 
-        layout = getattr(self, "rv_int_layout", self._RV_INT_LAYOUT)
+        layout = self._vehicle_int_layout()
         for y, row in enumerate(layout):
             for x, ch in enumerate(row[: int(self._RV_INT_W)]):
                 tid = int(self._RV_INT_LEGEND.get(ch, int(self.T_FLOOR)))
@@ -29441,6 +31098,9 @@ class HardcoreSurvivalState(State):
                     g = pygame.Rect(r.left + 3, r.top + 4, r.w - 6, r.h - 8)
                     pygame.draw.rect(surface, (90, 140, 190), g, 1)
                     pygame.draw.line(surface, (180, 210, 240), (g.left + 1, g.top + 1), (g.right - 2, g.top + 1), 1)
+                elif ch == "R":
+                    pygame.draw.circle(surface, (34, 34, 42), (r.centerx, r.centery), 4, 1)
+                    pygame.draw.circle(surface, (34, 34, 42), (r.centerx, r.centery), 1)
 
         focus = str(getattr(self, "rv_ui_focus", "map"))
         cx, cy = self.rv_ui_map
@@ -29975,9 +31635,11 @@ class HardcoreSurvivalState(State):
         self._draw_vehicle_props(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_world_props(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_world_items(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
+        # Corpses are "on the ground": draw them under vehicles so they don't appear on top of the RV.
+        self._draw_zombies(surface, cam_x, cam_y_draw, corpses=True, alive=False)
         self._draw_rv(surface, cam_x, cam_y_draw)
         self._draw_bike(surface, cam_x, cam_y_draw)
-        self._draw_zombies(surface, cam_x, cam_y_draw)
+        self._draw_zombies(surface, cam_x, cam_y_draw, corpses=False, alive=True)
         self._draw_bullets(surface, cam_x, cam_y_draw)
         overlay = getattr(self, "_inside_highrise_floor_overlay", None)
         if self.mount is None and overlay is None:
@@ -31439,10 +33101,11 @@ class HardcoreSurvivalState(State):
 
             if self.hint_text:
                 draw_text(surface, self.app.font_s, self.hint_text, (INTERNAL_W // 2, INTERNAL_H - 30), pygame.Color(255, 220, 140), anchor="center")
+            label = "房车" if str(getattr(self.rv, "model_id", "rv")) == "rv" else "汽车"
             if getattr(self, "rv_edit_mode", False):
-                help_text = "房车内部(摆放模式)  Tab选中  方向键移动  R退出  H/ESC退出"
+                help_text = f"{label}内部(摆放模式)  Tab选中  方向键移动  R退出  H/ESC退出"
             else:
-                help_text = "房车内部  WASD移动  E互动  R摆放  H/ESC退出  Tab背包"
+                help_text = f"{label}内部  WASD移动  E互动  R摆放  H/ESC退出  Tab背包"
             draw_text(surface, self.app.font_s, help_text, (6, INTERNAL_H - 14), pygame.Color(170, 170, 180), anchor="topleft")
             return
 
@@ -31464,8 +33127,8 @@ class HardcoreSurvivalState(State):
 
         # RV mode toggle buttons (life vs drive).
         self._rv_mode_btn_rects = {}
-        if self.mount in (None, "rv"):
-            near_rv_btn = (self.player.pos - self.rv.pos).length_squared() <= (22.0 * 22.0)
+        if str(getattr(self.rv, "model_id", "rv")) == "rv" and self.mount in (None, "rv"):
+            near_rv_btn = bool(self._can_access_rv())
             if near_rv_btn or bool(getattr(self, "rv_world_interior", False)) or self.mount == "rv":
                 btn_w = 54
                 btn_h = 16
@@ -31482,19 +33145,28 @@ class HardcoreSurvivalState(State):
                 y0 = int(r_drive.bottom + 6)
 
         if self.mount is not None:
-            kind = "房车" if self.mount == "rv" else self._two_wheel_name(getattr(self.bike, "model_id", "bike"))
+            if self.mount == "rv":
+                mid = str(getattr(self.rv, "model_id", "rv"))
+                model = self._CAR_MODELS.get(mid)
+                kind = model.name if model is not None else mid
+            else:
+                kind = self._two_wheel_name(getattr(self.bike, "model_id", "bike"))
             draw_text(surface, self.app.font_s, f"F 下车({kind})", (INTERNAL_W - 6, int(y0)), pygame.Color(220, 220, 230), anchor="topright")
             if self.mount == "rv":
-                draw_text(surface, self.app.font_s, "H 房车内部", (INTERNAL_W - 6, int(y0 + 12)), pygame.Color(220, 220, 230), anchor="topright")       
+                draw_text(surface, self.app.font_s, "H 车灯", (INTERNAL_W - 6, int(y0 + 12)), pygame.Color(220, 220, 230), anchor="topright")
                 draw_text(surface, self.app.font_s, "V 换车型", (INTERNAL_W - 6, int(y0 + 24)), pygame.Color(180, 180, 190), anchor="topright")
         else:
             y = int(y0)
-            near_rv = (self.player.pos - self.rv.pos).length_squared() <= (22.0 * 22.0)
+            near_rv = bool(self._can_access_rv())
             if near_rv:
-                draw_text(surface, self.app.font_s, "F 上房车", (INTERNAL_W - 6, y), pygame.Color(220, 220, 230), anchor="topright")
+                mid = str(getattr(self.rv, "model_id", "rv"))
+                model = self._CAR_MODELS.get(mid)
+                name = model.name if model is not None else mid
+                draw_text(surface, self.app.font_s, f"F 上车({name})", (INTERNAL_W - 6, y), pygame.Color(220, 220, 230), anchor="topright")
                 y += 12
-                draw_text(surface, self.app.font_s, "H 房车内部", (INTERNAL_W - 6, y), pygame.Color(220, 220, 230), anchor="topright")
-                y += 12
+                if str(mid) == "rv":
+                    draw_text(surface, self.app.font_s, "H 房车内部", (INTERNAL_W - 6, y), pygame.Color(220, 220, 230), anchor="topright")
+                    y += 12
                 draw_text(surface, self.app.font_s, "V 换车型", (INTERNAL_W - 6, y), pygame.Color(180, 180, 190), anchor="topright")
                 y += 12
             if (self.player.pos - self.bike.pos).length_squared() <= (18.0 * 18.0):
