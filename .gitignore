@@ -12,3 +12,5 @@ build/
 .DS_Store
 __roof_floor_overlay.png
 __teleport.log
+run_game.log
+run_game_*.log
