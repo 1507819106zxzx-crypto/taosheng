@@ -1915,7 +1915,24 @@ SURVIVAL_FACE_OPTIONS = ("圆", "方", "尖")
 SURVIVAL_EYE_OPTIONS = ("正常", "大眼", "凶", "眯眼")
 SURVIVAL_HAIR_OPTIONS = ("短发", "刘海", "长发", "帽子")
 SURVIVAL_NOSE_OPTIONS = ("无", "点", "线")
-SURVIVAL_OUTFIT_OPTIONS = ("夹克蓝", "工装绿", "战术灰", "囚服橙", "医护白")
+SURVIVAL_OUTFIT_OPTIONS = (
+    "夹克蓝",
+    "工装绿",
+    "战术灰",
+    "囚服橙",
+    "医护白",
+    "雨衣黄",
+    "街头卫衣粉",
+    "牛仔外套蓝",
+    "厨师白",
+    "赛车服红",
+    "圣诞毛衣绿",
+    "黑西装",
+    "沙漠迷彩",
+    "运动套装青",
+    "睡衣小熊",
+    "女仆装",
+)
 
 
 @dataclass
@@ -2935,31 +2952,25 @@ class HardcoreSurvivalState(State):
         eye = (6, 6, 8)
         boots = (22, 22, 26)
 
-        if outfit == 0:  # jacket blue
-            coat = (72, 92, 160)
-            coat_dark = (56, 72, 140)
-            pants = (52, 52, 62)
-            pants_dark = (40, 40, 50)
-        elif outfit == 1:  # work green
-            coat = (70, 120, 90)
-            coat_dark = (48, 86, 64)
-            pants = (66, 54, 40)
-            pants_dark = (46, 38, 28)
-        elif outfit == 2:  # tactical gray
-            coat = (92, 92, 104)
-            coat_dark = (70, 70, 82)
-            pants = (44, 44, 56)
-            pants_dark = (32, 32, 40)
-        elif outfit == 3:  # prisoner orange
-            coat = (210, 130, 60)
-            coat_dark = (170, 90, 44)
-            pants = (70, 46, 34)
-            pants_dark = (50, 32, 24)
-        else:  # medic white
-            coat = (220, 220, 230)
-            coat_dark = (180, 180, 190)
-            pants = (92, 92, 104)
-            pants_dark = (70, 70, 82)
+        pals: list[tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]]] = [
+            ((72, 92, 160), (56, 72, 140), (52, 52, 62), (40, 40, 50)),  # 夹克蓝
+            ((70, 120, 90), (48, 86, 64), (66, 54, 40), (46, 38, 28)),  # 工装绿
+            ((92, 92, 104), (70, 70, 82), (44, 44, 56), (32, 32, 40)),  # 战术灰
+            ((210, 130, 60), (170, 90, 44), (70, 46, 34), (50, 32, 24)),  # 囚服橙
+            ((220, 220, 230), (180, 180, 190), (92, 92, 104), (70, 70, 82)),  # 医护白
+            ((224, 210, 112), (190, 176, 84), (70, 70, 82), (52, 52, 62)),  # 雨衣黄
+            ((210, 120, 160), (168, 92, 130), (44, 44, 56), (32, 32, 40)),  # 卫衣粉
+            ((90, 140, 210), (70, 110, 170), (60, 52, 46), (44, 38, 34)),  # 牛仔外套
+            ((240, 240, 245), (200, 200, 210), (92, 92, 104), (70, 70, 82)),  # 厨师白
+            ((210, 70, 80), (160, 50, 60), (22, 22, 26), (12, 12, 16)),  # 赛车服红
+            ((120, 190, 140), (92, 150, 110), (70, 46, 34), (50, 32, 24)),  # 圣诞毛衣绿
+            ((28, 28, 34), (18, 18, 22), (28, 28, 34), (18, 18, 22)),  # 黑西装
+            ((160, 140, 90), (120, 110, 70), (90, 80, 60), (70, 62, 44)),  # 沙漠迷彩
+            ((80, 160, 210), (60, 120, 170), (40, 40, 50), (28, 28, 34)),  # 运动套装青
+            ((200, 190, 230), (160, 150, 190), (92, 92, 104), (70, 70, 82)),  # 睡衣小熊
+            ((220, 220, 240), (180, 180, 200), (200, 140, 170), (160, 100, 130)),  # 女仆装
+        ]
+        coat, coat_dark, pants, pants_dark = pals[int(outfit) % len(pals)]
 
         return {
             "hair": hair,
@@ -4872,6 +4883,7 @@ class HardcoreSurvivalState(State):
         stack: int
         color: tuple[int, int, int]
         kind: str
+        desc: str = ""
 
     _ITEMS: dict[str, _ItemDef] = {
         "cola": _ItemDef("cola", "可乐", stack=3, color=(220, 70, 80), kind="drink"),
@@ -5151,6 +5163,111 @@ class HardcoreSurvivalState(State):
             continue
         _seed = _bulk_item_seed(_iid)
         _BULK_ITEMS[_iid] = _ItemDef(_iid, _name, stack=int(_stack), color=_bulk_item_color(_base_col, _seed), kind=str(_kind))
+
+    # Guns / ammo / attachments (core gameplay loop).
+    _EXTRA_WEAPONS: list[tuple[str, str, str, tuple[int, int, int], int, str]] = [
+        ("uzi", "UZI冲锋枪", "gun", (190, 190, 200), 1, "近距离：泼水快乐枪；远距离：祝你好运。"),
+        ("ak47", "AK-47", "gun", (190, 190, 200), 1, "经典老伙计，后坐力有脾气，但很讲义气。"),
+        ("scar_l", "SCAR-L", "gun", (190, 190, 200), 1, "稳、准、帅。你只差一件战术背心。"),
+        ("rpg", "火箭筒", "gun", (200, 190, 170), 1, "大声一点，清场就快一点。"),
+        ("ammo_556", "5.56mm弹", "ammo", (210, 220, 170), 90, "5.56×45mm：轻快、平直，适合连发控。"),
+        ("ammo_762", "7.62mm弹", "ammo", (230, 200, 120), 75, "7.62×39mm：更猛、更硬，也更吵一点。"),
+        ("ammo_rocket", "火箭弹", "ammo", (240, 140, 100), 6, "别问后坐力，问就是：你整个人都在后坐。"),
+        # Attachments
+        ("mod_optic_reddot", "红点瞄准镜", "gun_mod", (170, 170, 190), 1, "近中距离神器：把‘差不多’变成‘差一点点都不行’。"),
+        ("mod_optic_4x", "4倍镜", "gun_mod", (170, 170, 190), 1, "看得更远，心也更虚：远处那坨是不是在动？"),
+        ("mod_muzzle_suppressor_9mm", "9mm消音器", "gun_mod", (120, 120, 132), 1, "把‘砰’调成‘噗’——僵尸：啊？"),
+        ("mod_muzzle_suppressor_rifle", "步枪消音器", "gun_mod", (120, 120, 132), 1, "降低噪声半径，适合想当忍者的你。"),
+        ("mod_muzzle_comp_rifle", "补偿器", "gun_mod", (140, 140, 154), 1, "压枪更稳，但声音更‘硬核’。"),
+        ("mod_undergrip_stab", "稳定器前握把", "gun_mod", (120, 140, 150), 1, "握把一装，手抖先投降。"),
+        ("mod_mag_ext_pistol", "手枪加长弹匣", "gun_mod", (170, 150, 120), 1, "多出来的不是子弹，是安全感。"),
+        ("mod_mag_ext_9mm", "9mm加长弹匣", "gun_mod", (170, 150, 120), 1, "一梭子更长：你可以少换一次弹，真的就一次。"),
+        ("mod_mag_ext_rifle", "步枪加长弹匣", "gun_mod", (170, 150, 120), 1, "长弹匣的代价：换弹像在掰手腕。"),
+    ]
+    for _iid, _name, _kind, _base_col, _stack, _desc in _EXTRA_WEAPONS:
+        if _iid in _ITEMS or _iid in _BULK_ITEMS:
+            continue
+        _seed = _bulk_item_seed(_iid)
+        _BULK_ITEMS[_iid] = _ItemDef(
+            _iid,
+            _name,
+            stack=int(_stack),
+            color=_bulk_item_color(_base_col, _seed),
+            kind=str(_kind),
+            desc=str(_desc),
+        )
+
+    _EXTRA_MELEE: list[tuple[str, str, str, tuple[int, int, int], int, str]] = [
+        ("melee_club", "木棍", "melee", (150, 110, 70), 1, "木棍：不讲道理的物理学课代表。"),
+        ("melee_bat", "棒球棍", "melee", (160, 120, 80), 1, "棒球棍：不是用来打全垒打的，是用来让僵尸‘回家’的。"),
+        ("melee_pipe", "铁管", "melee", (150, 150, 160), 1, "铁管：朴素、沉稳、打人很痛。"),
+        ("melee_machete", "砍刀", "melee", (200, 200, 210), 1, "砍刀：一刀下去，烦恼少一半（至少对你）。"),
+    ]
+    for _iid, _name, _kind, _base_col, _stack, _desc in _EXTRA_MELEE:
+        if _iid in _ITEMS or _iid in _BULK_ITEMS:
+            continue
+        _seed = _bulk_item_seed(_iid)
+        _BULK_ITEMS[_iid] = _ItemDef(
+            _iid,
+            _name,
+            stack=int(_stack),
+            color=_bulk_item_color(_base_col, _seed),
+            kind=str(_kind),
+            desc=str(_desc),
+        )
+
+    _EXTRA_CLOTHES: list[tuple[str, str, str, tuple[int, int, int], int, str]] = [
+        ("clothes_jacket_blue", "夹克蓝", "clothes", (72, 92, 160), 1, "经典开局皮肤：耐看、耐脏、耐末日。"),
+        ("clothes_work_green", "工装绿", "clothes", (70, 120, 90), 1, "口袋多到你怀疑自己是个移动仓库。"),
+        ("clothes_tactical_gray", "战术灰", "clothes", (92, 92, 104), 1, "看起来很专业；实际上你还是会迷路。"),
+        ("clothes_prisoner_orange", "囚服橙", "clothes", (210, 130, 60), 1, "穿上它，连僵尸都以为你是‘熟客’。"),
+        ("clothes_medic_white", "医护白", "clothes", (220, 220, 230), 1, "白大褂是精神护甲：自带‘我很可靠’Buff。"),
+        ("clothes_raincoat_yellow", "雨衣黄", "clothes", (224, 210, 112), 1, "雨再大也不怕；唯一缺点：太显眼。"),
+        ("clothes_hoodie_pink", "街头卫衣粉", "clothes", (210, 120, 160), 1, "可爱是第一生产力，吓人是副产品。"),
+        ("clothes_denim_blue", "牛仔外套蓝", "clothes", (90, 140, 210), 1, "帅不帅先不说，反正很耐磨。"),
+        ("clothes_chef_white", "厨师白", "clothes", (240, 240, 245), 1, "闻到香味了吗？那是你…的错觉。"),
+        ("clothes_racing_red", "赛车服红", "clothes", (210, 70, 80), 1, "速度感拉满，方向感随缘。"),
+        ("clothes_xmas_green", "圣诞毛衣绿", "clothes", (120, 190, 140), 1, "丑萌丑萌的：僵尸都不忍心咬。"),
+        ("clothes_black_suit", "黑西装", "clothes", (28, 28, 34), 1, "末日也要体面：你可能是最后的绅士。"),
+        ("clothes_desert_camo", "沙漠迷彩", "clothes", (160, 140, 90), 1, "藏得住尘土，藏不住你那点小慌张。"),
+        ("clothes_sport_cyan", "运动套装青", "clothes", (80, 160, 210), 1, "跑得快不如穿得像跑得快。"),
+        ("clothes_pajama_bear", "睡衣小熊", "clothes", (200, 190, 230), 1, "抱紧我，我怕。——衣服先说的。"),
+        ("clothes_maid", "女仆装", "clothes", (220, 220, 240), 1, "打扫战场也是打扫，服务对象：自己。"),
+    ]
+    for _iid, _name, _kind, _base_col, _stack, _desc in _EXTRA_CLOTHES:
+        if _iid in _ITEMS or _iid in _BULK_ITEMS:
+            continue
+        _seed = _bulk_item_seed(_iid)
+        _BULK_ITEMS[_iid] = _ItemDef(
+            _iid,
+            _name,
+            stack=int(_stack),
+            color=_bulk_item_color(_base_col, _seed),
+            kind=str(_kind),
+            desc=str(_desc),
+        )
+
+    _EXTRA_GUN_MODS_MORE: list[tuple[str, str, str, tuple[int, int, int], int, str]] = [
+        ("mod_optic_holo", "全息瞄准镜", "gun_mod", (170, 170, 190), 1, "红点的亲戚：更清晰的框，更坚定的心。"),
+        ("mod_undergrip_bipod", "两脚架", "gun_mod", (120, 140, 150), 1, "趴下稳如狗，站起来随缘抖。"),
+        ("mod_stock_tactical", "战术枪托", "gun_mod", (140, 140, 154), 1, "肩膀：我可以。后坐力：我不太行。"),
+        ("mod_muzzle_flash_hider_rifle", "消焰器", "gun_mod", (120, 120, 132), 1, "夜里别闪瞎自己：低调一点，但不够‘静’。"),
+        ("mod_trigger_light", "轻量扳机组", "gun_mod", (170, 170, 190), 1, "手指更快，枪口更飘：快乐与代价同时到场。"),
+        ("mod_mag_drum_9mm", "9mm鼓包弹匣", "gun_mod", (170, 150, 120), 1, "一梭子开到天荒地老；换弹也要等到天荒地老。"),
+        ("mod_mag_drum_rifle", "步枪鼓包弹匣", "gun_mod", (170, 150, 120), 1, "子弹多到你开始思考人生；换弹慢到人生开始思考你。"),
+    ]
+    for _iid, _name, _kind, _base_col, _stack, _desc in _EXTRA_GUN_MODS_MORE:
+        if _iid in _ITEMS or _iid in _BULK_ITEMS:
+            continue
+        _seed = _bulk_item_seed(_iid)
+        _BULK_ITEMS[_iid] = _ItemDef(
+            _iid,
+            _name,
+            stack=int(_stack),
+            color=_bulk_item_color(_base_col, _seed),
+            kind=str(_kind),
+            desc=str(_desc),
+        )
 
     for _iid, _idef in _BULK_ITEMS.items():
         if _iid not in _ITEMS:
@@ -5724,7 +5841,12 @@ class HardcoreSurvivalState(State):
             pygame.draw.rect(surf, outline, pygame.Rect(4, 6, 6, 2), 1, border_radius=1)
             return surf
 
-        def make_pills(*, body: tuple[int, int, int]) -> pygame.Surface:
+        def make_pills(
+            *,
+            body: tuple[int, int, int],
+            label: tuple[int, int, int] | None = None,
+            symbol: str = "cross",
+        ) -> pygame.Surface:
             surf = pygame.Surface((14, 12), pygame.SRCALPHA)
             cap = (230, 230, 240)
             b2 = HardcoreSurvivalState._rgb_shift(body, -25, -25, -25)
@@ -5734,9 +5856,20 @@ class HardcoreSurvivalState(State):
             pygame.draw.rect(surf, cap, pygame.Rect(5, 1, 4, 2), border_radius=1)
             pygame.draw.rect(surf, outline, pygame.Rect(5, 1, 4, 2), 1, border_radius=1)
             pygame.draw.line(surf, b2, (5, 8), (8, 8), 1)
-            red = (220, 80, 90)
-            pygame.draw.rect(surf, red, pygame.Rect(6, 5, 2, 4))
-            pygame.draw.rect(surf, red, pygame.Rect(5, 6, 4, 2))
+            if label is not None:
+                band = pygame.Rect(bottle.x + 1, bottle.y + 4, bottle.w - 2, 2)
+                pygame.draw.rect(surf, label, band, border_radius=1)
+                pygame.draw.rect(surf, outline, band, 1, border_radius=1)
+
+            sym = str(symbol or "cross")
+            sym_col = (220, 80, 90) if sym != "blue" else (90, 160, 230)
+            sym_col = sym_col if sym != "green" else (90, 200, 140)
+            sym_col = sym_col if sym != "yellow" else (232, 190, 90)
+            if sym == "dot":
+                pygame.draw.circle(surf, sym_col, (7, 7), 2)
+            else:
+                pygame.draw.rect(surf, sym_col, pygame.Rect(6, 5, 2, 4))
+                pygame.draw.rect(surf, sym_col, pygame.Rect(5, 6, 4, 2))
             return surf
 
         def make_key(*, metal: tuple[int, int, int]) -> pygame.Surface:
@@ -5873,6 +6006,22 @@ class HardcoreSurvivalState(State):
         if kind == "fuel":
             return make_gas_can(body=HardcoreSurvivalState._rgb_lerp((220, 80, 70), base_col, 0.35))
         if kind == "ammo":
+            if item_id == "ammo_rocket":
+                surf = pygame.Surface((18, 12), pygame.SRCALPHA)
+                tube = HardcoreSurvivalState._rgb_lerp((120, 120, 132), base_col, 0.55)
+                tube2 = HardcoreSurvivalState._rgb_shift(tube, -28, -28, -28)
+                nose = HardcoreSurvivalState._rgb_lerp((240, 140, 100), base_col, 0.25)
+                nose2 = HardcoreSurvivalState._rgb_shift(nose, -28, -18, -18)
+                pygame.draw.rect(surf, tube, pygame.Rect(3, 5, 12, 4), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 5, 12, 4), 1, border_radius=2)
+                pygame.draw.rect(surf, tube2, pygame.Rect(3, 8, 12, 1), border_radius=1)
+                pygame.draw.polygon(surf, nose, [(15, 5), (17, 7), (15, 9)])
+                pygame.draw.polygon(surf, outline, [(15, 5), (17, 7), (15, 9)], 1)
+                pygame.draw.line(surf, nose2, (15, 6), (16, 7), 1)
+                # fins
+                pygame.draw.line(surf, outline, (4, 4), (6, 5), 1)
+                pygame.draw.line(surf, outline, (4, 10), (6, 9), 1)
+                return surf
             box = HardcoreSurvivalState._rgb_lerp((120, 120, 132), base_col, 0.55)
             brass = (230, 220, 140)
             surf = pygame.Surface((16, 12), pygame.SRCALPHA)
@@ -5884,11 +6033,231 @@ class HardcoreSurvivalState(State):
                 pygame.draw.rect(surf, brass, pygame.Rect(xx, 2, 2, 4))
                 pygame.draw.rect(surf, outline, pygame.Rect(xx, 2, 2, 4), 1)
             return surf
+        if kind == "melee":
+            surf = pygame.Surface((16, 12), pygame.SRCALPHA)
+            col = HardcoreSurvivalState._rgb_lerp((200, 200, 210), base_col, 0.35)
+            col2 = HardcoreSurvivalState._rgb_shift(col, -30, -30, -30)
+            hi = HardcoreSurvivalState._rgb_shift(col, 30, 30, 30)
+            wood = HardcoreSurvivalState._rgb_lerp((150, 110, 70), base_col, 0.20)
+            if item_id == "melee_machete":
+                pygame.draw.line(surf, col, (3, 9), (13, 3), 3)
+                pygame.draw.line(surf, outline, (3, 9), (13, 3), 1)
+                pygame.draw.line(surf, hi, (4, 8), (12, 4), 1)
+                pygame.draw.rect(surf, wood, pygame.Rect(2, 8, 3, 3), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(2, 8, 3, 3), 1, border_radius=1)
+                return surf
+            if item_id == "melee_pipe":
+                pygame.draw.line(surf, col, (3, 9), (13, 3), 3)
+                pygame.draw.line(surf, outline, (3, 9), (13, 3), 1)
+                pygame.draw.line(surf, col2, (4, 9), (12, 4), 1)
+                return surf
+            # club / bat (default)
+            pygame.draw.line(surf, wood, (3, 9), (13, 3), 3)
+            pygame.draw.line(surf, outline, (3, 9), (13, 3), 1)
+            pygame.draw.line(surf, HardcoreSurvivalState._rgb_shift(wood, 22, 18, 12), (4, 8), (12, 4), 1)
+            return surf
+        if kind == "clothes":
+            surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+            body = HardcoreSurvivalState._rgb_lerp((200, 200, 210), base_col, 0.35)
+            body2 = HardcoreSurvivalState._rgb_shift(body, -30, -30, -30)
+            hi = HardcoreSurvivalState._rgb_shift(body, 30, 30, 30)
+            # sleeves
+            pygame.draw.rect(surf, body2, pygame.Rect(1, 4, 4, 3), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(1, 4, 4, 3), 1, border_radius=1)
+            pygame.draw.rect(surf, body2, pygame.Rect(9, 4, 4, 3), border_radius=1)
+            pygame.draw.rect(surf, outline, pygame.Rect(9, 4, 4, 3), 1, border_radius=1)
+            # torso
+            pygame.draw.rect(surf, body, pygame.Rect(4, 3, 6, 8), border_radius=2)
+            pygame.draw.rect(surf, outline, pygame.Rect(4, 3, 6, 8), 1, border_radius=2)
+            pygame.draw.line(surf, hi, (5, 4), (8, 4), 1)
+            return surf
         if kind == "gun":
-            # keep guns consistent with the existing pistol sprite style
+            # keep guns consistent with the pistol sprite style, but differentiate silhouettes
+            dark = (62, 62, 72)
+            mid = (92, 92, 104)
+            hi = (150, 150, 162)
+            if item_id in ("ak47", "scar_l"):
+                surf = pygame.Surface((22, 12), pygame.SRCALPHA)
+                pygame.draw.rect(surf, dark, pygame.Rect(2, 4, 16, 3))
+                pygame.draw.rect(surf, hi, pygame.Rect(3, 5, 14, 1))
+                pygame.draw.rect(surf, outline, pygame.Rect(2, 4, 16, 3), 1)
+                # stock
+                pygame.draw.rect(surf, mid, pygame.Rect(1, 5, 3, 4), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(1, 5, 3, 4), 1, border_radius=1)
+                # mag
+                pygame.draw.rect(surf, mid, pygame.Rect(9, 7, 3, 4), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(9, 7, 3, 4), 1, border_radius=1)
+                surf.set_at((18, 6), outline)
+                return surf
+            if item_id == "uzi":
+                surf = pygame.Surface((20, 12), pygame.SRCALPHA)
+                pygame.draw.rect(surf, dark, pygame.Rect(3, 4, 12, 3))
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 4, 12, 3), 1)
+                pygame.draw.rect(surf, mid, pygame.Rect(6, 7, 3, 4), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(6, 7, 3, 4), 1, border_radius=1)
+                pygame.draw.rect(surf, hi, pygame.Rect(4, 5, 10, 1))
+                surf.set_at((15, 6), outline)
+                return surf
+            if item_id == "rpg":
+                surf = pygame.Surface((22, 12), pygame.SRCALPHA)
+                tube = HardcoreSurvivalState._rgb_lerp((120, 120, 132), base_col, 0.45)
+                tube2 = HardcoreSurvivalState._rgb_shift(tube, -28, -28, -28)
+                pygame.draw.rect(surf, tube, pygame.Rect(2, 5, 18, 4), border_radius=2)
+                pygame.draw.rect(surf, outline, pygame.Rect(2, 5, 18, 4), 1, border_radius=2)
+                pygame.draw.rect(surf, tube2, pygame.Rect(2, 8, 18, 1), border_radius=1)
+                pygame.draw.rect(surf, mid, pygame.Rect(7, 8, 4, 3), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(7, 8, 4, 3), 1, border_radius=1)
+                return surf
             return HardcoreSurvivalState._make_item_sprite_pistol()
+        if kind == "gun_mod":
+            surf = pygame.Surface((16, 12), pygame.SRCALPHA)
+            body = HardcoreSurvivalState._rgb_lerp((92, 92, 104), base_col, 0.35)
+            hi2 = HardcoreSurvivalState._rgb_shift(body, 25, 25, 25)
+            pygame.draw.rect(surf, body, pygame.Rect(3, 5, 10, 4), border_radius=2)
+            pygame.draw.rect(surf, outline, pygame.Rect(3, 5, 10, 4), 1, border_radius=2)
+            pygame.draw.rect(surf, hi2, pygame.Rect(4, 6, 8, 1), border_radius=1)
+            # tiny rail notch
+            pygame.draw.line(surf, outline, (5, 4), (11, 4), 1)
+            return surf
         if kind == "med":
             iid = item_id
+            # Use stronger label colors so meds don't all look identical.
+            lab_pal = [
+                (90, 160, 230),  # blue
+                (232, 190, 90),  # yellow
+                (90, 200, 140),  # green
+                (180, 120, 220),  # purple
+                (220, 80, 90),  # red
+                (200, 200, 210),  # gray
+            ]
+            lab = lab_pal[int(seed % len(lab_pal))]
+            lab = HardcoreSurvivalState._rgb_lerp(lab, accent, 0.25)
+
+            if iid == "medkit":
+                surf = make_box(body=HardcoreSurvivalState._rgb_lerp((240, 120, 120), base_col, 0.35), band=lab)
+                white = (240, 240, 240)
+                cx, cy = 7, 7
+                pygame.draw.rect(surf, white, pygame.Rect(cx - 1, cy - 3, 2, 7))
+                pygame.draw.rect(surf, white, pygame.Rect(cx - 3, cy - 1, 7, 2))
+                pygame.draw.rect(surf, outline, pygame.Rect(cx - 3, cy - 3, 7, 7), 1)
+                return surf
+
+            if iid == "bandage" or ("bandage" in iid and "wipe" not in iid):
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                cloth = (235, 235, 242)
+                cloth2 = (200, 200, 210)
+                roll = pygame.Rect(3, 4, 8, 5)
+                pygame.draw.rect(surf, cloth, roll, border_radius=3)
+                pygame.draw.rect(surf, outline, roll, 1, border_radius=3)
+                pygame.draw.line(surf, cloth2, (4, 6), (10, 6), 1)
+                pygame.draw.line(surf, cloth2, (4, 8), (10, 8), 1)
+                pad = pygame.Rect(5, 5, 4, 3)
+                pygame.draw.rect(surf, lab, pad, border_radius=1)
+                pygame.draw.rect(surf, outline, pad, 1, border_radius=1)
+                return surf
+
+            if "splint" in iid:
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                wood = HardcoreSurvivalState._rgb_lerp((150, 110, 70), base_col, 0.35)
+                wood2 = HardcoreSurvivalState._rgb_shift(wood, -30, -30, -30)
+                pygame.draw.rect(surf, wood, pygame.Rect(3, 3, 3, 8), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(3, 3, 3, 8), 1, border_radius=1)
+                pygame.draw.rect(surf, wood, pygame.Rect(8, 3, 3, 8), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(8, 3, 3, 8), 1, border_radius=1)
+                wrap = (235, 235, 242)
+                pygame.draw.rect(surf, wrap, pygame.Rect(2, 6, 10, 2), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(2, 6, 10, 2), 1, border_radius=1)
+                pygame.draw.line(surf, wood2, (4, 10), (10, 10), 1)
+                return surf
+
+            if "antacid" in iid or "antidiarrheal" in iid or "charcoal" in iid:
+                # Blister pack.
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                pack = (210, 210, 220)
+                pack2 = (180, 180, 192)
+                r = pygame.Rect(2, 3, 10, 7)
+                pygame.draw.rect(surf, pack, r, border_radius=2)
+                pygame.draw.rect(surf, outline, r, 1, border_radius=2)
+                surf.fill(pack2, pygame.Rect(r.x + 1, r.bottom - 2, r.w - 2, 1))
+                pill = (90, 200, 140) if "antacid" in iid else ((232, 190, 90) if "antidiarrheal" in iid else (90, 160, 230))
+                for cx in (5, 8, 11):
+                    pygame.draw.circle(surf, pill, (int(cx), 6), 2, 1)
+                return surf
+
+            if "ointment" in iid or "burncream" in iid:
+                surf = pygame.Surface((16, 10), pygame.SRCALPHA)
+                body = HardcoreSurvivalState._rgb_lerp((230, 230, 240), base_col, 0.35)
+                tube = pygame.Rect(3, 3, 10, 4)
+                pygame.draw.rect(surf, body, tube, border_radius=2)
+                pygame.draw.rect(surf, outline, tube, 1, border_radius=2)
+                cap = pygame.Rect(13, 4, 2, 2)
+                pygame.draw.rect(surf, (90, 90, 104), cap, border_radius=1)
+                pygame.draw.rect(surf, outline, cap, 1, border_radius=1)
+                band = pygame.Rect(4, 4, 5, 2)
+                pygame.draw.rect(surf, lab, band, border_radius=1)
+                pygame.draw.rect(surf, outline, band, 1, border_radius=1)
+                return surf
+
+            if "wipe" in iid or "alcohol" in iid:
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                pack = HardcoreSurvivalState._rgb_lerp((180, 180, 192), base_col, 0.35)
+                r = pygame.Rect(2, 4, 10, 6)
+                pygame.draw.rect(surf, pack, r, border_radius=2)
+                pygame.draw.rect(surf, outline, r, 1, border_radius=2)
+                flap = pygame.Rect(4, 5, 6, 2)
+                pygame.draw.rect(surf, lab, flap, border_radius=1)
+                pygame.draw.rect(surf, outline, flap, 1, border_radius=1)
+                surf.set_at((10, 8), (240, 240, 240))
+                return surf
+
+            if "saline" in iid or "glucose" in iid:
+                # Simple IV bag.
+                surf = pygame.Surface((12, 14), pygame.SRCALPHA)
+                bag = (235, 235, 242)
+                bag2 = (200, 200, 210)
+                r = pygame.Rect(3, 2, 6, 10)
+                pygame.draw.rect(surf, bag, r, border_radius=2)
+                pygame.draw.rect(surf, outline, r, 1, border_radius=2)
+                liquid = (90, 160, 230) if "saline" in iid else (232, 190, 90)
+                pygame.draw.rect(surf, liquid, pygame.Rect(r.x + 1, r.y + 4, r.w - 2, 6), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(r.x + 1, r.y + 4, r.w - 2, 6), 1, border_radius=1)
+                pygame.draw.line(surf, bag2, (6, 1), (6, 2), 1)
+                pygame.draw.line(surf, outline, (6, 1), (6, 2), 1)
+                pygame.draw.line(surf, outline, (6, 12), (6, 14), 1)
+                return surf
+
+            if "iodine" in iid or "antiseptic" in iid:
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                bottle = pygame.Rect(5, 2, 4, 9)
+                liquid = (150, 90, 60) if "iodine" in iid else (90, 120, 150)
+                pygame.draw.rect(surf, liquid, bottle, border_radius=2)
+                pygame.draw.rect(surf, outline, bottle, 1, border_radius=2)
+                pygame.draw.rect(surf, (230, 230, 236), pygame.Rect(5, 1, 4, 2), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(5, 1, 4, 2), 1, border_radius=1)
+                pygame.draw.rect(surf, lab, pygame.Rect(5, 6, 4, 2), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(5, 6, 4, 2), 1, border_radius=1)
+                return surf
+
+            if "eye" in iid:
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                bottle = pygame.Rect(5, 2, 4, 9)
+                body = (230, 230, 236)
+                pygame.draw.rect(surf, body, bottle, border_radius=2)
+                pygame.draw.rect(surf, outline, bottle, 1, border_radius=2)
+                pygame.draw.rect(surf, (90, 160, 230), pygame.Rect(5, 6, 4, 2), border_radius=1)
+                pygame.draw.rect(surf, outline, pygame.Rect(5, 6, 4, 2), 1, border_radius=1)
+                drop = (90, 160, 230)
+                pygame.draw.circle(surf, drop, (10, 9), 1)
+                return surf
+
+            if "thermometer" in iid:
+                surf = pygame.Surface((14, 12), pygame.SRCALPHA)
+                pygame.draw.line(surf, (230, 230, 236), (7, 3), (7, 9), 1)
+                pygame.draw.line(surf, outline, (7, 3), (7, 9), 1)
+                pygame.draw.circle(surf, (220, 80, 90), (7, 10), 2)
+                pygame.draw.circle(surf, outline, (7, 10), 2, 1)
+                return surf
+
             if "mask" in iid:
                 surf = pygame.Surface((14, 10), pygame.SRCALPHA)
                 cloth = (235, 235, 242)
@@ -5920,20 +6289,55 @@ class HardcoreSurvivalState(State):
                 pygame.draw.line(surf, steel, (2, 3), (2, 7), 1)
                 pygame.draw.line(surf, outline, (2, 3), (2, 7), 1)
                 return surf
-            return make_pills(body=HardcoreSurvivalState._rgb_lerp((230, 230, 240), base_col, 0.35))
+            # Default pill bottle with item-specific label/symbol so medicines differ.
+            sym = "cross"
+            if "antibiotic" in iid:
+                sym = "blue"
+            elif "vitamin" in iid:
+                sym = "yellow"
+            elif "sleep" in iid:
+                sym = "dot"
+            elif "pain" in iid:
+                sym = "cross"
+            elif "allergy" in iid:
+                sym = "green"
+            return make_pills(body=HardcoreSurvivalState._rgb_lerp((230, 230, 240), base_col, 0.35), label=lab, symbol=sym)
         if kind == "drink":
             parts = item_id.split("_")
             base = parts[1] if len(parts) >= 3 and parts[0] == "drink" else item_id
+            flavor = parts[2] if len(parts) >= 3 and parts[0] == "drink" else ""
+
+            # Flavor-coded label so drinks read differently at a glance.
+            flavor_col = {
+                "plain": accent,
+                "lemon": (232, 190, 90),
+                "orange": (230, 140, 70),
+                "grape": (160, 110, 220),
+                "peach": (232, 160, 190),
+                "sugarfree": (170, 190, 190),
+            }.get(str(flavor), accent)
+            label = HardcoreSurvivalState._rgb_lerp(accent, flavor_col, 0.8)
+
             cap = (230, 230, 236)
+            if base in ("water", "water_mineral", "sparkling"):
+                cap = (120, 170, 230)
+            elif base in ("tea",):
+                cap = (90, 200, 140)
+            elif base in ("coffee",):
+                cap = (200, 170, 120)
+            elif base in ("energy",):
+                cap = (232, 190, 90)
+
+            # Container silhouettes by type.
             if base in ("milk", "soymilk", "cocoa", "milk_choco"):
                 body = HardcoreSurvivalState._rgb_lerp((240, 240, 240), base_col, 0.35)
-                return make_carton(body=body, band=accent)
+                return make_carton(body=body, band=label)
             if base in ("beer", "wine"):
                 liquid = HardcoreSurvivalState._rgb_lerp(base_col, (110, 80, 60) if base == "beer" else (150, 70, 90), 0.35)
-                return make_bottle(cap=cap, liquid=liquid, label=accent)
-            if base in ("soda", "energy"):
-                return make_can(label=accent)
-            return make_bottle(cap=cap, liquid=base_col, label=accent)
+                return make_bottle(cap=cap, liquid=liquid, label=label)
+            if base in ("soda", "energy", "cola"):
+                return make_can(label=label)
+            return make_bottle(cap=cap, liquid=base_col, label=label)
         if kind == "food":
             parts = item_id.split("_")
             base = parts[1] if len(parts) >= 3 and parts[0] == "food" else item_id
@@ -6242,6 +6646,7 @@ class HardcoreSurvivalState(State):
     class _ItemStack:
         item_id: str
         qty: int
+        meta: dict[str, object] = field(default_factory=dict)
 
     @dataclass
     class _WorldItem:
@@ -6653,13 +7058,26 @@ class HardcoreSurvivalState(State):
         slots: list["HardcoreSurvivalState._ItemStack | None"]
         cols: int = 4
 
-        def add(self, item_id: str, qty: int, item_defs: dict[str, "HardcoreSurvivalState._ItemDef"]) -> int:
+        def add(
+            self,
+            item_id: str,
+            qty: int,
+            item_defs: dict[str, "HardcoreSurvivalState._ItemDef"],
+            *,
+            meta: dict[str, object] | None = None,
+        ) -> int:
             if qty <= 0:
                 return 0
             idef = item_defs.get(item_id)
             if idef is None:
                 return qty
             stack_max = max(1, int(idef.stack))
+            meta = dict(meta) if isinstance(meta, dict) else None
+
+            # Per-item metadata is only supported for non-stackable items for now.
+            # (Guns/clothes/attachments are stack=1, so this is enough.)
+            if meta is not None and stack_max > 1:
+                meta = None
 
             left = int(qty)
             for slot in self.slots:
@@ -6677,7 +7095,10 @@ class HardcoreSurvivalState(State):
                 if slot is not None:
                     continue
                 take = min(stack_max, left)
-                self.slots[i] = HardcoreSurvivalState._ItemStack(item_id=item_id, qty=int(take))
+                st = HardcoreSurvivalState._ItemStack(item_id=item_id, qty=int(take))
+                if meta is not None:
+                    st.meta = dict(meta)
+                self.slots[i] = st
                 left -= int(take)
                 if left <= 0:
                     return 0
@@ -6726,6 +7147,12 @@ class HardcoreSurvivalState(State):
         damage: int
         bullet_speed: float
         spread_deg: float
+        noise_radius: float = 220.0
+        muzzle_flash_s: float = 0.06
+        bullet_ttl: float = 1.35
+        bullet_kind: str = "bullet"  # "bullet" | "rocket"
+        aoe_radius: float = 0.0  # px (rocket)
+        aoe_damage: int = 0  # rocket splash base damage
 
     _GUNS: dict[str, _GunDef] = {
         "pistol": _GunDef(
@@ -6738,13 +7165,234 @@ class HardcoreSurvivalState(State):
             damage=12,
             bullet_speed=260.0,
             spread_deg=4.0,
-        )
+            noise_radius=210.0,
+        ),
+        "uzi": _GunDef(
+            id="uzi",
+            name="UZI 冲锋枪",
+            ammo_item="ammo_9mm",
+            mag_size=32,
+            fire_rate=10.5,
+            reload_s=1.75,
+            damage=8,
+            bullet_speed=270.0,
+            spread_deg=7.0,
+            noise_radius=240.0,
+        ),
+        "ak47": _GunDef(
+            id="ak47",
+            name="AK-47",
+            ammo_item="ammo_762",
+            mag_size=30,
+            fire_rate=8.5,
+            reload_s=2.25,
+            damage=18,
+            bullet_speed=310.0,
+            spread_deg=6.0,
+            noise_radius=300.0,
+        ),
+        "scar_l": _GunDef(
+            id="scar_l",
+            name="SCAR-L",
+            ammo_item="ammo_556",
+            mag_size=30,
+            fire_rate=9.0,
+            reload_s=2.10,
+            damage=16,
+            bullet_speed=330.0,
+            spread_deg=5.0,
+            noise_radius=290.0,
+        ),
+        "rpg": _GunDef(
+            id="rpg",
+            name="火箭筒",
+            ammo_item="ammo_rocket",
+            mag_size=1,
+            fire_rate=0.65,
+            reload_s=2.85,
+            damage=80,
+            bullet_speed=190.0,
+            spread_deg=2.2,
+            noise_radius=460.0,
+            muzzle_flash_s=0.10,
+            bullet_ttl=1.85,
+            bullet_kind="rocket",
+            aoe_radius=72.0,
+            aoe_damage=55,
+        ),
+    }
+
+    @dataclass(frozen=True)
+    class _GunModDef:
+        id: str
+        name: str
+        slot: str
+        desc: str
+        compat: tuple[str, ...]  # compatible gun ids
+        mag_add: int = 0
+        fire_rate_mult: float = 1.0
+        reload_mult: float = 1.0
+        damage_mult: float = 1.0
+        damage_add: int = 0
+        bullet_speed_mult: float = 1.0
+        spread_mult: float = 1.0
+        noise_mult: float = 1.0
+
+    _GUN_MODS: dict[str, _GunModDef] = {
+        # Optics
+        "mod_optic_reddot": _GunModDef(
+            id="mod_optic_reddot",
+            name="红点瞄准镜",
+            slot="optic",
+            desc="小小一点红，准星说：我在这！",
+            compat=("pistol", "uzi", "ak47", "scar_l"),
+            spread_mult=0.78,
+        ),
+        "mod_optic_4x": _GunModDef(
+            id="mod_optic_4x",
+            name="4倍镜",
+            slot="optic",
+            desc="看得更远，也更容易把自己当狙击手。",
+            compat=("ak47", "scar_l"),
+            spread_mult=0.60,
+        ),
+        # Muzzle
+        "mod_muzzle_suppressor_9mm": _GunModDef(
+            id="mod_muzzle_suppressor_9mm",
+            name="9mm 消音器",
+            slot="muzzle",
+            desc="‘噗’的一声，僵尸还没反应过来你已经跑了。",
+            compat=("pistol", "uzi"),
+            damage_mult=0.95,
+            bullet_speed_mult=0.93,
+            spread_mult=0.95,
+            noise_mult=0.55,
+        ),
+        "mod_muzzle_suppressor_rifle": _GunModDef(
+            id="mod_muzzle_suppressor_rifle",
+            name="步枪消音器",
+            slot="muzzle",
+            desc="把吵闹收起来一点点——只是‘一点点’。",
+            compat=("ak47", "scar_l"),
+            damage_mult=0.96,
+            bullet_speed_mult=0.94,
+            spread_mult=0.95,
+            noise_mult=0.60,
+        ),
+        "mod_muzzle_comp_rifle": _GunModDef(
+            id="mod_muzzle_comp_rifle",
+            name="补偿器",
+            slot="muzzle",
+            desc="后坐力：被你‘哄’得服服帖帖（但更吵）。",
+            compat=("ak47", "scar_l"),
+            spread_mult=0.86,
+            noise_mult=1.10,
+        ),
+        # Stabilizers / grips
+        "mod_undergrip_stab": _GunModDef(
+            id="mod_undergrip_stab",
+            name="稳定器前握把",
+            slot="under",
+            desc="握得更稳，心也更稳。",
+            compat=("uzi", "ak47", "scar_l"),
+            spread_mult=0.82,
+        ),
+        # Magazines
+        "mod_mag_ext_pistol": _GunModDef(
+            id="mod_mag_ext_pistol",
+            name="手枪加长弹匣",
+            slot="mag",
+            desc="多几发子弹，多一点底气。",
+            compat=("pistol",),
+            mag_add=5,
+            reload_mult=1.08,
+        ),
+        "mod_mag_ext_9mm": _GunModDef(
+            id="mod_mag_ext_9mm",
+            name="9mm 加长弹匣",
+            slot="mag",
+            desc="塞得更满，换弹更慢——很公平。",
+            compat=("uzi",),
+            mag_add=12,
+            reload_mult=1.12,
+        ),
+        "mod_mag_ext_rifle": _GunModDef(
+            id="mod_mag_ext_rifle",
+            name="步枪加长弹匣",
+            slot="mag",
+            desc="一梭子更长，手忙脚乱也更长。",
+            compat=("ak47", "scar_l"),
+            mag_add=15,
+            reload_mult=1.15,
+        ),
+        "mod_optic_holo": _GunModDef(
+            id="mod_optic_holo",
+            name="全息瞄准镜",
+            slot="optic",
+            desc="红点的亲戚：更清晰的框，更坚定的心。",
+            compat=("pistol", "uzi", "ak47", "scar_l"),
+            spread_mult=0.72,
+        ),
+        "mod_undergrip_bipod": _GunModDef(
+            id="mod_undergrip_bipod",
+            name="两脚架",
+            slot="under",
+            desc="趴下稳如狗，站起来随缘抖。",
+            compat=("ak47", "scar_l"),
+            spread_mult=0.72,
+            reload_mult=1.08,
+        ),
+        "mod_stock_tactical": _GunModDef(
+            id="mod_stock_tactical",
+            name="战术枪托",
+            slot="stock",
+            desc="肩膀：我可以。后坐力：我不太行。",
+            compat=("uzi", "ak47", "scar_l"),
+            spread_mult=0.90,
+        ),
+        "mod_muzzle_flash_hider_rifle": _GunModDef(
+            id="mod_muzzle_flash_hider_rifle",
+            name="消焰器",
+            slot="muzzle",
+            desc="夜里别闪瞎自己：低调一点，但不够‘静’。",
+            compat=("ak47", "scar_l"),
+            spread_mult=0.94,
+            noise_mult=0.85,
+        ),
+        "mod_trigger_light": _GunModDef(
+            id="mod_trigger_light",
+            name="轻量扳机组",
+            slot="trigger",
+            desc="手指更快，枪口更飘：快乐与代价同时到场。",
+            compat=("pistol", "uzi"),
+            fire_rate_mult=1.15,
+            spread_mult=1.05,
+        ),
+        "mod_mag_drum_9mm": _GunModDef(
+            id="mod_mag_drum_9mm",
+            name="9mm 鼓包弹匣",
+            slot="mag",
+            desc="一梭子开到天荒地老；换弹也要等到天荒地老。",
+            compat=("uzi",),
+            mag_add=38,
+            reload_mult=1.25,
+        ),
+        "mod_mag_drum_rifle": _GunModDef(
+            id="mod_mag_drum_rifle",
+            name="步枪 鼓包弹匣",
+            slot="mag",
+            desc="子弹多到你开始思考人生；换弹慢到人生开始思考你。",
+            compat=("ak47", "scar_l"),
+            mag_add=35,
+            reload_mult=1.30,
+        ),
     }
 
     @dataclass
     class _Gun:
         gun_id: str
         mag: int
+        mods: dict[str, str] = field(default_factory=dict)
         cooldown_left: float = 0.0
         reload_left: float = 0.0
         reload_total: float = 0.0
@@ -6755,6 +7403,9 @@ class HardcoreSurvivalState(State):
         vel: pygame.Vector2
         ttl: float
         dmg: int
+        kind: str = "bullet"
+        aoe_radius: float = 0.0
+        aoe_damage: int = 0
 
     @dataclass(frozen=True)
     class _MonsterDef:
@@ -6820,6 +7471,150 @@ class HardcoreSurvivalState(State):
     _PUNCH_DAMAGE = 7
     _PUNCH_STAGGER_S = 0.18
     _PUNCH_STAGGER_SPEED = 95.0
+
+    @dataclass(frozen=True)
+    class _MeleeDef:
+        id: str
+        name: str
+        total_s: float
+        windup_s: float
+        cooldown_s: float
+        hit_t: float
+        range_px: float
+        arc_dot: float
+        damage: int
+        stagger_s: float
+        stagger_speed: float
+        stamina_cost: float = 5.0
+        noise_radius: float = 120.0
+        visual_len: float = 0.0
+        visual_thick: int = 2
+
+    _MELEE_DEFS: dict[str, _MeleeDef] = {
+        "fist": _MeleeDef(
+            id="fist",
+            name="鎷沖嚮",
+            total_s=_PUNCH_TOTAL_S,
+            windup_s=_PUNCH_WINDUP_S,
+            cooldown_s=_PUNCH_COOLDOWN_S,
+            hit_t=_PUNCH_HIT_T,
+            range_px=_PUNCH_RANGE_PX,
+            arc_dot=_PUNCH_ARC_DOT,
+            damage=_PUNCH_DAMAGE,
+            stagger_s=_PUNCH_STAGGER_S,
+            stagger_speed=_PUNCH_STAGGER_SPEED,
+            stamina_cost=5.0,
+            noise_radius=120.0,
+            visual_len=0.0,
+            visual_thick=2,
+        ),
+        "melee_club": _MeleeDef(
+            id="melee_club",
+            name="\u6728\u68cd",
+            total_s=0.36,
+            windup_s=0.10,
+            cooldown_s=0.42,
+            hit_t=0.52,
+            range_px=26.0,
+            arc_dot=0.18,
+            damage=11,
+            stagger_s=0.20,
+            stagger_speed=115.0,
+            stamina_cost=7.0,
+            noise_radius=150.0,
+            visual_len=11.0,
+            visual_thick=2,
+        ),
+        "melee_bat": _MeleeDef(
+            id="melee_bat",
+            name="\u68d2\u7403\u68cd",
+            total_s=0.42,
+            windup_s=0.12,
+            cooldown_s=0.50,
+            hit_t=0.54,
+            range_px=30.0,
+            arc_dot=0.16,
+            damage=14,
+            stagger_s=0.24,
+            stagger_speed=135.0,
+            stamina_cost=9.0,
+            noise_radius=180.0,
+            visual_len=13.0,
+            visual_thick=3,
+        ),
+        "melee_pipe": _MeleeDef(
+            id="melee_pipe",
+            name="\u94c1\u7ba1",
+            total_s=0.46,
+            windup_s=0.13,
+            cooldown_s=0.56,
+            hit_t=0.55,
+            range_px=28.0,
+            arc_dot=0.20,
+            damage=16,
+            stagger_s=0.26,
+            stagger_speed=150.0,
+            stamina_cost=10.0,
+            noise_radius=190.0,
+            visual_len=12.0,
+            visual_thick=3,
+        ),
+        "melee_machete": _MeleeDef(
+            id="melee_machete",
+            name="\u780d\u5200",
+            total_s=0.34,
+            windup_s=0.10,
+            cooldown_s=0.40,
+            hit_t=0.50,
+            range_px=24.0,
+            arc_dot=0.30,
+            damage=18,
+            stagger_s=0.16,
+            stagger_speed=110.0,
+            stamina_cost=8.0,
+            noise_radius=140.0,
+            visual_len=10.0,
+            visual_thick=2,
+        ),
+    }
+
+    _CLOTHES_OUTFIT_INDEX: dict[str, int] = {
+        "clothes_jacket_blue": 0,
+        "clothes_work_green": 1,
+        "clothes_tactical_gray": 2,
+        "clothes_prisoner_orange": 3,
+        "clothes_medic_white": 4,
+        "clothes_raincoat_yellow": 5,
+        "clothes_hoodie_pink": 6,
+        "clothes_denim_blue": 7,
+        "clothes_chef_white": 8,
+        "clothes_racing_red": 9,
+        "clothes_xmas_green": 10,
+        "clothes_black_suit": 11,
+        "clothes_desert_camo": 12,
+        "clothes_sport_cyan": 13,
+        "clothes_pajama_bear": 14,
+        "clothes_maid": 15,
+    }
+
+    _OUTFIT_TO_CLOTHES: dict[int, str] = {
+        0: "clothes_jacket_blue",
+        1: "clothes_work_green",
+        2: "clothes_tactical_gray",
+        3: "clothes_prisoner_orange",
+        4: "clothes_medic_white",
+        5: "clothes_raincoat_yellow",
+        6: "clothes_hoodie_pink",
+        7: "clothes_denim_blue",
+        8: "clothes_chef_white",
+        9: "clothes_racing_red",
+        10: "clothes_xmas_green",
+        11: "clothes_black_suit",
+        12: "clothes_desert_camo",
+        13: "clothes_sport_cyan",
+        14: "clothes_pajama_bear",
+        15: "clothes_maid",
+    }
     # Zombie corpse/decay (keep bodies for a while instead of despawning instantly).
     _ZOMBIE_CORPSE_TOTAL_S = 14.0
     _ZOMBIE_FALL_S = 0.22
@@ -7461,10 +8256,16 @@ class HardcoreSurvivalState(State):
                         reserved=door_reserved,
                     )
 
-            if not is_city and not is_gas_station:
-                # Beach / wetlands / highway decoration on non-city chunks.
-                rng2 = random.Random(self.state._hash2_u32(cx, cy, self.seed ^ 0x0D00BDEC))
-                self._stamp_outdoor_decor(tiles, props, cx, cy, rng=rng2)
+                if not is_city and not is_gas_station:
+                    # Beach / wetlands / highway decoration on non-city chunks.
+                    rng2 = random.Random(self.state._hash2_u32(cx, cy, self.seed ^ 0x0D00BDEC))
+                    self._stamp_outdoor_decor(tiles, props, cx, cy, rng=rng2)
+
+            # Safety net: ensure every stamped building that has a walkable interior
+            # is actually enterable from outside (some rare stamp interactions can
+            # overwrite door tiles).
+            if buildings or special_buildings:
+                self._ensure_building_doors(tiles, buildings, special_buildings, cx, cy, reserved=door_reserved)
 
             # Safety: prevent parked vehicles from ending up inside building footprints.
             # This can happen if later stamps overwrite previously spawned vehicles.
@@ -8215,6 +9016,176 @@ class HardcoreSurvivalState(State):
                     )
                 )
                 placed += 1
+
+        def _ensure_building_doors(
+            self,
+            tiles: list[int],
+            buildings: list[tuple[int, int, int, int, int, int]],
+            special_buildings: list["HardcoreSurvivalState._SpecialBuilding"],
+            cx: int,
+            cy: int,
+            *,
+            reserved: set[tuple[int, int]] | None = None,
+        ) -> None:
+            # Ensure that:
+            # - portal buildings' door tiles are actually doors on the tilemap
+            # - "walkable interior" buildings have at least 1 exterior door
+            # This prevents un-enterable buildings (solid wall loops).
+            chunk_size = int(self.state.CHUNK_SIZE)
+            base_tx = int(cx) * chunk_size
+            base_ty = int(cy) * chunk_size
+
+            def idx(x: int, y: int) -> int:
+                return int(y) * chunk_size + int(x)
+
+            door_tids = {
+                int(self.state.T_DOOR),
+                int(self.state.T_DOOR_HOME),
+                int(self.state.T_DOOR_LOCKED),
+                int(self.state.T_DOOR_HOME_LOCKED),
+                int(self.state.T_DOOR_BROKEN),
+            }
+
+            # 1) Special building portals: force the listed door tiles to be doors.
+            try:
+                for sb in list(special_buildings or []):
+                    for tx, ty in getattr(sb, "door_tiles", ()) or ():
+                        lx = int(tx) - int(base_tx)
+                        ly = int(ty) - int(base_ty)
+                        if 0 <= lx < chunk_size and 0 <= ly < chunk_size:
+                            tiles[idx(lx, ly)] = int(self.state.T_DOOR)
+            except Exception:
+                pass
+
+            def has_walkable_interior(x0: int, y0: int, w: int, h: int) -> bool:
+                # Decorative blocks (e.g., podium ring) are all-wall; skip them.
+                t_floor = int(self.state.T_FLOOR)
+                t_elev = int(self.state.T_ELEVATOR)
+                t_up = int(self.state.T_STAIRS_UP)
+                t_dn = int(self.state.T_STAIRS_DOWN)
+                for yy in range(int(y0) + 1, int(y0 + h) - 1):
+                    for xx in range(int(x0) + 1, int(x0 + w) - 1):
+                        t = int(tiles[idx(int(xx), int(yy))])
+                        if t in (t_floor, t_elev, t_up, t_dn):
+                            return True
+                return False
+
+            def border_has_door(x0: int, y0: int, w: int, h: int) -> bool:
+                for xx in range(int(x0), int(x0 + w)):
+                    if int(tiles[idx(int(xx), int(y0))]) in door_tids:
+                        return True
+                    if int(tiles[idx(int(xx), int(y0 + h - 1))]) in door_tids:
+                        return True
+                for yy in range(int(y0), int(y0 + h)):
+                    if int(tiles[idx(int(x0), int(yy))]) in door_tids:
+                        return True
+                    if int(tiles[idx(int(x0 + w - 1), int(yy))]) in door_tids:
+                        return True
+                return False
+
+            def approach_clear(x: int, y: int, *, ox: int, oy: int) -> bool:
+                # Ensure a few tiles outside the door aren't blocked by other buildings.
+                for step in range(1, 9):
+                    px = int(x) + int(ox) * int(step)
+                    py = int(y) + int(oy) * int(step)
+                    if not (0 <= px < chunk_size and 0 <= py < chunk_size):
+                        break
+                    tcur = int(tiles[idx(int(px), int(py))])
+                    if tcur in (
+                        int(self.state.T_WALL),
+                        int(self.state.T_FLOOR),
+                        int(self.state.T_DOOR),
+                        int(self.state.T_DOOR_HOME),
+                        int(self.state.T_DOOR_LOCKED),
+                        int(self.state.T_DOOR_HOME_LOCKED),
+                        int(self.state.T_DOOR_BROKEN),
+                    ):
+                        return False
+                return True
+
+            def carve_path_from(x: int, y: int, *, ox: int, oy: int) -> None:
+                path_tile = (
+                    int(self.state.T_SIDEWALK) if bool(self._is_city_chunk(int(cx), int(cy))) else int(self.state.T_ROAD)
+                )
+                for step in range(1, 9):
+                    px = int(x) + int(ox) * int(step)
+                    py = int(y) + int(oy) * int(step)
+                    if not (0 <= px < chunk_size and 0 <= py < chunk_size):
+                        break
+                    tcur = int(tiles[idx(int(px), int(py))])
+                    if tcur in (
+                        int(self.state.T_WALL),
+                        int(self.state.T_FLOOR),
+                        int(self.state.T_DOOR),
+                        int(self.state.T_DOOR_HOME),
+                        int(self.state.T_DOOR_LOCKED),
+                        int(self.state.T_DOOR_HOME_LOCKED),
+                        int(self.state.T_DOOR_BROKEN),
+                    ):
+                        break
+                    tiles[idx(int(px), int(py))] = int(path_tile)
+                    if reserved is not None:
+                        reserved.add((int(px), int(py)))
+
+            # 2) Regular buildings: if interior is walkable, guarantee at least one exterior door.
+            for bx0, by0, bw, bh, _roof_kind, _floors in list(buildings or []):
+                bx0 = int(bx0)
+                by0 = int(by0)
+                bw = int(bw)
+                bh = int(bh)
+                lx0 = int(bx0) - int(base_tx)
+                ly0 = int(by0) - int(base_ty)
+                if bw <= 0 or bh <= 0:
+                    continue
+                if not (0 <= lx0 < chunk_size and 0 <= ly0 < chunk_size):
+                    continue
+                if lx0 + bw > chunk_size or ly0 + bh > chunk_size:
+                    continue
+                if not has_walkable_interior(lx0, ly0, bw, bh):
+                    continue
+                if border_has_door(lx0, ly0, bw, bh):
+                    continue
+
+                # Default to a south-facing 2-tile entrance (matches our facade draw).
+                door_y = int(ly0 + bh - 1)
+                if door_y <= 0 or door_y >= chunk_size:
+                    continue
+                ox, oy = 0, 1
+
+                # Prefer positions with a clear approach; fall back to centered.
+                x_candidates = [int(x) for x in range(int(lx0 + 1), int(lx0 + bw - 2))]
+                if x_candidates:
+                    # Center bias: check closer-to-center candidates first.
+                    cx0 = int(lx0 + bw // 2)
+                    x_candidates.sort(key=lambda v: abs(int(v) - int(cx0)))
+
+                door_x0: int | None = None
+                for cand in x_candidates:
+                    if cand + 1 >= int(lx0 + bw - 1):
+                        continue
+                    # Ensure the tiles just inside the doorway are not walls.
+                    in_ok = True
+                    for dx in (cand, cand + 1):
+                        if int(tiles[idx(int(dx), int(door_y - 1))]) == int(self.state.T_WALL):
+                            in_ok = False
+                            break
+                    if not in_ok:
+                        continue
+                    if approach_clear(int(cand), int(door_y), ox=ox, oy=oy):
+                        door_x0 = int(cand)
+                        break
+
+                if door_x0 is None:
+                    # As a last resort, carve the interior landing too.
+                    door_x0 = int(clamp(int(lx0 + bw // 2 - 1), int(lx0 + 1), int(lx0 + bw - 3)))
+
+                for dx in (int(door_x0), int(door_x0 + 1)):
+                    tiles[idx(int(dx), int(door_y))] = int(self.state.T_DOOR)
+                    if int(tiles[idx(int(dx), int(door_y - 1))]) == int(self.state.T_WALL):
+                        tiles[idx(int(dx), int(door_y - 1))] = int(self.state.T_FLOOR)
+
+                carve_path_from(int(door_x0), int(door_y), ox=ox, oy=oy)
+                carve_path_from(int(door_x0 + 1), int(door_y), ox=ox, oy=oy)
 
         def _stamp_basketball_court(self, tiles: list[int], *, rng: random.Random) -> None:
             # Simple outdoor court: a rectangle of court tiles.
@@ -10016,6 +10987,8 @@ class HardcoreSurvivalState(State):
                 meds = pick_kind("med", prefix="med_", k=12)
                 mats = pick_kind("mat", k=8)
                 tools = pick_kind("tool", k=6)
+                melees = pick_kind("melee", prefix="melee_", k=5)
+                clothes = pick_kind("clothes", prefix="clothes_", k=8)
                 fuels = pick_kind("fuel", k=2)
                 keys = pick_kind("key", k=2)
 
@@ -10023,19 +10996,66 @@ class HardcoreSurvivalState(State):
                 if town_kind == "医院":
                     loot_choices = ["bandage", "medkit", "water"] + meds
                 elif town_kind in ("超市", "大型超市"):
-                    loot_choices = ["food_can", "water", "cola", "bandage", "medkit"] + foods + drinks + mats + tools
+                    loot_choices = ["food_can", "water", "cola", "bandage", "medkit"] + foods + drinks + mats + tools + melees + clothes
                 elif town_kind == "新华书店":
                     loot_choices = ["book", "paper", "map", "water", "cola", "bandage"] + foods + drinks
                 elif town_kind == "枪械店":
-                    loot_choices = ["pistol", "ammo_9mm", "ammo_9mm", "scrap", "bandage", "knife", "crowbar"] + mats + tools
+                    loot_choices = [
+                        "pistol",
+                        "uzi",
+                        "ak47",
+                        "scar_l",
+                        "ammo_9mm",
+                        "ammo_9mm",
+                        "ammo_556",
+                        "ammo_556",
+                        "ammo_762",
+                        "ammo_762",
+                        "ammo_rocket",
+                        "mod_optic_reddot",
+                        "mod_optic_4x",
+                        "mod_optic_holo",
+                        "mod_muzzle_suppressor_9mm",
+                        "mod_muzzle_suppressor_rifle",
+                        "mod_muzzle_comp_rifle",
+                        "mod_muzzle_flash_hider_rifle",
+                        "mod_undergrip_stab",
+                        "mod_undergrip_bipod",
+                        "mod_stock_tactical",
+                        "mod_trigger_light",
+                        "mod_mag_ext_pistol",
+                        "mod_mag_ext_9mm",
+                        "mod_mag_ext_rifle",
+                        "mod_mag_drum_9mm",
+                        "mod_mag_drum_rifle",
+                        "scrap",
+                        "bandage",
+                        "knife",
+                        "crowbar",
+                    ] + mats + tools + melees + clothes
+                    # Heavy weapons are rare even in gun shops.
+                    if rng.random() < 0.07:
+                        loot_choices.append("rpg")
                 elif town_kind in ("监狱", "大型监狱"):
-                    loot_choices = ["pistol", "ammo_9mm", "ammo_9mm", "scrap", "bandage"] + mats
+                    loot_choices = ["pistol", "ak47", "ammo_9mm", "ammo_762", "ammo_762", "scrap", "bandage", "crowbar"] + mats + melees + clothes
                 elif town_kind == "学校":
                     loot_choices = ["food_can", "water", "cola", "bandage", "book", "paper"] + foods + drinks
                 elif town_kind in ("高层住宅", "高层住宅大"):
-                    loot_choices = ["food_can", "water", "cola", "bandage", "scrap", "ammo_9mm"] + foods + drinks + mats
+                    loot_choices = [
+                        "food_can",
+                        "water",
+                        "cola",
+                        "bandage",
+                        "scrap",
+                        "ammo_9mm",
+                        "ammo_556",
+                        "ammo_762",
+                        "mod_optic_reddot",
+                        "mod_muzzle_suppressor_9mm",
+                        "mod_mag_ext_pistol",
+                    ] + foods + drinks + mats + melees + clothes
                 else:
-                    loot_choices = ["food_can", "water", "cola", "bandage"] + foods[:8] + drinks[:6] + mats
+                    loot_choices = ["food_can", "water", "cola", "bandage"] + foods[:8] + drinks[:6] + mats + melees + clothes
 
                 # Vehicle keys / fuel are rare, but exist in the world so the hardcore loop works.
                 key_ch = 0.08
@@ -10234,6 +11254,12 @@ class HardcoreSurvivalState(State):
         spawn_py = (spawn_ty + 0.5) * self.TILE_SIZE
         self.avatar = getattr(self, "avatar", None) or SurvivalAvatar()
         self.avatar.clamp_all()
+        self.clothes_id: str | None = None
+        try:
+            starter = self._OUTFIT_TO_CLOTHES.get(int(getattr(self.avatar, "outfit", 0)))
+            self.clothes_id = str(starter) if starter else None
+        except Exception:
+            self.clothes_id = None
         self.player = HardcoreSurvivalState._Player(
             pos=pygame.Vector2(spawn_px, spawn_py),
             vel=pygame.Vector2(0, 0),
@@ -10308,6 +11334,7 @@ class HardcoreSurvivalState(State):
         self.hint_text = ""
         self.hint_left = 0.0
         self.gun: HardcoreSurvivalState._Gun | None = None
+        self.melee_weapon_id: str | None = None
         self.bullets: list[HardcoreSurvivalState._Bullet] = []
         self.zombies: list[HardcoreSurvivalState._Zombie] = []
         self.spawn_left = 8.0
@@ -10560,6 +11587,7 @@ class HardcoreSurvivalState(State):
         self.punch_hit_done = False
         self.punch_dir = pygame.Vector2(1, 0)
         self.punch_hand = 0  # 0=left, 1=right (alternates each punch)
+        self._melee_swing_id = "fist"
         self.hit_fx: list[HardcoreSurvivalState._HitFX] = []
         # Visual-only RNG: keep it separate so FX doesn't affect gameplay RNG.
         self.fx_rng = random.Random(self.seed ^ 0x51C0B1A7)
@@ -14189,7 +15217,7 @@ class HardcoreSurvivalState(State):
             self.gun.reload_left = max(0.0, float(self.gun.reload_left) - dt)
             if self.gun.reload_left <= 0.0:
                 self._reload_lock_dir = None
-                gun_def = self._GUNS.get(self.gun.gun_id)
+                gun_def = self._gun_effective_def(self.gun)
                 if gun_def is not None:
                     need = int(gun_def.mag_size) - int(self.gun.mag)
                     if need > 0:
@@ -18491,6 +19519,29 @@ class HardcoreSurvivalState(State):
         try:
             ts = int(self.TILE_SIZE)
             if ts > 0:
+                # If the current vehicle is using a smaller "driving" collider (e.g. RV),
+                # inflate building footprints so the *visual* vehicle can't clip into walls.
+                inflate_x = 0
+                inflate_y = 0
+                try:
+                    if self.mount == "rv":
+                        mid = str(getattr(self.rv, "model_id", "rv"))
+                        model = self._CAR_MODELS.get(mid) or self._CAR_MODELS.get("rv")
+                        if model is not None:
+                            fw, fh = int(model.collider[0]), int(model.collider[1])
+                            # Match the same axis-orientation that driving uses (swap when near-vertical).
+                            axis = int(getattr(self, "_rv_drive_axis", 0))
+                            if axis == 1:
+                                fw, fh = int(fh), int(fw)
+                            inflate_x = max(0, (int(fw) - int(rect.w)) // 2)
+                            inflate_y = max(0, (int(fh) - int(rect.h)) // 2)
+                            # Keep it bounded; we only want to compensate for drive_collider.
+                            inflate_x = int(clamp(int(inflate_x), 0, int(ts) * 3))
+                            inflate_y = int(clamp(int(inflate_y), 0, int(ts) * 3))
+                except Exception:
+                    inflate_x = 0
+                    inflate_y = 0
+
                 start_cx = left // self.CHUNK_SIZE
                 end_cx = right // self.CHUNK_SIZE
                 start_cy = top // self.CHUNK_SIZE
@@ -18506,6 +19557,8 @@ class HardcoreSurvivalState(State):
                                 continue
                             seen_buildings.add(key)
                             brect = pygame.Rect(int(bx0 * ts), int(by0 * ts), int(bw * ts), int(bh * ts))
+                            if inflate_x > 0 or inflate_y > 0:
+                                brect = brect.inflate(int(inflate_x) * 2, int(inflate_y) * 2)
                             if rect.colliderect(brect):
                                 hits.append(brect)
         except Exception:
@@ -19019,7 +20072,16 @@ class HardcoreSurvivalState(State):
 
         return p
 
-    def _move_box_vehicle(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
+    def _move_box_vehicle(
+        self,
+        pos: pygame.Vector2,
+        vel: pygame.Vector2,
+        dt: float,
+        *,
+        w: int,
+        h: int,
+        max_dist: float | None = None,
+    ) -> pygame.Vector2:
         # Sub-stepped movement to avoid tunneling through 1-tile walls when dt spikes.
         w = int(w)
         h = int(h)
@@ -19140,6 +20202,23 @@ class HardcoreSurvivalState(State):
 
         dx_total = float(vel.x) * dt
         dy_total = float(vel.y) * dt
+        # If the vehicle is running out of fuel mid-frame, cap the travel distance so it
+        # stops exactly when fuel reaches 0 (instead of gliding for the rest of the frame).
+        if max_dist is not None:
+            try:
+                md = float(max_dist)
+            except Exception:
+                md = None
+            if md is not None:
+                if md <= 0.0:
+                    dx_total = 0.0
+                    dy_total = 0.0
+                else:
+                    dlen = float(math.hypot(float(dx_total), float(dy_total)))
+                    if dlen > md and dlen > 1e-9:
+                        s = float(md) / float(dlen)
+                        dx_total *= float(s)
+                        dy_total *= float(s)
         if abs(dx_total) < 1e-6 and abs(dy_total) < 1e-6:
             # Persist a safe position for un-sticking.
             try:
@@ -19675,12 +20754,12 @@ class HardcoreSurvivalState(State):
             else:
                 self._rv_no_fuel_warned = False
 
-            # Out of fuel: allow very slow pushing so vehicles never feel completely dead.
-            push_mult = 0.65 if fuel_empty else 1.0
-            accel_mult = 0.70 if fuel_empty else boost
+            # Out of fuel: engine stops (no acceleration), but the vehicle can still coast
+            # due to inertia and slow down via drag/braking (hardcore simulation feel).
+            accel_mult = 0.0 if fuel_empty else boost
 
-            max_fwd = float(model.max_fwd) * traction * float(push_mult) * (1.0 if fuel_empty else boost)
-            max_rev = float(model.max_rev) * traction * float(push_mult)
+            max_fwd = float(model.max_fwd) * traction * float(boost)
+            max_rev = float(model.max_rev) * traction
             accel = float(model.accel) * traction * float(accel_mult)
             brake = float(model.brake) * traction
             drag = 1.8 + (1.0 - traction) * 2.2
@@ -19695,30 +20774,43 @@ class HardcoreSurvivalState(State):
                 self.rv.steer = 0.0
 
             speed = float(self.rv.speed)
-            # W = accelerate forward, S = brake (and reverse only after stopping).
-            if throttle > 0.0:
-                if speed < -0.5:
-                    # Braking while reversing.
-                    speed = min(0.0, speed + brake * dt)
-                else:
-                    speed += accel * dt
-                self._rv_reverse_hold = 0.0
-            elif throttle < 0.0:
-                if speed > 0.5:
-                    # Braking while moving forward.
-                    speed = max(0.0, speed - brake * dt)
-                    self._rv_reverse_hold = 0.0
-                else:
-                    # Reverse is gated: hold S briefly after stopping.
-                    hold = float(getattr(self, "_rv_reverse_hold", 0.0)) + float(dt)
-                    self._rv_reverse_hold = float(hold)
-                    if float(hold) >= 0.25:
-                        speed -= (accel * 0.75) * dt
+            if fuel_empty:
+                # Engine off: W does nothing; S is braking. Otherwise coast with drag.
+                if throttle < 0.0:
+                    if speed > 0.5:
+                        speed = max(0.0, speed - brake * dt)
+                    elif speed < -0.5:
+                        speed = min(0.0, speed + brake * dt)
                     else:
                         speed = 0.0
-            else:
-                speed *= max(0.0, 1.0 - drag * dt)
+                else:
+                    speed *= max(0.0, 1.0 - drag * dt)
                 self._rv_reverse_hold = 0.0
+            else:
+                # W = accelerate forward, S = brake (and reverse only after stopping).
+                if throttle > 0.0:
+                    if speed < -0.5:
+                        # Braking while reversing.
+                        speed = min(0.0, speed + brake * dt)
+                    else:
+                        speed += accel * dt
+                    self._rv_reverse_hold = 0.0
+                elif throttle < 0.0:
+                    if speed > 0.5:
+                        # Braking while moving forward.
+                        speed = max(0.0, speed - brake * dt)
+                        self._rv_reverse_hold = 0.0
+                    else:
+                        # Reverse is gated: hold S briefly after stopping.
+                        hold = float(getattr(self, "_rv_reverse_hold", 0.0)) + float(dt)
+                        self._rv_reverse_hold = float(hold)
+                        if float(hold) >= 0.25:
+                            speed -= (accel * 0.75) * dt
+                        else:
+                            speed = 0.0
+                else:
+                    speed *= max(0.0, 1.0 - drag * dt)
+                    self._rv_reverse_hold = 0.0
 
             speed = float(clamp(speed, -max_rev, max_fwd))
             self.rv.speed = speed
@@ -19880,17 +20972,19 @@ class HardcoreSurvivalState(State):
 
             want_sprint = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
             moving_now = move.length_squared() > 0.001
-            if uses_fuel and fuel <= 0.01:
-                if moving_now and want_sprint and not bool(getattr(self, "_bike_no_fuel_warned", False)):
+            fuel_empty = bool(uses_fuel and fuel <= 0.01)
+            if fuel_empty:
+                if moving_now and not bool(getattr(self, "_bike_no_fuel_warned", False)):
                     self._set_hint("摩托车没油了", seconds=1.0)
                     self._bike_no_fuel_warned = True
-                # Dead engine: push slowly (also uses stamina a bit).
-                speed *= 0.55
-                stamina = float(self.player.stamina)
-                if moving_now:
-                    self.player.stamina = float(clamp(stamina - dt * 10.0, 0.0, 100.0))
-                else:
-                    self.player.stamina = float(clamp(stamina + dt * 12.0, 0.0, 100.0))
+                # Engine off: keep coasting with friction; no input thrust.
+                try:
+                    drag = 5.0
+                    self.bike.vel *= max(0.0, 1.0 - float(drag) * float(dt))
+                    if self.bike.vel.length_squared() < 0.15:
+                        self.bike.vel.update(0, 0)
+                except Exception:
+                    self.bike.vel.update(0, 0)
                 want_sprint = False
             elif self._bike_uses_stamina():
                 stamina = float(self.player.stamina)
@@ -19906,7 +21000,8 @@ class HardcoreSurvivalState(State):
                     speed *= 1.35
                 self.player.stamina = float(clamp(float(self.player.stamina) + dt * 14.0, 0.0, 100.0))
 
-            self.bike.vel = move * speed
+            if not fuel_empty:
+                self.bike.vel = move * speed
             if self.bike.vel.length_squared() > 0.1:
                 if abs(self.bike.vel.y) >= abs(self.bike.vel.x):
                     self.bike_dir = "down" if self.bike.vel.y >= 0 else "up"
@@ -19960,18 +21055,20 @@ class HardcoreSurvivalState(State):
                 can_sprint = False
 
             if can_sprint:
-                # Keep sprint pixel-perfect at the fixed timestep (dt=1/FPS):
-                # base_speed=60 -> 1px/frame; sprint=120 -> 2px/frame (no camera jitter).
-                speed *= 2.0
+                # Sprint speed multiplier (diagonal sprint is normalized below).
+                speed *= 1.7
                 self.player.stamina = float(clamp(stamina - dt * 28.0, 0.0, 100.0))
             else:
                 regen_mod = 0.50 + 0.50 * (min(self.player.hunger, self.player.thirst) / 100.0)
                 regen_mod *= 0.55 + 0.45 * (self.player.morale / 100.0)
                 self.player.stamina = float(clamp(stamina + dt * 16.0 * regen_mod, 0.0, 100.0))
             self.player_sprinting = bool(can_sprint)
-            # Keep raw 8-way input (no normalization) so diagonal walking
-            # doesn't "stutter" in pixel space.
-            self.player.vel = move_raw * speed
+            # Keep raw 8-way input (no normalization) so cardinal walking stays
+            # pixel-perfect, but normalize diagonal sprint so Shift+斜向不会更快。
+            move_vel = pygame.Vector2(move_raw)
+            if can_sprint and abs(float(move_raw.x)) > 1e-6 and abs(float(move_raw.y)) > 1e-6:
+                move_vel = pygame.Vector2(move)
+            self.player.vel = move_vel * speed
 
             if self.player.vel.length_squared() > 0.1:
                 self.player.walk_phase += dt * 10.0 * (self.player.vel.length() / base_speed)
@@ -24354,6 +25451,87 @@ class HardcoreSurvivalState(State):
         return True
         return False
 
+    def _gun_effective_def(self, gun: "HardcoreSurvivalState._Gun | None" = None) -> "HardcoreSurvivalState._GunDef | None":
+        gun = self.gun if gun is None else gun
+        if gun is None:
+            return None
+        base = self._GUNS.get(str(getattr(gun, "gun_id", "")))
+        if base is None:
+            return None
+
+        mag_add = 0
+        fire_rate_mult = 1.0
+        reload_mult = 1.0
+        damage_mult = 1.0
+        damage_add = 0
+        bullet_speed_mult = 1.0
+        spread_mult = 1.0
+        noise_mult = 1.0
+
+        mods = getattr(gun, "mods", None)
+        if isinstance(mods, dict):
+            for _slot, mod_id in list(mods.items()):
+                mdef = self._GUN_MODS.get(str(mod_id))
+                if mdef is None:
+                    continue
+                if str(getattr(gun, "gun_id", "")) not in tuple(getattr(mdef, "compat", ())):
+                    continue
+                mag_add += int(getattr(mdef, "mag_add", 0))
+                fire_rate_mult *= float(getattr(mdef, "fire_rate_mult", 1.0))
+                reload_mult *= float(getattr(mdef, "reload_mult", 1.0))
+                damage_mult *= float(getattr(mdef, "damage_mult", 1.0))
+                damage_add += int(getattr(mdef, "damage_add", 0))
+                bullet_speed_mult *= float(getattr(mdef, "bullet_speed_mult", 1.0))
+                spread_mult *= float(getattr(mdef, "spread_mult", 1.0))
+                noise_mult *= float(getattr(mdef, "noise_mult", 1.0))
+
+        mag_size = max(1, int(round(float(base.mag_size) + float(mag_add))))
+        fire_rate = max(0.1, float(base.fire_rate) * float(fire_rate_mult))
+        reload_s = max(0.20, float(base.reload_s) * float(reload_mult))
+        damage = int(max(1.0, float(base.damage) * float(damage_mult) + float(damage_add)))
+        bullet_speed = max(40.0, float(base.bullet_speed) * float(bullet_speed_mult))
+        spread_deg = max(0.25, float(base.spread_deg) * float(spread_mult))
+        noise_radius = max(60.0, float(base.noise_radius) * float(noise_mult))
+
+        return HardcoreSurvivalState._GunDef(
+            id=str(base.id),
+            name=str(base.name),
+            ammo_item=str(base.ammo_item),
+            mag_size=int(mag_size),
+            fire_rate=float(fire_rate),
+            reload_s=float(reload_s),
+            damage=int(damage),
+            bullet_speed=float(bullet_speed),
+            spread_deg=float(spread_deg),
+            noise_radius=float(noise_radius),
+            muzzle_flash_s=float(getattr(base, "muzzle_flash_s", 0.06)),
+            bullet_ttl=float(getattr(base, "bullet_ttl", 1.35)),
+            bullet_kind=str(getattr(base, "bullet_kind", "bullet")),
+            aoe_radius=float(getattr(base, "aoe_radius", 0.0)),
+            aoe_damage=int(getattr(base, "aoe_damage", 0)),
+        )
+
+    def _gun_mod_label(self, gun: "HardcoreSurvivalState._Gun | None" = None) -> str:
+        gun = self.gun if gun is None else gun
+        if gun is None:
+            return ""
+        mods = getattr(gun, "mods", None)
+        if not isinstance(mods, dict) or not mods:
+            return ""
+        names: list[str] = []
+        for _slot, mid in mods.items():
+            mdef = self._GUN_MODS.get(str(mid))
+            if mdef is None:
+                continue
+            if str(getattr(gun, "gun_id", "")) not in tuple(getattr(mdef, "compat", ())):
+                continue
+            n = str(getattr(mdef, "name", "")).strip()
+            if n:
+                names.append(n)
+        if not names:
+            return ""
+        return " +".join(names[:3])
+
     def _equip_selected(self) -> None:
         if not (0 <= int(self.inv_index) < len(self.inventory.slots)):
             return
@@ -24366,7 +25544,121 @@ class HardcoreSurvivalState(State):
             self._set_hint("未知物品")
             return
 
+        if idef.kind == "gun_mod":
+            if self.gun is None:
+                self._set_hint("先装枪再装配件", seconds=1.0)
+                return
+            mdef = self._GUN_MODS.get(str(stack.item_id))
+            if mdef is None:
+                self._set_hint("未知枪械配件", seconds=1.0)
+                return
+            if str(getattr(self.gun, "gun_id", "")) not in tuple(getattr(mdef, "compat", ())):
+                self._set_hint("这个配件不适配当前枪", seconds=1.0)
+                return
+
+            slot_key = str(getattr(mdef, "slot", ""))
+            if not slot_key:
+                self._set_hint("配件缺少安装位", seconds=1.0)
+                return
+
+            old = None
+            try:
+                old = (self.gun.mods or {}).get(slot_key)
+            except Exception:
+                old = None
+
+            if str(old or "") == str(getattr(mdef, "id", "")):
+                self._set_hint("已经装着了", seconds=0.8)
+                return
+
+            if old:
+                left = int(self.inventory.add(str(old), 1, self._ITEMS))
+                if left > 0:
+                    self._set_hint("背包满了，拆不下来", seconds=1.0)
+                    return
+
+            if stack.qty > 1:
+                stack.qty -= 1
+            else:
+                self.inventory.slots[int(self.inv_index)] = None
+
+            try:
+                self.gun.mods[slot_key] = str(getattr(mdef, "id", ""))
+            except Exception:
+                self.gun.mods = {slot_key: str(getattr(mdef, "id", ""))}
+
+            # Installing parts changes timings/capacity: cancel reload and clamp mag.
+            try:
+                self.gun.reload_left = 0.0
+                self.gun.reload_total = 0.0
+            except Exception:
+                pass
+            self._reload_lock_dir = None
+
+            gdef2 = self._gun_effective_def(self.gun)
+            if gdef2 is not None:
+                try:
+                    self.gun.mag = int(clamp(int(self.gun.mag), 0, int(gdef2.mag_size)))
+                except Exception:
+                    pass
+
+            self._set_hint(f"已安装 {getattr(mdef, 'name', '')}")
+            return
+
         if idef.kind != "gun":
+            if idef.kind == "melee":
+                old = str(getattr(self, "melee_weapon_id", "") or "")
+                if stack.qty > 1:
+                    stack.qty -= 1
+                else:
+                    self.inventory.slots[int(self.inv_index)] = None
+
+                if old:
+                    left = int(self.inventory.add(old, 1, self._ITEMS))
+                    if left > 0:
+                        self.inventory.add(str(stack.item_id), 1, self._ITEMS)
+                        self._set_hint("鑳屽寘婊′簡锛屾棤娉曟崲杩戞垬", seconds=1.0)
+                        return
+
+                self.melee_weapon_id = str(stack.item_id)
+                self._set_hint(f"瑁呭杩戞垬 {idef.name}")
+                return
+
+            if idef.kind == "clothes":
+                new_outfit = self._CLOTHES_OUTFIT_INDEX.get(str(stack.item_id))
+                if new_outfit is None:
+                    self._set_hint("未知衣服", seconds=1.0)
+                    return
+                if str(getattr(self, "clothes_id", "") or "") == str(stack.item_id):
+                    self._set_hint("已经穿着了", seconds=0.8)
+                    return
+
+                old = str(getattr(self, "clothes_id", "") or "")
+                if stack.qty > 1:
+                    stack.qty -= 1
+                else:
+                    self.inventory.slots[int(self.inv_index)] = None
+
+                if old:
+                    left = int(self.inventory.add(old, 1, self._ITEMS))
+                    if left > 0:
+                        self.inventory.add(str(stack.item_id), 1, self._ITEMS)
+                        self._set_hint("背包满了，无法换装", seconds=1.0)
+                        return
+
+                try:
+                    self.avatar.outfit = int(new_outfit)
+                    self.avatar.clamp_all()
+                except Exception:
+                    pass
+                self.player_frames = HardcoreSurvivalState.build_avatar_player_frames(self.avatar, run=False)
+                self.player_frames_run = HardcoreSurvivalState.build_avatar_player_frames(self.avatar, run=True)
+                self.cyclist_frames = HardcoreSurvivalState.build_avatar_cyclist_frames(self.avatar)
+
+                self.clothes_id = str(stack.item_id)
+                self._set_hint(f"换装：{idef.name}")
+                return
+
             if idef.kind in ("food", "drink", "med", "fuel"):
                 ok = self._use_consumable(stack.item_id)
                 if not ok:
@@ -24409,19 +25701,42 @@ class HardcoreSurvivalState(State):
             self._set_hint("未知枪械")
             return
 
+        saved_meta: dict[str, object] = {}
+        try:
+            if isinstance(getattr(stack, "meta", None), dict):
+                saved_meta = dict(getattr(stack, "meta", {}))
+        except Exception:
+            saved_meta = {}
+
         if stack.qty > 1:
             stack.qty -= 1
         else:
             self.inventory.slots[int(self.inv_index)] = None
 
         if self.gun is not None:
-            left = self.inventory.add(self.gun.gun_id, 1, self._ITEMS)
+            old_meta = {"mag": int(getattr(self.gun, "mag", 0)), "mods": dict(getattr(self.gun, "mods", {}) or {})}
+            left = self.inventory.add(self.gun.gun_id, 1, self._ITEMS, meta=old_meta)
             if left > 0:
-                self.inventory.add(stack.item_id, 1, self._ITEMS)
+                self.inventory.add(stack.item_id, 1, self._ITEMS, meta=saved_meta or None)
                 self._set_hint("背包满了，无法换枪")
                 return
 
-        self.gun = HardcoreSurvivalState._Gun(gun_id=gun_def.id, mag=int(gun_def.mag_size))
+        mag = int(gun_def.mag_size)
+        mods: dict[str, str] = {}
+        try:
+            if isinstance(saved_meta, dict):
+                if isinstance(saved_meta.get("mag"), (int, float)):
+                    mag = int(saved_meta["mag"])
+                if isinstance(saved_meta.get("mods"), dict):
+                    mods = {str(k): str(v) for k, v in saved_meta["mods"].items()}
+        except Exception:
+            mag = int(gun_def.mag_size)
+            mods = {}
+
+        self.gun = HardcoreSurvivalState._Gun(gun_id=gun_def.id, mag=int(mag), mods=mods)
+        gdef2 = self._gun_effective_def(self.gun)
+        if gdef2 is not None:
+            self.gun.mag = int(clamp(int(self.gun.mag), 0, int(gdef2.mag_size)))
         self._reload_lock_dir = None
         self._set_hint(f"装备 {gun_def.name}")
 
@@ -24429,7 +25744,7 @@ class HardcoreSurvivalState(State):
         if self.gun is None:
             self._set_hint("没有装备枪")
             return
-        gun_def = self._GUNS.get(self.gun.gun_id)
+        gun_def = self._gun_effective_def(self.gun)
         if gun_def is None:
             self._set_hint("未知枪械")
             return
@@ -24507,13 +25822,18 @@ class HardcoreSurvivalState(State):
         }
         self.punch_dir = pygame.Vector2(dir_map.get(dname, pygame.Vector2(1, 0)))
         self.punch_hand = 1 - int(getattr(self, "punch_hand", 0))
-        self.punch_left = float(self._PUNCH_TOTAL_S)
+        mdef = self._MELEE_DEFS.get(str(getattr(self, "melee_weapon_id", "")) or "") or self._MELEE_DEFS.get("fist")
+        if mdef is None:
+            return
+        self._melee_swing_id = str(getattr(mdef, "id", "fist"))
+        self.punch_left = float(getattr(mdef, "total_s", self._PUNCH_TOTAL_S))
         self.punch_hit_done = False
-        self.punch_cooldown_left = float(self._PUNCH_COOLDOWN_S)
+        self.punch_cooldown_left = float(getattr(mdef, "cooldown_s", self._PUNCH_COOLDOWN_S))
 
         # Small stamina cost (no hard gate).
         try:
-            self.player.stamina = float(clamp(float(self.player.stamina) - 5.0, 0.0, 100.0))
+            cost = float(getattr(mdef, "stamina_cost", 5.0))
+            self.player.stamina = float(clamp(float(self.player.stamina) - float(cost), 0.0, 100.0))
         except Exception:
             pass
 
@@ -24533,9 +25853,12 @@ class HardcoreSurvivalState(State):
         if bool(getattr(self, "punch_hit_done", False)):
             return
 
-        total = float(self._PUNCH_TOTAL_S)
+        mdef = self._MELEE_DEFS.get(str(getattr(self, "_melee_swing_id", "")) or "") or self._MELEE_DEFS.get("fist")
+        total = float(getattr(mdef, "total_s", self._PUNCH_TOTAL_S)) if mdef is not None else float(self._PUNCH_TOTAL_S)
         t = 1.0 - float(left) / max(1e-6, total)
-        hit_t = max(float(self._PUNCH_HIT_T), float(self._PUNCH_WINDUP_S) / max(1e-6, total))
+        base_hit_t = float(getattr(mdef, "hit_t", self._PUNCH_HIT_T)) if mdef is not None else float(self._PUNCH_HIT_T)
+        windup_s = float(getattr(mdef, "windup_s", self._PUNCH_WINDUP_S)) if mdef is not None else float(self._PUNCH_WINDUP_S)
+        hit_t = max(float(base_hit_t), float(windup_s) / max(1e-6, total))
         if t < hit_t:
             return
 
@@ -24553,10 +25876,12 @@ class HardcoreSurvivalState(State):
             pdir = pygame.Vector2(1, 0)
         pdir = pdir.normalize()
 
+        mdef = self._MELEE_DEFS.get(str(getattr(self, "_melee_swing_id", "")) or "") or self._MELEE_DEFS.get("fist")
+
         origin = pygame.Vector2(self.player.pos)
-        max_r = float(getattr(self, "_PUNCH_RANGE_PX", 18.0))
+        max_r = float(getattr(mdef, "range_px", getattr(self, "_PUNCH_RANGE_PX", 18.0))) if mdef is not None else float(getattr(self, "_PUNCH_RANGE_PX", 18.0))
         max_r2 = float(max_r * max_r)
-        arc_dot = float(getattr(self, "_PUNCH_ARC_DOT", 0.28))
+        arc_dot = float(getattr(mdef, "arc_dot", getattr(self, "_PUNCH_ARC_DOT", 0.28))) if mdef is not None else float(getattr(self, "_PUNCH_ARC_DOT", 0.28))
 
         best: HardcoreSurvivalState._Zombie | None = None
         best_d2 = 1e18
@@ -24578,18 +25903,22 @@ class HardcoreSurvivalState(State):
         if best is None:
             return
 
-        dmg = int(self._PUNCH_DAMAGE)
+        dmg = int(getattr(mdef, "damage", self._PUNCH_DAMAGE)) if mdef is not None else int(self._PUNCH_DAMAGE)
         best.hp = int(best.hp) - int(dmg)
         if int(best.hp) > 0:
-            best.stagger_left = max(float(getattr(best, "stagger_left", 0.0)), float(self._PUNCH_STAGGER_S))
-            best.stagger_vel = pygame.Vector2(pdir) * float(self._PUNCH_STAGGER_SPEED)
+            stag_s = float(getattr(mdef, "stagger_s", self._PUNCH_STAGGER_S)) if mdef is not None else float(self._PUNCH_STAGGER_S)
+            stag_spd = float(getattr(mdef, "stagger_speed", self._PUNCH_STAGGER_SPEED)) if mdef is not None else float(self._PUNCH_STAGGER_SPEED)
+            best.stagger_left = max(float(getattr(best, "stagger_left", 0.0)), float(stag_s))
+            best.stagger_vel = pygame.Vector2(pdir) * float(stag_spd)
         else:
             self._kill_zombie(best, impact_dir=pdir)
 
         self._spawn_hit_fx(pygame.Vector2(best.pos), dir=pdir)
         self.app.play_sfx("hit")
-        self.noise_left = max(float(getattr(self, "noise_left", 0.0)), 0.22)
-        self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), 120.0)
+        nrad = float(getattr(mdef, "noise_radius", 120.0)) if mdef is not None else 120.0
+        loud = 0.22 if str(getattr(mdef, "id", "fist")) == "fist" else 0.30
+        self.noise_left = max(float(getattr(self, "noise_left", 0.0)), float(loud))
+        self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), float(nrad))
         # Zombies become corpses (decay later) instead of being removed immediately.
 
     def _spawn_hit_fx(self, pos: pygame.Vector2, *, dir: pygame.Vector2) -> None:
@@ -24912,7 +26241,7 @@ class HardcoreSurvivalState(State):
     def _fire(self) -> None:
         if self.gun is None:
             return
-        gun_def = self._GUNS.get(self.gun.gun_id)
+        gun_def = self._gun_effective_def(self.gun)
         if gun_def is None:
             return
         if self.gun.reload_left > 0.0 or self.gun.cooldown_left > 0.0:
@@ -24986,34 +26315,122 @@ class HardcoreSurvivalState(State):
             base_hand = pygame.Vector2(rect.centerx, rect.centery + 3)
         muzzle = base_hand + aim * 17.0
         spawn = pygame.Vector2(muzzle)
+        bkind = str(getattr(gun_def, "bullet_kind", "bullet"))
         self.bullets.append(
             HardcoreSurvivalState._Bullet(
                 pos=spawn,
                 vel=d * float(gun_def.bullet_speed),
-                ttl=1.35,
+                ttl=float(getattr(gun_def, "bullet_ttl", 1.35)),
                 dmg=int(gun_def.damage),
+                kind=bkind,
+                aoe_radius=float(getattr(gun_def, "aoe_radius", 0.0)),
+                aoe_damage=int(getattr(gun_def, "aoe_damage", 0)),
             )
         )
         self.gun.mag = int(self.gun.mag) - 1
         self.gun.cooldown_left = 1.0 / max(0.1, float(gun_def.fire_rate))
         self.app.play_sfx("shot")
-        self.muzzle_flash_left = 0.06
-        self.noise_left = max(float(getattr(self, "noise_left", 0.0)), 0.55)
-        self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), 220.0)
+        self.muzzle_flash_left = float(getattr(gun_def, "muzzle_flash_s", 0.06))
+        self.noise_left = max(float(getattr(self, "noise_left", 0.0)), 0.95 if bkind == "rocket" else 0.55)
+        self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), float(getattr(gun_def, "noise_radius", 220.0)))
 
     def _update_bullets(self, dt: float) -> None:
         if not self.bullets:
             return
         alive: list[HardcoreSurvivalState._Bullet] = []
+
+        def explode(
+            center: pygame.Vector2,
+            *,
+            radius: float,
+            splash: int,
+            direct: HardcoreSurvivalState._Zombie | None = None,
+            direct_damage: int = 0,
+        ) -> None:
+            center = pygame.Vector2(center)
+            radius = float(radius)
+            splash = int(splash)
+            direct_damage = int(direct_damage)
+
+            # Direct hit (rockets).
+            if direct is not None and int(getattr(direct, "hp", 0)) > 0 and direct_damage > 0:
+                try:
+                    direct.hp = int(direct.hp) - int(direct_damage)
+                except Exception:
+                    pass
+                if int(getattr(direct, "hp", 0)) <= 0:
+                    self._kill_zombie(direct, impact_dir=pygame.Vector2(direct.pos) - center)
+                else:
+                    to = pygame.Vector2(direct.pos) - center
+                    if to.length_squared() > 0.001:
+                        direct.stagger_left = max(float(getattr(direct, "stagger_left", 0.0)), 0.18)
+                        direct.stagger_vel = to.normalize() * 120.0
+
+            if radius <= 1.0 or splash <= 0:
+                return
+
+            r2 = float(radius * radius)
+            for z in self.zombies:
+                if direct is not None and z is direct:
+                    continue
+                if int(getattr(z, "hp", 0)) <= 0:
+                    continue
+                to = pygame.Vector2(z.pos) - center
+                d2 = float(to.length_squared())
+                if d2 > r2:
+                    continue
+                t = 1.0 - math.sqrt(d2) / max(1e-6, float(radius))
+                dmg = int(max(1, int(round(float(splash) * (0.35 + 0.65 * float(t))))))
+                z.hp = int(z.hp) - int(dmg)
+                if int(z.hp) > 0:
+                    z.stagger_left = max(float(getattr(z, "stagger_left", 0.0)), 0.18)
+                    if to.length_squared() > 0.001:
+                        z.stagger_vel = to.normalize() * (85.0 + 60.0 * float(t))
+                else:
+                    self._kill_zombie(z, impact_dir=to)
+
+            # FX + noise.
+            try:
+                base_dir = pygame.Vector2(1, 0)
+                if direct is not None:
+                    base_dir = pygame.Vector2(direct.pos) - center
+                self._spawn_hit_fx(center, dir=base_dir)
+                for _ in range(10):
+                    ang = random.random() * math.tau
+                    spd = random.uniform(80.0, 220.0)
+                    vel = pygame.Vector2(math.cos(ang), math.sin(ang)) * spd
+                    self.hit_fx.append(
+                        HardcoreSurvivalState._HitFX(pos=pygame.Vector2(center), vel=vel, ttl=0.18, color=(255, 190, 120))
+                    )
+            except Exception:
+                pass
+            self.noise_left = max(float(getattr(self, "noise_left", 0.0)), 1.0)
+            self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), 420.0)
+
         for b in self.bullets:
             b.pos += b.vel * dt
             b.ttl -= dt
+            bkind = str(getattr(b, "kind", "bullet"))
+
             if b.ttl <= 0.0:
+                if bkind == "rocket":
+                    explode(
+                        pygame.Vector2(b.pos),
+                        radius=float(getattr(b, "aoe_radius", 0.0)),
+                        splash=int(getattr(b, "aoe_damage", 0)),
+                    )
                 continue
+
             tx = int(math.floor(b.pos.x / self.TILE_SIZE))
             ty = int(math.floor(b.pos.y / self.TILE_SIZE))
             tile = self.world.get_tile(tx, ty)
             if self._tile_solid(tile):
+                if bkind == "rocket":
+                    explode(
+                        pygame.Vector2(b.pos),
+                        radius=float(getattr(b, "aoe_radius", 0.0)),
+                        splash=int(getattr(b, "aoe_damage", 0)),
+                    )
                 continue
 
             hit = False
@@ -25021,18 +26438,28 @@ class HardcoreSurvivalState(State):
                 if int(getattr(z, "hp", 0)) <= 0:
                     continue
                 if z.rect().collidepoint(int(round(b.pos.x)), int(round(b.pos.y))):
-                    z.hp = int(z.hp) - int(b.dmg)
-                    if int(z.hp) > 0:
-                        z.stagger_left = max(float(getattr(z, "stagger_left", 0.0)), 0.12)
-                        if b.vel.length_squared() > 0.1:
-                            z.stagger_vel = pygame.Vector2(b.vel).normalize() * 85.0
+                    if bkind == "rocket":
+                        explode(
+                            pygame.Vector2(b.pos),
+                            radius=float(getattr(b, "aoe_radius", 0.0)),
+                            splash=int(getattr(b, "aoe_damage", 0)),
+                            direct=z,
+                            direct_damage=int(getattr(b, "dmg", 0)),
+                        )
                     else:
-                        self._kill_zombie(z, impact_dir=pygame.Vector2(b.vel))
+                        z.hp = int(z.hp) - int(b.dmg)
+                        if int(z.hp) > 0:
+                            z.stagger_left = max(float(getattr(z, "stagger_left", 0.0)), 0.12)
+                            if b.vel.length_squared() > 0.1:
+                                z.stagger_vel = pygame.Vector2(b.vel).normalize() * 85.0
+                        else:
+                            self._kill_zombie(z, impact_dir=pygame.Vector2(b.vel))
                     hit = True
                     break
             if hit:
                 continue
             alive.append(b)
+
         self.bullets = alive
         # Zombies become corpses (decay later) instead of being removed immediately.
 
@@ -25183,6 +26610,29 @@ class HardcoreSurvivalState(State):
             self._drop_world_item(pos, "scrap", random.randint(1, 2))
         if random.random() < (0.12 if kind == "runner" else 0.06):
             self._drop_world_item(pos, "ammo_9mm", random.randint(3, 7))
+        if random.random() < (0.06 if kind == "runner" else 0.02):
+            self._drop_world_item(pos, random.choice(["ammo_556", "ammo_762"]), random.randint(2, 6))
+        if random.random() < 0.008:
+            self._drop_world_item(pos, "ammo_rocket", 1)
+        if kind == "screamer" and random.random() < 0.045:
+            self._drop_world_item(
+                pos,
+                random.choice(
+                    [
+                        "mod_optic_reddot",
+                        "mod_optic_4x",
+                        "mod_optic_holo",
+                        "mod_muzzle_suppressor_9mm",
+                        "mod_muzzle_suppressor_rifle",
+                        "mod_muzzle_flash_hider_rifle",
+                        "mod_undergrip_stab",
+                        "mod_undergrip_bipod",
+                        "mod_stock_tactical",
+                        "mod_trigger_light",
+                    ]
+                ),
+                1,
+            )
         if random.random() < 0.07:
             self._drop_world_item(pos, "bandage", 1)
         if random.random() < 0.05:
@@ -29425,14 +30875,10 @@ class HardcoreSurvivalState(State):
                         floor_h = int(floor_slice_h)
                         floors_total = int(max(1, int(slice_floors)))
                         floor_i = int(clamp(int(slice_floor), 1, int(floors_total)))
-                        if int(style) == 1:
-                            # Multi-floor house: only show the current floor's facade strip.
-                            south_h = int(max(1, int(floor_h)))
-                            south_y = int(ground_y - int(floor_h) * int(floor_i))
-                        else:
-                            # High-rise: show this floor + all floors below it.
-                            south_h = int(max(1, int(floor_h) * int(floor_i)))
-                            south_y = int(ground_y - int(south_h))
+                        # Show this floor + all floors below it (same as high-rise),
+                        # so on 2F you still see the 1F facade band.
+                        south_h = int(max(1, int(floor_h) * int(floor_i)))
+                        south_y = int(ground_y - int(south_h))
                     south = pygame.Rect(int(bx), int(south_y), int(bw), int(south_h))
                     pygame.draw.rect(surface, front, south)
                     pygame.draw.rect(surface, outline, south, 1)
@@ -30176,13 +31622,19 @@ class HardcoreSurvivalState(State):
             draw_text(surface, self.app.font_s, str(int(st.qty)), (r.right - 2, r.bottom - 2), pygame.Color(240, 240, 240), anchor="topright")
 
         sel = self.inventory.slots[int(self.inv_index)]
-        if sel is None:
-            desc = "空"
-        else:
+        line1 = "空"
+        line2 = ""
+        if sel is not None:
             idef = self._ITEMS.get(sel.item_id)
             name = idef.name if idef is not None else sel.item_id
-            desc = f"{name} x{int(sel.qty)}"
-        draw_text(surface, self.app.font_s, desc, (panel.centerx, panel.bottom - 22), pygame.Color(200, 200, 210), anchor="center")
+            line1 = f"{name} x{int(sel.qty)}"
+            if idef is not None and str(getattr(idef, "desc", "")).strip():
+                line2 = str(getattr(idef, "desc", "")).strip()
+                if len(line2) > 42:
+                    line2 = line2[:42] + "…"
+        draw_text(surface, self.app.font_s, line1, (panel.centerx, panel.bottom - 36), pygame.Color(210, 210, 220), anchor="center")
+        if line2:
+            draw_text(surface, self.app.font_s, line2, (panel.centerx, panel.bottom - 22), pygame.Color(200, 200, 210), anchor="center")
         draw_text(surface, self.app.font_s, "鼠标左键选择/双击使用  右键使用/装备  Q丢弃  Tab关闭", (panel.centerx, panel.bottom - 8), pygame.Color(160, 160, 175), anchor="center")
 
     def _draw_sprite_gallery_ui(self, surface: pygame.Surface) -> None:
@@ -30630,6 +32082,7 @@ class HardcoreSurvivalState(State):
 
         # High-rise 1F draw mask: used by _draw_world_tile to hide the
         # non-floor "back" filler area while inside.
+        prev_inside_key = getattr(self, "_inside_building_key", None)
         self._inside_highrise_draw_mask = None
         self._inside_highrise_floor_overlay = None
         self._inside_highrise_facade_slice = None
@@ -30647,6 +32100,7 @@ class HardcoreSurvivalState(State):
                 int(self.T_DOOR_HOME),
                 int(self.T_DOOR_LOCKED),
                 int(self.T_DOOR_HOME_LOCKED),
+                int(self.T_DOOR_BROKEN),
                 int(self.T_ELEVATOR),
                 int(self.T_STAIRS_UP),
                 int(self.T_STAIRS_DOWN),
@@ -30753,6 +32207,24 @@ class HardcoreSurvivalState(State):
                                     int(offset),
                                     int(floor_slice_h),
                                 )
+
+            # Stabilize inside-building detection across frames.
+            # If we were inside a building last frame and we're still within its
+            # footprint, keep that building as "inside" even if the current tile
+            # classification briefly fails (prevents nearby buildings' facades
+            # popping/disappearing when entering houses).
+            try:
+                if isinstance(prev_inside_key, tuple) and len(prev_inside_key) == 4:
+                    bx0, by0, bw, bh = (
+                        int(prev_inside_key[0]),
+                        int(prev_inside_key[1]),
+                        int(prev_inside_key[2]),
+                        int(prev_inside_key[3]),
+                    )
+                    if int(bw) > 0 and int(bh) > 0 and int(bx0) <= int(ptx) < int(bx0) + int(bw) and int(by0) <= int(pty) < int(by0) + int(bh):
+                        self._inside_building_key = (int(bx0), int(by0), int(bw), int(bh))
+            except Exception:
+                pass
         except Exception:
             self._inside_highrise_draw_mask = None
             self._inside_highrise_floor_overlay = None
@@ -31338,6 +32810,27 @@ class HardcoreSurvivalState(State):
             fr = pygame.Rect(int(fx - 1), int(fy - 1), 3, 3)
             surface.fill(skin, fr)
             pygame.draw.rect(surface, outline, fr, 1)
+            # If a melee weapon is equipped, draw a quick "stick" so the swing reads.
+            try:
+                swing_id = str(getattr(self, "_melee_swing_id", "fist"))
+                mdef = self._MELEE_DEFS.get(swing_id)
+                if mdef is not None and float(getattr(mdef, "visual_len", 0.0)) > 0.5:
+                    idef = self._ITEMS.get(swing_id)
+                    wcol = tuple(getattr(idef, "color", (200, 200, 210))) if idef is not None else (200, 200, 210)
+                    thick = int(clamp(int(getattr(mdef, "visual_thick", 2)), 1, 4))
+                    wlen = float(getattr(mdef, "visual_len", 10.0)) * max(0.25, float(ext))
+                    a = base_hand + pdir * 1.0
+                    b = base_hand + pdir * (1.0 + float(wlen))
+                    ax2 = int(round(float(a.x)))
+                    ay2 = int(round(float(a.y)))
+                    bx2 = int(round(float(b.x)))
+                    by2 = int(round(float(b.y)))
+                    pygame.draw.line(surface, outline, (ax2, ay2), (bx2, by2), int(thick + 2))
+                    pygame.draw.line(surface, wcol, (ax2, ay2), (bx2, by2), int(thick))
+                    if 0 <= bx2 < INTERNAL_W and 0 <= by2 < INTERNAL_H:
+                        surface.set_at((bx2, by2), (255, 220, 160))
+            except Exception:
+                pass
             # Tiny motion trail (doesn't add a long "stick arm").
             tx = int(clamp(fx - int(round(float(pdir.x))), 0, INTERNAL_W - 1))
             ty = int(clamp(fy - int(round(float(pdir.y))), 0, INTERNAL_H - 1))
@@ -32251,7 +33744,7 @@ class HardcoreSurvivalState(State):
         if self.gun is None:
             draw_text(surface, self.app.font_s, "枪：无", (INTERNAL_W - 6, 6), pygame.Color(200, 200, 210), anchor="topright")
         else:
-            gdef = self._GUNS.get(self.gun.gun_id)
+            gdef = self._gun_effective_def(self.gun)
             if gdef is None:
                 draw_text(surface, self.app.font_s, "枪：未知", (INTERNAL_W - 6, 6), pygame.Color(200, 200, 210), anchor="topright")
             else:
@@ -32260,7 +33753,7 @@ class HardcoreSurvivalState(State):
                 draw_text(
                     surface,
                     self.app.font_s,
-                    f"{gdef.name} {int(self.gun.mag)}/{reserve}{extra}",
+                    f"{gdef.name}{(' [' + self._gun_mod_label(self.gun) + ']') if self._gun_mod_label(self.gun) else ''} {int(self.gun.mag)}/{reserve}{extra}",
                     (INTERNAL_W - 6, 6),
                     pygame.Color(230, 230, 240),
                     anchor="topright",
@@ -32339,7 +33832,14 @@ class HardcoreSurvivalState(State):
                 y += 12
             if (self.player.pos - self.bike.pos).length_squared() <= (18.0 * 18.0):
                 draw_text(surface, self.app.font_s, f"F 骑车({self._two_wheel_name(getattr(self.bike, 'model_id', 'bike'))})", (INTERNAL_W - 6, y), pygame.Color(220, 220, 230), anchor="topright")
-        draw_text(surface, self.app.font_s, "WASD移动  Shift冲刺  E拾取  F载具  H房车  F3骨骼  Tab背包  Esc菜单", (6, INTERNAL_H - 14), pygame.Color(170, 170, 180), anchor="topleft")
+        draw_text(
+            surface,
+            self.app.font_s,
+            "WASD移动  Shift冲刺  E拾取  鼠标左键射击  R换弹  J近战  Tab背包(枪/配件/衣服)  Esc菜单",
+            (6, INTERNAL_H - 14),
+            pygame.Color(170, 170, 180),
+            anchor="topleft",
+        )
 
     def _draw_debug(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         tx = int(math.floor(self.player.pos.x / self.TILE_SIZE))
