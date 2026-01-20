@@ -139,9 +139,12 @@ def sprite_from_pixels(pixels: Sequence[str], palette: dict[str, tuple[int, int,
 _BLEED_CACHE: dict[int, pygame.Surface] = {} 
 _ROTATE_CACHE: dict[tuple[int, int], pygame.Surface] = {} 
 _ROTATE_CRISP_CACHE: dict[tuple[int, int, int], pygame.Surface] = {}  
+_ROTATE_WEAPON_CACHE: dict[tuple[int, int, int, int], pygame.Surface] = {}
+_ROTATE_WEAPON_TEX_CACHE: dict[tuple[int, int, int], pygame.Surface] = {}
 _FLIPX_CACHE: dict[int, pygame.Surface] = {}  
 _PALETTE_CACHE: dict[int, tuple[tuple[int, int, int], ...]] = {}  
 _FURNITURE_SPR_CACHE: dict[tuple[int, tuple[tuple[int, int], ...], int], pygame.Surface] = {} 
+_SPRITE_GRIP_CACHE: dict[int, tuple[int, int]] = {}
 
 
 def _alpha_bleed(sprite: pygame.Surface, *, passes: int = 2) -> pygame.Surface:
@@ -230,6 +233,148 @@ def rotate_pixel_sprite(sprite: pygame.Surface, deg: float, *, step_deg: float =
     rot = _clamp_alpha(rot, threshold=150)
     _ROTATE_CACHE[key] = rot 
     return rot 
+
+
+def _quantize_rotation_deg(deg: float, step_deg: float) -> int:
+    step_deg = float(step_deg) if step_deg else 10.0
+    step_deg = float(clamp(step_deg, 1.0, 45.0))
+    return int(round(float(deg) / step_deg) * step_deg) % 360
+
+
+def _rotate_vec_screen_ccw(v: pygame.Vector2, deg: float) -> pygame.Vector2:
+    # Match pygame.transform.rotate(): positive degrees rotate counterclockwise on screen.
+    rad = math.radians(float(deg))
+    c = math.cos(rad)
+    s = math.sin(rad)
+    return pygame.Vector2(v.x * c + v.y * s, -v.x * s + v.y * c)
+
+
+def rotate_weapon_sprite(
+    sprite: pygame.Surface,
+    deg: float,
+    *,
+    step_deg: float = 2.0,
+    outline_diagonal: bool = True,
+) -> pygame.Surface:
+    # xiaotou-style "stable" weapon rotation: supersample + rotate + smoothscale down.
+    # This intentionally breaks the pixel grid at diagonals so pixels don't look like they fall apart.
+    outline_diagonal = bool(outline_diagonal)
+
+    step_deg = float(step_deg) if step_deg else 2.0
+    step_deg = float(clamp(step_deg, 0.5, 45.0))
+    qdeg = int(round(round(float(deg) / step_deg) * step_deg)) % 360
+
+    # Supersampling is expensive on large sprites; adapt.
+    max_dim = max(int(sprite.get_width()), int(sprite.get_height()))
+    if max_dim >= 160:
+        supersample = 2
+    elif max_dim >= 120:
+        supersample = 3
+    elif max_dim >= 84:
+        supersample = 4
+    elif max_dim >= 60:
+        supersample = 5
+    else:
+        supersample = 6
+
+    key = (id(sprite), int(qdeg), int(supersample), 1 if outline_diagonal else 0)
+    cached = _ROTATE_WEAPON_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    # Keep axis-aligned angles perfectly crisp.
+    if int(qdeg) % 90 == 0:
+        rot = sprite if int(qdeg) == 0 else pygame.transform.rotate(sprite, int(qdeg))
+        _ROTATE_WEAPON_CACHE[key] = rot
+        return rot
+
+    src = _alpha_bleed(sprite, passes=6)
+    if supersample != 1:
+        src = pygame.transform.scale(src, (src.get_width() * supersample, src.get_height() * supersample))
+
+    pad = 10
+    padded = pygame.Surface(
+        (src.get_width() + pad * 2 * supersample, src.get_height() + pad * 2 * supersample),
+        pygame.SRCALPHA,
+    )
+    padded.blit(src, (pad * supersample, pad * supersample))
+    rot = pygame.transform.rotate(padded, int(qdeg))
+    if supersample != 1:
+        nw = max(1, int(round(rot.get_width() / float(supersample))))
+        nh = max(1, int(round(rot.get_height() / float(supersample))))
+        rot = pygame.transform.smoothscale(rot, (nw, nh))
+
+    _ROTATE_WEAPON_CACHE[key] = rot
+    return rot
+
+
+def rotate_weapon_texture(
+    sprite: pygame.Surface,
+    deg: float,
+    *,
+    step_deg: float = 2.0,
+    outline_diagonal: bool = True,
+) -> pygame.Surface:
+    # Texture-like rotation (no smoothing): alpha-bleed -> rotate -> clamp alpha -> palette quantize -> outline.
+    outline_diagonal = bool(outline_diagonal)
+    step_deg = float(step_deg) if step_deg else 2.0
+    step_deg = float(clamp(step_deg, 0.5, 45.0))
+    qdeg = int(round(round(float(deg) / step_deg) * step_deg)) % 360
+    key = (id(sprite), int(qdeg), 1 if outline_diagonal else 0)
+    cached = _ROTATE_WEAPON_TEX_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    if int(qdeg) % 90 == 0:
+        out = sprite if int(qdeg) == 0 else pygame.transform.rotate(sprite, int(qdeg))
+    else:
+        pal = _sprite_palette_rgb(sprite, max_colors=48)
+        src = _alpha_bleed(sprite, passes=6)
+        pad = max(10, int(round(max(src.get_width(), src.get_height()) * 0.35)))
+        padded = pygame.Surface((src.get_width() + pad * 2, src.get_height() + pad * 2), pygame.SRCALPHA)
+        padded.blit(src, (pad, pad))
+        out = pygame.transform.rotate(padded, int(qdeg))
+        out = _clamp_alpha(out, threshold=150)
+        if pal:
+            _quantize_rgb_to_palette(out, pal)
+            _remove_isolated_pixels(out)
+        if outline_diagonal:
+            ensure_black_outline_inplace(out, outline_rgb=(10, 10, 12), alpha_threshold=1, diagonal=True)
+
+    _ROTATE_WEAPON_TEX_CACHE[key] = out
+    return out
+
+
+def _sprite_grip_point(sprite: pygame.Surface) -> tuple[int, int]:
+    # Heuristic: grip near the rear/bottom of the opaque bbox (works for gun/bat/pipe icons).
+    cached = _SPRITE_GRIP_CACHE.get(id(sprite))
+    if cached is not None:
+        return cached
+    w, h = sprite.get_size()
+    if w <= 0 or h <= 0:
+        _SPRITE_GRIP_CACHE[id(sprite)] = (0, 0)
+        return (0, 0)
+    minx = int(w)
+    maxy = -1
+    for yy in range(int(h)):
+        for xx in range(int(w)):
+            try:
+                if int(sprite.get_at((int(xx), int(yy))).a) <= 0:
+                    continue
+            except Exception:
+                continue
+            if int(xx) < int(minx):
+                minx = int(xx)
+            if int(yy) > int(maxy):
+                maxy = int(yy)
+    if maxy < 0:
+        pt = (int(w // 2), int(h // 2))
+    else:
+        gx = int(clamp(int(minx) + 2, 0, int(w) - 1))
+        gy = int(clamp(int(maxy) - 2, 0, int(h) - 1))
+        pt = (int(gx), int(gy))
+    _SPRITE_GRIP_CACHE[id(sprite)] = pt
+    return pt
 
 
 def _sprite_palette_rgb(sprite: pygame.Surface, *, max_colors: int = 64) -> tuple[tuple[int, int, int], ...]: 
@@ -8622,6 +8767,51 @@ class HardcoreSurvivalState(State):
 
                 cars[:] = [c for c in cars if keep_vehicle_at(float(c.pos.x), float(c.pos.y))]
                 bikes[:] = [b for b in bikes if keep_vehicle_at(float(b.pos.x), float(b.pos.y))]
+
+            # Safety: avoid world items spawning on solid tiles (walls/water/facades).
+            if items:
+                ts = float(self.state.TILE_SIZE)
+                chunk_size = int(self.state.CHUNK_SIZE)
+
+                def tile_at_world(tx: int, ty: int) -> int:
+                    lx = int(tx - base_tx)
+                    ly = int(ty - base_ty)
+                    if not (0 <= lx < chunk_size and 0 <= ly < chunk_size):
+                        return int(self.state.T_GRASS)
+                    return int(tiles[int(ly) * chunk_size + int(lx)])
+
+                max_r = 4  # tiles
+                for it in items:
+                    try:
+                        p = pygame.Vector2(getattr(it, "pos", pygame.Vector2(0, 0)))
+                        tx0 = int(math.floor(float(p.x) / ts))
+                        ty0 = int(math.floor(float(p.y) / ts))
+                        t0 = int(tile_at_world(int(tx0), int(ty0)))
+                        if not bool(self.state._tile_solid(int(t0))):
+                            continue
+                        best: tuple[float, int, int] | None = None
+                        for r in range(1, int(max_r) + 1):
+                            for oy in range(-r, r + 1):
+                                for ox in range(-r, r + 1):
+                                    if abs(int(ox)) != int(r) and abs(int(oy)) != int(r):
+                                        continue
+                                    tx = int(tx0 + ox)
+                                    ty = int(ty0 + oy)
+                                    t = int(tile_at_world(int(tx), int(ty)))
+                                    if bool(self.state._tile_solid(int(t))):
+                                        continue
+                                    cx = (float(tx) + 0.5) * ts
+                                    cy = (float(ty) + 0.5) * ts
+                                    d2 = (float(cx) - float(p.x)) ** 2 + (float(cy) - float(p.y)) ** 2
+                                    if best is None or float(d2) < float(best[0]):
+                                        best = (float(d2), int(tx), int(ty))
+                            if best is not None:
+                                break
+                        if best is not None:
+                            _d2, txb, tyb = best
+                            getattr(it, "pos").update((float(txb) + 0.5) * ts, (float(tyb) + 0.5) * ts)
+                    except Exception:
+                        continue
 
             # Clear the transient registration hook for stamping helpers.
             try:
@@ -21511,9 +21701,24 @@ class HardcoreSurvivalState(State):
         target_cam_x = float(focus.x - INTERNAL_W / 2)
         target_cam_y = float(focus.y - INTERNAL_H / 2)
 
-        # Camera: direct follow (no smoothing). Keep float + int versions.
-        self.cam_fx = float(target_cam_x)
-        self.cam_fy = float(target_cam_y)
+        # Camera: reduce diagonal jitter by smoothing only when moving diagonally.
+        cur_fx = float(getattr(self, "cam_fx", target_cam_x))
+        cur_fy = float(getattr(self, "cam_fy", target_cam_y))
+        try:
+            vx = float(getattr(self.player.vel, "x", 0.0))
+            vy = float(getattr(self.player.vel, "y", 0.0))
+        except Exception:
+            vx = 0.0
+            vy = 0.0
+        moving_diag = abs(float(vx)) > 1e-6 and abs(float(vy)) > 1e-6
+        if moving_diag:
+            follow = 14.0 if bool(getattr(self, "player_sprinting", False)) else 18.0
+            a = float(clamp(float(dt) * float(follow), 0.0, 1.0))
+            self.cam_fx = float(cur_fx + (float(target_cam_x) - float(cur_fx)) * float(a))
+            self.cam_fy = float(cur_fy + (float(target_cam_y) - float(cur_fy)) * float(a))
+        else:
+            self.cam_fx = float(target_cam_x)
+            self.cam_fy = float(target_cam_y)
         # Pixel-perfect camera: snap to int pixels. Use iround() (instead of
         # floor) to avoid diagonal "flicker" from asymmetric rounding.
         self.cam_x = int(iround(float(self.cam_fx)))
@@ -22368,13 +22573,14 @@ class HardcoreSurvivalState(State):
         cam_y = int(getattr(self, "cam_y", 0))
         # Match (and slightly exceed) the draw margins so tall facades don't "vanish"
         # when walking quickly into a not-yet-generated chunk.
-        margin_tiles = 4
+        sprinting = bool(getattr(self, "player_sprinting", False))
+        margin_tiles = 6 if sprinting else 4
         start_tx = int(math.floor(float(cam_x) / float(self.TILE_SIZE))) - int(margin_tiles)
         start_ty = int(math.floor(float(cam_y) / float(self.TILE_SIZE))) - int(margin_tiles)
         end_tx = int(math.floor(float(cam_x + INTERNAL_W) / float(self.TILE_SIZE))) + int(margin_tiles)
         end_ty = int(math.floor(float(cam_y + INTERNAL_H) / float(self.TILE_SIZE))) + int(margin_tiles)
 
-        chunk_pad = 1
+        chunk_pad = 2 if sprinting else 1
         start_cx = start_tx // int(self.CHUNK_SIZE) - int(chunk_pad)
         end_cx = end_tx // int(self.CHUNK_SIZE) + int(chunk_pad)
         start_cy = start_ty // int(self.CHUNK_SIZE) - int(chunk_pad)
@@ -22406,9 +22612,9 @@ class HardcoreSurvivalState(State):
         if moving:
             # Always generate a little while moving; ramp up if we're behind.
             if pending > 0:
-                budget = 1
+                budget = 2 if sprinting else 1
             if pending > 18:
-                budget = 2
+                budget = 3 if sprinting else 2
         else:
             # Standing still: catch up faster.
             budget = 2 if pending > 0 else 0
@@ -27444,8 +27650,41 @@ class HardcoreSurvivalState(State):
         qty = int(qty)
         if qty <= 0:
             return
-        tx = int(math.floor(float(pos.x) / self.TILE_SIZE))
-        ty = int(math.floor(float(pos.y) / self.TILE_SIZE))
+        # Avoid spawning drops on walls/facades/water: nudge to the nearest non-solid tile.
+        pos = pygame.Vector2(pos)
+        try:
+            tx0 = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+            ty0 = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+            tid0 = int(self.world.get_tile(int(tx0), int(ty0)))
+            if bool(self._tile_solid(int(tid0))):
+                best: pygame.Vector2 | None = None
+                best_d2 = 1e30
+                max_r = 3  # tiles
+                for r in range(1, int(max_r) + 1):
+                    for oy in range(-r, r + 1):
+                        for ox in range(-r, r + 1):
+                            if abs(int(ox)) != int(r) and abs(int(oy)) != int(r):
+                                continue
+                            tx = int(tx0 + ox)
+                            ty = int(ty0 + oy)
+                            tid = int(self.world.get_tile(int(tx), int(ty)))
+                            if bool(self._tile_solid(int(tid))):
+                                continue
+                            cx = (float(tx) + 0.5) * float(self.TILE_SIZE)
+                            cy = (float(ty) + 0.5) * float(self.TILE_SIZE)
+                            cand = pygame.Vector2(cx, cy)
+                            d2 = float((cand - pos).length_squared())
+                            if d2 < best_d2:
+                                best_d2 = d2
+                                best = cand
+                    if best is not None:
+                        break
+                if best is not None:
+                    pos = best
+        except Exception:
+            pos = pygame.Vector2(pos)
+        tx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+        ty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
         chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
         chunk.items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(pos), item_id=item_id, qty=qty))
 
@@ -30836,6 +31075,33 @@ class HardcoreSurvivalState(State):
                 if chunk is None:
                     continue
                 for it in chunk.items:
+                    # Hide items inside cutaway buildings unless the player is inside.
+                    # Otherwise loot can appear "on" the facade/roof when the interior is hidden.
+                    try:
+                        itx = int(math.floor(float(it.pos.x) / float(self.TILE_SIZE)))
+                        ity = int(math.floor(float(it.pos.y) / float(self.TILE_SIZE)))
+                        hit = self._peek_building_at_tile(int(itx), int(ity))
+                        if hit is not None:
+                            btx0, bty0, bw, bh = int(hit[0]), int(hit[1]), int(hit[2]), int(hit[3])
+                            inside_key = getattr(self, "_inside_building_key", None)
+                            same_building = (
+                                isinstance(inside_key, tuple)
+                                and len(inside_key) == 4
+                                and (int(inside_key[0]), int(inside_key[1]), int(inside_key[2]), int(inside_key[3]))
+                                == (int(btx0), int(bty0), int(bw), int(bh))
+                            )
+                            on_border = bool(
+                                int(itx) in (int(btx0), int(btx0) + int(bw) - 1)
+                                or int(ity) in (int(bty0), int(bty0) + int(bh) - 1)
+                            )
+                            if not same_building and not on_border:
+                                continue
+                            if same_building and not on_border:
+                                visible = getattr(self, "_inside_building_visible", None)
+                                if isinstance(visible, set) and visible and (int(itx), int(ity)) not in visible:
+                                    continue
+                    except Exception:
+                        pass
                     sx = iround(float(it.pos.x) - float(cam_x))
                     sy = iround(float(it.pos.y) - float(cam_y))
                     if sx < -8 or sx > INTERNAL_W + 8 or sy < -8 or sy > INTERNAL_H + 8:
@@ -31738,7 +32004,7 @@ class HardcoreSurvivalState(State):
     ) -> None:
         # Expand by a full chunk in each direction so facades from large
         # buildings don't pop in/out at the screen edges while walking.
-        chunk_pad = 1
+        chunk_pad = 2
         start_cx = start_tx // self.CHUNK_SIZE - chunk_pad
         end_cx = end_tx // self.CHUNK_SIZE + chunk_pad
         start_cy = start_ty // self.CHUNK_SIZE - chunk_pad
@@ -33599,9 +33865,9 @@ class HardcoreSurvivalState(State):
             return
 
         img = spr
-        # Flip some tools/weapons so the "held" side matches the player's hand.
+        # Flip some small tools so the "held" side matches the player's hand.
         flipped = False
-        if (item_id in ("cup", "cup_water") or bool(is_melee)) and str(direction) == "left":
+        if item_id in ("cup", "cup_water") and str(direction) == "left":
             img = flip_x_pixel_sprite(img)
             flipped = True
 
@@ -33618,6 +33884,42 @@ class HardcoreSurvivalState(State):
         if isinstance(hand, tuple) and len(hand) == 2:
             hx = int(player_rect.left + int(hand[0]))
             hy = int(player_rect.top + int(hand[1]))
+            if bool(is_melee):
+                # Melee weapons: rotate with aim like guns (xiaotou-style stable rotation),
+                # and keep the grip locked to the hand.
+                aim = pygame.Vector2(getattr(self, "aim_dir", pygame.Vector2(1, 0)))
+                if aim.length_squared() <= 0.001:
+                    aim = pygame.Vector2(getattr(self.player, "facing", pygame.Vector2(1, 0)))
+                if aim.length_squared() <= 0.001:
+                    aim = pygame.Vector2(1, 0)
+                aim = aim.normalize()
+
+                flip = float(aim.x) < 0.0
+                src = img
+                if flip:
+                    src = flip_x_pixel_sprite(src)
+                deg = -math.degrees(math.atan2(float(aim.y), float(aim.x)))
+                if flip:
+                    deg -= 180.0
+                # Melee item sprites are generated diagonally by default.
+                baseline = 31.0
+                deg = float(deg) - float(baseline)
+
+                step_deg = 3.0
+                qdeg = int(round(round(float(deg) / float(step_deg)) * float(step_deg))) % 360
+                rot = rotate_weapon_sprite(src, deg, step_deg=float(step_deg), outline_diagonal=True)
+
+                gx, gy = _sprite_grip_point(src)
+                center_local = pygame.Vector2(float(src.get_width()) * 0.5, float(src.get_height()) * 0.5)
+                offset_local = pygame.Vector2(float(gx), float(gy)) - center_local
+                offset_rot = _rotate_vec_screen_ccw(offset_local, float(qdeg))
+                grip = pygame.Vector2(int(hx), int(hy)) + aim * 2.0
+                draw_center = grip - offset_rot
+
+                rr = rot.get_rect(center=(int(iround(float(draw_center.x))), int(iround(float(draw_center.y)))))
+                surface.blit(rot, rr)
+                return
+
             hold: tuple[int, int] | None = None
             if item_id in ("cup", "cup_water"):
                 # Anchor at the handle center so it actually sits in the hand.
@@ -33857,7 +34159,12 @@ class HardcoreSurvivalState(State):
             else:
                 base_hand = pygame.Vector2(rect.centerx, rect.centery + 3)
             hand = base_hand + aim * 4.0
-            base = self._GUN_HAND_SPRITES.get(self.gun.gun_id)
+            gun_id = str(getattr(self.gun, "gun_id", "pistol"))
+            try:
+                self._ensure_item_visuals(gun_id)
+            except Exception:
+                pass
+            base = self._ITEM_SPRITES.get(gun_id) or self._ITEM_SPRITES_WORLD.get(gun_id) or self._GUN_HAND_SPRITES.get(gun_id)
             if base is not None:
                 flip = float(aim.x) < 0.0
                 if flip:
@@ -33868,8 +34175,16 @@ class HardcoreSurvivalState(State):
                 if float(self.gun.reload_left) > 0.0 and float(self.gun.reload_total) > 0.0:
                     p = 1.0 - float(self.gun.reload_left) / max(1e-6, float(self.gun.reload_total))
                     deg += float(p) * 360.0
-                gun_spr = rotate_pixel_sprite_crisp(base, deg, step_deg=5.0) 
-                grect = gun_spr.get_rect(center=(int(round(hand.x)), int(round(hand.y))))
+                step_deg = 2.0
+                qdeg = int(round(round(float(deg) / float(step_deg)) * float(step_deg))) % 360
+                gun_spr = rotate_weapon_sprite(base, deg, step_deg=float(step_deg), outline_diagonal=False)
+                gx, gy = _sprite_grip_point(base)
+                center_local = pygame.Vector2(float(base.get_width()) * 0.5, float(base.get_height()) * 0.5)
+                offset_local = pygame.Vector2(float(gx), float(gy)) - center_local
+                offset_rot = _rotate_vec_screen_ccw(offset_local, float(qdeg))
+                grip = pygame.Vector2(int(round(hand.x)), int(round(hand.y)))
+                draw_center = grip - offset_rot
+                grect = gun_spr.get_rect(center=(int(iround(float(draw_center.x))), int(iround(float(draw_center.y)))))
                 surface.blit(gun_spr, grect)
             else:
                 tip = hand + aim * 12.0
@@ -33980,43 +34295,56 @@ class HardcoreSurvivalState(State):
                     surface.set_at((hlx, hly), (255, 220, 160)) 
             else: 
                 # Weapon swing: rotate the equipped melee sprite (甩动棍子/钢管) instead of drawing a punch fist. 
-                weapon_len = float(getattr(mdef, "visual_len", 10.0)) if mdef is not None else 10.0 
-                weapon_reach = 2.0 + float(ext) * float(max(6.0, float(weapon_len) * 0.85)) 
-                center = base_hand + pdir * float(weapon_reach) 
- 
-                # Arm connection (short): draw to the grip area so it doesn't look like a punch. 
-                step_n = int(clamp(int(round(float(weapon_reach))), 0, 8)) 
-                for s in range(1, int(step_n)): 
-                    bx = int(round(float(base_hand.x) + float(pdir.x) * float(s))) 
-                    by = int(round(float(base_hand.y) + float(pdir.y) * float(s))) 
-                    if 0 <= bx < INTERNAL_W and 0 <= by < INTERNAL_H: 
-                        surface.set_at((bx, by), skin) 
- 
-                # Alternate swing direction so it doesn't feel robotic. 
-                arc = 150.0 
-                dir_sign = 1.0 if bool(getattr(self, "punch_hand", 0)) else -1.0 
-                aim_deg = -math.degrees(math.atan2(float(pdir.y), float(pdir.x))) 
-                swing_phase = float(clamp(t, 0.0, 1.0)) 
-                desired = float(aim_deg) + float(dir_sign) * float(arc) * (0.5 - float(swing_phase)) 
-                # Melee sprites are drawn diagonally by default (see _make_item_sprite_auto). 
-                baseline = 31.0 
-                rot_deg = float(desired) - float(baseline) 
-                rot = rotate_pixel_sprite_crisp(weapon_img, rot_deg, step_deg=6.0) if weapon_img is not None else None 
-                if rot is not None: 
-                    cx2 = int(round(float(center.x))) 
-                    cy2 = int(round(float(center.y))) 
-                    surface.blit(rot, rot.get_rect(center=(int(cx2), int(cy2)))) 
-                    # Tiny motion trail. 
-                    tx2 = int(clamp(int(cx2 - int(round(float(pdir.x)))), 0, INTERNAL_W - 1)) 
-                    ty2 = int(clamp(int(cy2 - int(round(float(pdir.y)))), 0, INTERNAL_H - 1)) 
-                    surface.set_at((tx2, ty2), outline) 
- 
-                # Small hand pixel at the grip. 
-                hx2 = int(round(float(base_hand.x))) 
-                hy2 = int(round(float(base_hand.y))) 
-                hr = pygame.Rect(int(hx2 - 1), int(hy2 - 1), 3, 3) 
-                surface.fill(skin, hr) 
-                pygame.draw.rect(surface, outline, hr, 1) 
+                weapon_len = float(getattr(mdef, "visual_len", 10.0)) if mdef is not None else 10.0
+                weapon_reach = 2.0 + float(ext) * float(max(6.0, float(weapon_len) * 0.85))
+
+                # Arm connection (short): draw to the grip area so it doesn't look like a punch.
+                step_n = int(clamp(int(round(float(weapon_reach))), 0, 8))
+                for s in range(1, int(step_n)):
+                    bx = int(round(float(base_hand.x) + float(pdir.x) * float(s)))
+                    by = int(round(float(base_hand.y) + float(pdir.y) * float(s)))
+                    if 0 <= bx < INTERNAL_W and 0 <= by < INTERNAL_H:
+                        surface.set_at((bx, by), skin)
+
+                # Forward chop: rotate around the grip, through the aim direction.
+                dir_sign = 1.0 if bool(getattr(self, "punch_hand", 0)) else -1.0
+                aim_deg = -math.degrees(math.atan2(float(pdir.y), float(pdir.x)))
+                swing_phase = float(clamp(t, 0.0, 1.0))
+
+                arc = 110.0
+                desired = float(aim_deg) + float(dir_sign) * float(arc) * (0.5 - float(swing_phase))
+                baseline = 31.0
+                rot_deg = float(desired) - float(baseline)
+
+                step_deg = 3.0
+                qdeg = int(round(round(float(rot_deg) / float(step_deg)) * float(step_deg))) % 360
+                rot = (
+                    rotate_weapon_sprite(weapon_img, rot_deg, step_deg=float(step_deg), outline_diagonal=True)
+                    if weapon_img is not None
+                    else None
+                )
+                if rot is not None and weapon_img is not None:
+                    gx, gy = _sprite_grip_point(weapon_img)
+                    center_local = pygame.Vector2(float(weapon_img.get_width()) * 0.5, float(weapon_img.get_height()) * 0.5)
+                    offset_local = pygame.Vector2(float(gx), float(gy)) - center_local
+                    offset_rot = _rotate_vec_screen_ccw(offset_local, float(qdeg))
+
+                    grip = base_hand + pdir * float(2.0 + ext * 3.0)
+                    draw_center = grip - offset_rot
+                    cx2 = int(iround(float(draw_center.x)))
+                    cy2 = int(iround(float(draw_center.y)))
+                    surface.blit(rot, rot.get_rect(center=(int(cx2), int(cy2))))
+                    # Tiny motion trail.
+                    tx2 = int(clamp(int(cx2 - int(round(float(pdir.x)))), 0, INTERNAL_W - 1))
+                    ty2 = int(clamp(int(cy2 - int(round(float(pdir.y)))), 0, INTERNAL_H - 1))
+                    surface.set_at((tx2, ty2), outline)
+
+                # Small hand pixel at the grip.
+                hx2 = int(round(float(base_hand.x)))
+                hy2 = int(round(float(base_hand.y)))
+                hr = pygame.Rect(int(hx2 - 1), int(hy2 - 1), 3, 3)
+                surface.fill(skin, hr)
+                pygame.draw.rect(surface, outline, hr, 1)
 
     def _draw_sun_moon_widget(self, surface: pygame.Surface, *, tday: float) -> None:
         rect = pygame.Rect(0, 0, 116, 22)
