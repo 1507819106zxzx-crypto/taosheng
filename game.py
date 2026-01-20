@@ -2510,6 +2510,9 @@ class HardcoreSurvivalState(State):
     T_DOOR_BROKEN = 38
     T_GAS_PUMP = 39
     T_STEER = 40
+    # Outdoor biomes
+    T_WHEAT = 41
+    T_MOUNTAIN = 42
 
     # World furniture durability/drops (tables/chairs/etc). HP is per connected block.
     _WORLD_FURNITURE_HP_DEFAULTS: dict[int, int] = {
@@ -2593,6 +2596,8 @@ class HardcoreSurvivalState(State):
         T_SAND: _TileDef("sand", (192, 176, 112), solid=False, slow=0.92),
         T_BOARDWALK: _TileDef("boardwalk", (156, 116, 68), solid=False),
         T_MARSH: _TileDef("marsh", (56, 92, 62), solid=False, slow=0.78),
+        T_WHEAT: _TileDef("wheat", (184, 168, 74), solid=False, slow=0.88),
+        T_MOUNTAIN: _TileDef("mountain", (98, 100, 108), solid=False, slow=0.74),
         T_STAIRS_UP: _TileDef("stairs_up", (84, 76, 62), solid=False),   
         T_STAIRS_DOWN: _TileDef("stairs_down", (84, 76, 62), solid=False),
         T_ELEVATOR: _TileDef("elevator", (82, 82, 96), solid=False),     
@@ -5928,21 +5933,28 @@ class HardcoreSurvivalState(State):
     except Exception:
         pass
 
-    def _make_hand_pistol_sprite(_src: pygame.Surface = _ITEM_SPRITES_WORLD["pistol"]) -> pygame.Surface: 
-        # Keep the held pistol consistent with the pickup sprite. 
-        return _src 
- 
-    def _make_hand_gun_sprite(iid: str, fallback: pygame.Surface) -> pygame.Surface: 
-        spr = _ITEM_SPRITES_WORLD.get(str(iid)) or _ITEM_SPRITES.get(str(iid)) 
-        return spr if spr is not None else fallback 
- 
-    _GUN_HAND_SPRITES: dict[str, pygame.Surface] = { 
-        "pistol": _make_hand_pistol_sprite(), 
-        "uzi": _make_hand_gun_sprite("uzi", _make_hand_pistol_sprite()), 
-        "ak47": _make_hand_gun_sprite("ak47", _make_hand_pistol_sprite()), 
-        "scar_l": _make_hand_gun_sprite("scar_l", _make_hand_pistol_sprite()), 
-        "rpg": _make_hand_gun_sprite("rpg", _make_hand_pistol_sprite()), 
-    } 
+    def _make_hand_pistol_sprite(_src: pygame.Surface = _ITEM_SPRITES_WORLD["pistol"]) -> pygame.Surface:
+        # Keep the held pistol consistent with the pickup sprite.
+        return _src
+
+    def _make_hand_gun_sprite(
+        iid: str,
+        fallback: pygame.Surface,
+        _sprites_world: dict[str, pygame.Surface] = _ITEM_SPRITES_WORLD,
+        _sprites_inv: dict[str, pygame.Surface] = _ITEM_SPRITES,
+    ) -> pygame.Surface:
+        # NOTE: Class-body helper functions don't close over class locals, so we
+        # capture the dicts via default args to avoid NameError at import time.
+        spr = _sprites_world.get(str(iid)) or _sprites_inv.get(str(iid))
+        return spr if spr is not None else fallback
+
+    _GUN_HAND_SPRITES: dict[str, pygame.Surface] = {
+        "pistol": _make_hand_pistol_sprite(),
+        "uzi": _make_hand_gun_sprite("uzi", _make_hand_pistol_sprite()),
+        "ak47": _make_hand_gun_sprite("ak47", _make_hand_pistol_sprite()),
+        "scar_l": _make_hand_gun_sprite("scar_l", _make_hand_pistol_sprite()),
+        "rpg": _make_hand_gun_sprite("rpg", _make_hand_pistol_sprite()),
+    }
 
     # Auto item sprites for the bulk item library.
 
@@ -8471,6 +8483,35 @@ class HardcoreSurvivalState(State):
                                 tile = self.state.T_FOREST
                             else:
                                 tile = self.state.T_GRASS
+
+                        # Inland biomes: forests / wheat fields / mountains.
+                        # Keep shoreline/wetland bands intact by only applying far inland.
+                        if tile != self.state.T_WATER and int(coast_d) < -18:
+                            biome = float(
+                                self.state._noise2(float(tx) / 360.0, float(ty) / 360.0, self.seed ^ 0x6F1C0B37)
+                            )
+                            elev = float(
+                                self.state._noise2(float(tx) / 180.0, float(ty) / 180.0, self.seed ^ 0x1D3B7A11)
+                            )
+                            detail = float(
+                                self.state._noise2(float(tx) / 32.0, float(ty) / 32.0, self.seed ^ 0xA511C0DE)
+                            )
+
+                            # Mountain ranges: high "elevation" with a regional bias.
+                            if elev > 0.76 and biome > 0.52:
+                                tile = self.state.T_MOUNTAIN
+                                # Small pockets of forest on mountain slopes.
+                                if detail > 0.92:
+                                    tile = self.state.T_FOREST
+                            # Wheat fields: flatter regions (avoid high elevation).
+                            elif biome < 0.22 and elev < 0.68:
+                                tile = self.state.T_WHEAT
+                                # Small breaks so it doesn't look like a perfect carpet.
+                                if detail < 0.10:
+                                    tile = self.state.T_GRASS
+                            # Dense forests as a third region type.
+                            elif biome > 0.74:
+                                tile = self.state.T_FOREST
 
                         # Roads/highways override terrain (but keep deep sea water intact).
                         if tile != self.state.T_WATER and self.is_highway(tx, ty):
@@ -28760,6 +28801,22 @@ class HardcoreSurvivalState(State):
             if season == 2:  # autumn
                 return self._tint(base, add=(18, 8, -10))
             return self._tint(base, add=(28, 28, 28))  # winter
+        if tile_id == self.T_WHEAT:
+            if season == 0:  # spring (greener)
+                return self._tint(base, add=(-10, 10, -14))
+            if season == 1:  # summer
+                return self._tint(base, add=(0, 0, 0))
+            if season == 2:  # autumn (riper)
+                return self._tint(base, add=(18, 6, -14))
+            return self._tint(base, add=(24, 24, 24))  # winter (dull)
+        if tile_id == self.T_MOUNTAIN:
+            if season == 0:  # spring
+                return self._tint(base, add=(6, 6, 8))
+            if season == 2:  # autumn
+                return self._tint(base, add=(8, 4, 2))
+            if season == 3:  # winter (snowy tint)
+                return self._tint(base, add=(30, 30, 40))
+            return self._tint(base, add=(0, 0, 0))
         if tile_id == self.T_WATER and season == 3:
             return self._tint(base, add=(10, 10, 22))
         return base
@@ -28819,6 +28876,10 @@ class HardcoreSurvivalState(State):
             return (156, 116, 68)
         if tile_id == int(self.T_MARSH):
             return (62, 98, 66)
+        if tile_id == int(self.T_WHEAT):
+            return (206, 186, 88)
+        if tile_id == int(self.T_MOUNTAIN):
+            return (118, 120, 128)
         return self._tile_color(tile_id)
 
     def _peek_building_at_tile(self, tx: int, ty: int) -> tuple[int, int, int, int, int, int] | None:
@@ -29076,8 +29137,9 @@ class HardcoreSurvivalState(State):
             self.T_BRICK,
             self.T_CONCRETE,
             self.T_BOARDWALK,
+            self.T_MOUNTAIN,
         )
-        soft = tile_id in (self.T_GRASS, self.T_FOREST, self.T_WATER, self.T_SAND, self.T_MARSH)
+        soft = tile_id in (self.T_GRASS, self.T_FOREST, self.T_WATER, self.T_SAND, self.T_MARSH, self.T_WHEAT)
 
         if hard or soft:
             for j in range(2):
@@ -29138,6 +29200,65 @@ class HardcoreSurvivalState(State):
             if ((h >> 7) & 7) == 0:
                 water = (40, 70, 96)
                 surface.fill(water, pygame.Rect(rect.x + 2, rect.y + 3, 2, 1))
+
+        if tile_id == self.T_WHEAT:
+            # Wheat fields: soft stripes + little stalk specks.
+            row = self._tint(col, add=(-26, -18, -10))
+            row_hi = self._tint(col, add=(28, 18, 0))
+            seed2 = int(self.seed) ^ 0xA52D9E13
+            cell = int(self._hash2_u32(int(tx) // 10, int(ty) // 10, seed2))
+            vert = (cell & 1) == 0
+            if vert:
+                # North-south rows.
+                if (int(tx) & 1) == 0:
+                    surface.fill(row, pygame.Rect(rect.x + 2, rect.y + 1, 1, rect.h - 2))
+                else:
+                    surface.fill(row, pygame.Rect(rect.x + 6, rect.y + 1, 1, rect.h - 2))
+                if (int(ty) % 3) == 0:
+                    surface.fill(row_hi, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, 1))
+            else:
+                # East-west rows.
+                if (int(ty) & 1) == 0:
+                    surface.fill(row, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, 1))
+                else:
+                    surface.fill(row, pygame.Rect(rect.x + 1, rect.y + 6, rect.w - 2, 1))
+                if (int(tx) % 3) == 0:
+                    surface.fill(row_hi, pygame.Rect(rect.x + 2, rect.y + 1, 1, rect.h - 2))
+
+            if ((h >> 2) & 7) == 0:
+                stalk = self._tint(col, add=(36, 22, -6))
+                ox = 2 + int((h >> 9) % 6)
+                oy = 2 + int((h >> 13) % 6)
+                surface.fill(stalk, pygame.Rect(rect.x + ox, rect.y + oy, 1, 1))
+
+        if tile_id == self.T_MOUNTAIN:
+            # Mountain ground: rocky strata + occasional boulders.
+            ridge = self._tint(col, add=(-28, -28, -30))
+            ridge_hi = self._tint(col, add=(24, 24, 28))
+            seed2 = int(self.seed) ^ 0xC0FFEE11
+            cell = int(self._hash2_u32(int(tx) // 14, int(ty) // 14, seed2))
+            diag = (cell & 1) == 0
+            if diag:
+                off = int((h >> 8) % 7) - 3
+                for i in range(0, int(rect.w), 3):
+                    x = int(rect.x + 1 + i)
+                    y = int(rect.y + 2 + ((i + off) % 6))
+                    if rect.x <= x < rect.right - 1 and rect.y <= y < rect.bottom:
+                        surface.fill(ridge, pygame.Rect(x, y, 2, 1))
+            else:
+                if (int(ty) % 3) == 0:
+                    surface.fill(ridge, pygame.Rect(rect.x + 1, rect.y + 3, rect.w - 2, 1))
+                if (int(tx) % 4) == 0:
+                    surface.fill(ridge_hi, pygame.Rect(rect.x + 2, rect.y + 1, 1, rect.h - 2))
+
+            if ((h >> 5) & 15) == 0:
+                rock = self._tint(col, add=(-40, -40, -42))
+                outline = (10, 10, 12)
+                ox = 1 + int((h >> 10) % max(1, int(rect.w) - 3))
+                oy = 1 + int((h >> 14) % max(1, int(rect.h) - 3))
+                rr = pygame.Rect(rect.x + ox, rect.y + oy, 2, 2)
+                surface.fill(rock, rr)
+                pygame.draw.rect(surface, outline, rr, 1)
 
         if tile_id == self.T_BOARDWALK:
             # Wood planks.
