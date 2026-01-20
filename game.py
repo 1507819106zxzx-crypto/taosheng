@@ -136,9 +136,11 @@ def sprite_from_pixels(pixels: Sequence[str], palette: dict[str, tuple[int, int,
     return surf
 
 
-_BLEED_CACHE: dict[int, pygame.Surface] = {}
-_ROTATE_CACHE: dict[tuple[int, int], pygame.Surface] = {}
-_FLIPX_CACHE: dict[int, pygame.Surface] = {}
+_BLEED_CACHE: dict[int, pygame.Surface] = {} 
+_ROTATE_CACHE: dict[tuple[int, int], pygame.Surface] = {} 
+_ROTATE_CRISP_CACHE: dict[tuple[int, int, int], pygame.Surface] = {} 
+_FLIPX_CACHE: dict[int, pygame.Surface] = {} 
+_PALETTE_CACHE: dict[int, tuple[tuple[int, int, int], ...]] = {} 
 
 
 def _alpha_bleed(sprite: pygame.Surface, *, passes: int = 2) -> pygame.Surface:
@@ -213,7 +215,7 @@ def flip_x_pixel_sprite(sprite: pygame.Surface) -> pygame.Surface:
     return flipped
 
 
-def rotate_pixel_sprite(sprite: pygame.Surface, deg: float, *, step_deg: float = 5.0) -> pygame.Surface:
+def rotate_pixel_sprite(sprite: pygame.Surface, deg: float, *, step_deg: float = 5.0) -> pygame.Surface: 
     step_deg = float(step_deg) if step_deg else 5.0
     step_deg = float(clamp(step_deg, 1.0, 45.0))
     qdeg = int(round(float(deg) / step_deg) * step_deg) % 360
@@ -225,8 +227,100 @@ def rotate_pixel_sprite(sprite: pygame.Surface, deg: float, *, step_deg: float =
     src = _alpha_bleed(sprite, passes=2)
     rot = pygame.transform.rotate(src, qdeg)
     rot = _clamp_alpha(rot, threshold=150)
-    _ROTATE_CACHE[key] = rot
-    return rot
+    _ROTATE_CACHE[key] = rot 
+    return rot 
+
+
+def _sprite_palette_rgb(sprite: pygame.Surface, *, max_colors: int = 64) -> tuple[tuple[int, int, int], ...]: 
+    cached = _PALETTE_CACHE.get(id(sprite)) 
+    if cached is not None: 
+        return cached 
+    w, h = sprite.get_size() 
+    if w <= 0 or h <= 0: 
+        _PALETTE_CACHE[id(sprite)] = () 
+        return () 
+    max_colors = int(clamp(int(max_colors), 1, 512)) 
+    out: list[tuple[int, int, int]] = [] 
+    seen: set[tuple[int, int, int]] = set() 
+    for y in range(h): 
+        for x in range(w): 
+            r, g, b, a = sprite.get_at((x, y)) 
+            if a == 0: 
+                continue 
+            c = (int(r), int(g), int(b)) 
+            if c in seen: 
+                continue 
+            seen.add(c) 
+            out.append(c) 
+            if len(out) >= max_colors: 
+                _PALETTE_CACHE[id(sprite)] = tuple(out) 
+                return _PALETTE_CACHE[id(sprite)] 
+    _PALETTE_CACHE[id(sprite)] = tuple(out) 
+    return _PALETTE_CACHE[id(sprite)] 
+
+
+def _quantize_rgb_to_palette(sprite: pygame.Surface, palette: tuple[tuple[int, int, int], ...]) -> pygame.Surface: 
+    if not palette: 
+        return sprite 
+    w, h = sprite.get_size() 
+    if w <= 0 or h <= 0: 
+        return sprite 
+    cache: dict[tuple[int, int, int], tuple[int, int, int]] = {} 
+    for y in range(h): 
+        for x in range(w): 
+            r, g, b, a = sprite.get_at((x, y)) 
+            if a == 0: 
+                continue 
+            src = (int(r), int(g), int(b)) 
+            dst = cache.get(src) 
+            if dst is None: 
+                br, bg, bb = palette[0] 
+                best_d2 = (src[0] - br) * (src[0] - br) + (src[1] - bg) * (src[1] - bg) + (src[2] - bb) * (src[2] - bb) 
+                for pr, pg, pb in palette[1:]: 
+                    d2 = (src[0] - pr) * (src[0] - pr) + (src[1] - pg) * (src[1] - pg) + (src[2] - pb) * (src[2] - pb) 
+                    if d2 < best_d2: 
+                        br, bg, bb = pr, pg, pb 
+                        best_d2 = d2 
+                dst = (int(br), int(bg), int(bb)) 
+                cache[src] = dst 
+            sprite.set_at((x, y), (int(dst[0]), int(dst[1]), int(dst[2]), 255)) 
+    return sprite 
+
+
+def rotate_pixel_sprite_crisp(sprite: pygame.Surface, deg: float, *, step_deg: float = 5.0, upscale: int = 4) -> pygame.Surface: 
+    step_deg = float(step_deg) if step_deg else 5.0 
+    step_deg = float(clamp(step_deg, 1.0, 45.0)) 
+    qdeg = int(round(float(deg) / step_deg) * step_deg) % 360 
+    upscale = int(clamp(int(upscale), 2, 12)) 
+    key = (id(sprite), qdeg, int(upscale)) 
+    cached = _ROTATE_CRISP_CACHE.get(key) 
+    if cached is not None: 
+        return cached 
+    w, h = sprite.get_size() 
+    if w <= 0 or h <= 0: 
+        _ROTATE_CRISP_CACHE[key] = sprite 
+        return sprite 
+    src = _alpha_bleed(sprite, passes=2) 
+    try: 
+        up = pygame.transform.scale(src, (int(w * upscale), int(h * upscale))) 
+    except Exception: 
+        up = src 
+        upscale = 1 
+    rot_up = pygame.transform.rotate(up, qdeg) 
+
+    if upscale > 1: 
+        rw, rh = rot_up.get_size() 
+        dw = max(1, int(round(float(rw) / float(upscale)))) 
+        dh = max(1, int(round(float(rh) / float(upscale)))) 
+        rot = pygame.transform.scale(rot_up, (int(dw), int(dh))) 
+    else: 
+        rot = rot_up 
+
+    rot = _clamp_alpha(rot, threshold=150) 
+    pal = _sprite_palette_rgb(sprite, max_colors=64) 
+    rot = _quantize_rgb_to_palette(rot, pal) 
+    _ROTATE_CRISP_CACHE[key] = rot 
+    return rot 
 
 
 def _make_sound(samples: array, *, volume: float = 0.35) -> pygame.mixer.Sound | None:
@@ -9101,18 +9195,28 @@ class HardcoreSurvivalState(State):
             except Exception:
                 pass
 
-            def has_walkable_interior(x0: int, y0: int, w: int, h: int) -> bool:
-                # Decorative blocks (e.g., podium ring) are all-wall; skip them.
-                t_floor = int(self.state.T_FLOOR)
-                t_elev = int(self.state.T_ELEVATOR)
-                t_up = int(self.state.T_STAIRS_UP)
-                t_dn = int(self.state.T_STAIRS_DOWN)
+            def has_walkable_interior(x0: int, y0: int, w: int, h: int) -> bool: 
+                # Decorative blocks (e.g., podium ring) are all-wall; skip them. 
+                t_floor = int(self.state.T_FLOOR) 
+                t_elev = int(self.state.T_ELEVATOR) 
+                t_up = int(self.state.T_STAIRS_UP) 
+                t_dn = int(self.state.T_STAIRS_DOWN) 
                 for yy in range(int(y0) + 1, int(y0 + h) - 1):
                     for xx in range(int(x0) + 1, int(x0 + w) - 1):
                         t = int(tiles[idx(int(xx), int(yy))])
                         if t in (t_floor, t_elev, t_up, t_dn):
                             return True
-                return False
+                return False 
+
+            def clear_if_solid(x: int, y: int) -> None: 
+                if not (0 <= int(x) < chunk_size and 0 <= int(y) < chunk_size): 
+                    return 
+                tid = int(tiles[idx(int(x), int(y))]) 
+                tdef = self.state._TILES.get(int(tid)) 
+                if tdef is None: 
+                    return 
+                if bool(getattr(tdef, "solid", False)): 
+                    tiles[idx(int(x), int(y))] = int(self.state.T_FLOOR) 
 
             def border_has_door(x0: int, y0: int, w: int, h: int) -> bool:
                 for xx in range(int(x0), int(x0 + w)):
@@ -9183,57 +9287,70 @@ class HardcoreSurvivalState(State):
                     continue
                 if not (0 <= lx0 < chunk_size and 0 <= ly0 < chunk_size):
                     continue
-                if lx0 + bw > chunk_size or ly0 + bh > chunk_size:
-                    continue
-                if not has_walkable_interior(lx0, ly0, bw, bh):
-                    continue
-                if border_has_door(lx0, ly0, bw, bh):
-                    continue
-
-                # Default to a south-facing 2-tile entrance (matches our facade draw).
-                door_y = int(ly0 + bh - 1)
-                if door_y <= 0 or door_y >= chunk_size:
-                    continue
-                ox, oy = 0, 1
-
-                # Prefer positions with a clear approach; fall back to centered.
-                x_candidates = [int(x) for x in range(int(lx0 + 1), int(lx0 + bw - 2))]
-                if x_candidates:
-                    # Center bias: check closer-to-center candidates first.
-                    cx0 = int(lx0 + bw // 2)
-                    x_candidates.sort(key=lambda v: abs(int(v) - int(cx0)))
-
-                door_x0: int | None = None
-                for cand in x_candidates:
-                    if cand + 1 >= int(lx0 + bw - 1):
-                        continue
-                    # Ensure the tiles just inside the doorway are not walls.
-                    in_ok = True
-                    for dx in (cand, cand + 1):
-                        if int(tiles[idx(int(dx), int(door_y - 1))]) == int(self.state.T_WALL):
-                            in_ok = False
-                            break
-                    if not in_ok:
-                        continue
-                    if approach_clear(int(cand), int(door_y), ox=ox, oy=oy):
-                        door_x0 = int(cand)
-                        break
-
-                if door_x0 is None:
-                    # As a last resort, carve the interior landing too.
-                    door_x0 = int(clamp(int(lx0 + bw // 2 - 1), int(lx0 + 1), int(lx0 + bw - 3)))
-
-                for dx in (int(door_x0), int(door_x0 + 1)):
-                    tiles[idx(int(dx), int(door_y))] = int(self.state.T_DOOR)
-                    if int(tiles[idx(int(dx), int(door_y - 1))]) == int(self.state.T_WALL):
-                        tiles[idx(int(dx), int(door_y - 1))] = int(self.state.T_FLOOR)
-
-                carve_path_from(int(door_x0), int(door_y), ox=ox, oy=oy)
-                carve_path_from(int(door_x0 + 1), int(door_y), ox=ox, oy=oy)
-
-        def _stamp_basketball_court(self, tiles: list[int], *, rng: random.Random) -> None:
-            # Simple outdoor court: a rectangle of court tiles.
-            w = rng.randint(10, 14)
+                if lx0 + bw > chunk_size or ly0 + bh > chunk_size: 
+                    continue 
+                if not has_walkable_interior(lx0, ly0, bw, bh): 
+                    continue 
+ 
+                if not border_has_door(lx0, ly0, bw, bh): 
+                    # Default to a south-facing 2-tile entrance (matches our facade draw). 
+                    door_y = int(ly0 + bh - 1) 
+                    if door_y <= 0 or door_y >= chunk_size: 
+                        continue 
+                    ox, oy = 0, 1 
+ 
+                    # Prefer positions with a clear approach; fall back to centered. 
+                    x_candidates = [int(x) for x in range(int(lx0 + 1), int(lx0 + bw - 2))] 
+                    if x_candidates: 
+                        # Center bias: check closer-to-center candidates first. 
+                        cx0 = int(lx0 + bw // 2) 
+                        x_candidates.sort(key=lambda v: abs(int(v) - int(cx0))) 
+ 
+                    door_x0: int | None = None 
+                    for cand in x_candidates: 
+                        if cand + 1 >= int(lx0 + bw - 1): 
+                            continue 
+                        # Ensure the tiles just inside the doorway are not walls. 
+                        in_ok = True 
+                        for dx in (cand, cand + 1): 
+                            if int(tiles[idx(int(dx), int(door_y - 1))]) == int(self.state.T_WALL): 
+                                in_ok = False 
+                                break 
+                        if not in_ok: 
+                            continue 
+                        if approach_clear(int(cand), int(door_y), ox=ox, oy=oy): 
+                            door_x0 = int(cand) 
+                            break 
+ 
+                    if door_x0 is None: 
+                        # As a last resort, carve the interior landing too. 
+                        door_x0 = int(clamp(int(lx0 + bw // 2 - 1), int(lx0 + 1), int(lx0 + bw - 3))) 
+ 
+                    for dx in (int(door_x0), int(door_x0 + 1)): 
+                        tiles[idx(int(dx), int(door_y))] = int(self.state.T_DOOR) 
+                        clear_if_solid(int(dx), int(door_y - 1)) 
+ 
+                    carve_path_from(int(door_x0), int(door_y), ox=ox, oy=oy) 
+                    carve_path_from(int(door_x0 + 1), int(door_y), ox=ox, oy=oy) 
+ 
+                # Ensure existing/new doorway landings aren't blocked by solid furniture. 
+                try: 
+                    for xx in range(int(lx0), int(lx0 + bw)): 
+                        if int(tiles[idx(int(xx), int(ly0))]) in door_tids: 
+                            clear_if_solid(int(xx), int(ly0 + 1)) 
+                        if int(tiles[idx(int(xx), int(ly0 + bh - 1))]) in door_tids: 
+                            clear_if_solid(int(xx), int(ly0 + bh - 2)) 
+                    for yy in range(int(ly0), int(ly0 + bh)): 
+                        if int(tiles[idx(int(lx0), int(yy))]) in door_tids: 
+                            clear_if_solid(int(lx0 + 1), int(yy)) 
+                        if int(tiles[idx(int(lx0 + bw - 1), int(yy))]) in door_tids: 
+                            clear_if_solid(int(lx0 + bw - 2), int(yy)) 
+                except Exception: 
+                    pass 
+ 
+        def _stamp_basketball_court(self, tiles: list[int], *, rng: random.Random) -> None: 
+            # Simple outdoor court: a rectangle of court tiles. 
+            w = rng.randint(10, 14) 
             h = rng.randint(8, 10)
             x0 = rng.randint(2, self.state.CHUNK_SIZE - w - 2)
             y0 = rng.randint(2, self.state.CHUNK_SIZE - h - 2)
@@ -21104,21 +21221,21 @@ class HardcoreSurvivalState(State):
             else:
                 can_sprint = False
 
-            if can_sprint:
-                # Sprint speed multiplier (diagonal sprint is normalized below).
-                speed *= 1.7
-                self.player.stamina = float(clamp(stamina - dt * 28.0, 0.0, 100.0))
-            else:
-                regen_mod = 0.50 + 0.50 * (min(self.player.hunger, self.player.thirst) / 100.0)
-                regen_mod *= 0.55 + 0.45 * (self.player.morale / 100.0)
-                self.player.stamina = float(clamp(stamina + dt * 16.0 * regen_mod, 0.0, 100.0))
-            self.player_sprinting = bool(can_sprint)
-            # Keep raw 8-way input (no normalization) so cardinal walking stays
-            # pixel-perfect, but normalize diagonal sprint so Shift+斜向不会更快。
-            move_vel = pygame.Vector2(move_raw)
-            if can_sprint and abs(float(move_raw.x)) > 1e-6 and abs(float(move_raw.y)) > 1e-6:
-                move_vel = pygame.Vector2(move)
-            self.player.vel = move_vel * speed
+            if can_sprint: 
+                # Sprint speed multiplier (diagonal sprint is normalized below). 
+                speed *= 1.45 
+                self.player.stamina = float(clamp(stamina - dt * 28.0, 0.0, 100.0)) 
+            else: 
+                regen_mod = 0.50 + 0.50 * (min(self.player.hunger, self.player.thirst) / 100.0) 
+                regen_mod *= 0.55 + 0.45 * (self.player.morale / 100.0) 
+                self.player.stamina = float(clamp(stamina + dt * 16.0 * regen_mod, 0.0, 100.0)) 
+            self.player_sprinting = bool(can_sprint) 
+            # Keep raw 8-way input (no normalization) so cardinal walking stays 
+            # pixel-perfect, but normalize diagonal movement so斜向不会更快。 
+            move_vel = pygame.Vector2(move_raw) 
+            if abs(float(move_raw.x)) > 1e-6 and abs(float(move_raw.y)) > 1e-6: 
+                move_vel = pygame.Vector2(move) 
+            self.player.vel = move_vel * speed 
 
             if self.player.vel.length_squared() > 0.1:
                 self.player.walk_phase += dt * 10.0 * (self.player.vel.length() / base_speed)
@@ -25835,28 +25952,78 @@ class HardcoreSurvivalState(State):
             self._set_hint(f"已安装 {getattr(mdef, 'name', '')}")
             return
 
-        if idef.kind != "gun":
-            if idef.kind == "melee":
-                old = str(getattr(self, "melee_weapon_id", "") or "")
-                if stack.qty > 1:
-                    stack.qty -= 1
-                else:
-                    self.inventory.slots[int(self.inv_index)] = None
-
-                if old:
-                    left = int(self.inventory.add(old, 1, self._ITEMS))
-                    if left > 0:
-                        self.inventory.add(str(stack.item_id), 1, self._ITEMS)
-                        self._set_hint("鑳屽寘婊′簡锛屾棤娉曟崲杩戞垬", seconds=1.0)
-                        return
-
-                self.melee_weapon_id = str(stack.item_id)
-                self._set_hint(f"瑁呭杩戞垬 {idef.name}")
-                return
-
-            if idef.kind == "clothes":
-                new_outfit = self._CLOTHES_OUTFIT_INDEX.get(str(stack.item_id))
-                if new_outfit is None:
+        if idef.kind != "gun": 
+            if idef.kind == "melee": 
+                def clone_obj(o: object) -> object: 
+                    if isinstance(o, dict): 
+                        return {str(k): clone_obj(v) for k, v in o.items()} 
+                    if isinstance(o, list): 
+                        return [clone_obj(v) for v in o] 
+                    if isinstance(o, tuple): 
+                        return tuple(clone_obj(v) for v in o) 
+                    return o 
+ 
+                before_slots: list[HardcoreSurvivalState._ItemStack | None] = [] 
+                for s in self.inventory.slots: 
+                    if s is None: 
+                        before_slots.append(None) 
+                        continue 
+                    before_slots.append( 
+                        HardcoreSurvivalState._ItemStack( 
+                            item_id=str(getattr(s, "item_id", "")), 
+                            qty=int(getattr(s, "qty", 0)), 
+                            meta=(clone_obj(getattr(s, "meta", {})) if isinstance(getattr(s, "meta", None), dict) else {}), 
+                        ) 
+                    ) 
+ 
+                before_gun: HardcoreSurvivalState._Gun | None = None 
+                if self.gun is not None: 
+                    before_gun = HardcoreSurvivalState._Gun( 
+                        gun_id=str(getattr(self.gun, "gun_id", "")), 
+                        mag=int(getattr(self.gun, "mag", 0)), 
+                        mods=dict(getattr(self.gun, "mods", {}) or {}), 
+                        cooldown_left=float(getattr(self.gun, "cooldown_left", 0.0)), 
+                        reload_left=float(getattr(self.gun, "reload_left", 0.0)), 
+                        reload_total=float(getattr(self.gun, "reload_total", 0.0)), 
+                    ) 
+                before_melee = str(getattr(self, "melee_weapon_id", "") or "") 
+                before_reload_lock = pygame.Vector2(getattr(self, "_reload_lock_dir", pygame.Vector2(0, 0))) if getattr(self, "_reload_lock_dir", None) is not None else None 
+ 
+                try: 
+                    new_melee_id = str(stack.item_id) 
+                    if stack.qty > 1: 
+                        stack.qty -= 1 
+                    else: 
+                        self.inventory.slots[int(self.inv_index)] = None 
+ 
+                    if before_melee: 
+                        left = int(self.inventory.add(before_melee, 1, self._ITEMS)) 
+                        if left > 0: 
+                            raise RuntimeError("inv_full_old_melee") 
+ 
+                    if before_gun is not None and str(getattr(before_gun, "gun_id", "")): 
+                        old_meta = {"mag": int(getattr(before_gun, "mag", 0)), "mods": dict(getattr(before_gun, "mods", {}) or {})} 
+                        left = int(self.inventory.add(str(before_gun.gun_id), 1, self._ITEMS, meta=old_meta)) 
+                        if left > 0: 
+                            raise RuntimeError("inv_full_old_gun") 
+ 
+                    self.gun = None 
+                    self._reload_lock_dir = None 
+                    self.melee_weapon_id = new_melee_id 
+                except Exception: 
+                    self.inventory.slots[:] = before_slots 
+                    self.gun = before_gun 
+                    self.melee_weapon_id = before_melee 
+                    self._reload_lock_dir = before_reload_lock 
+                    self._set_hint("背包满了，无法换近战", seconds=1.0) 
+                    return 
+ 
+                self._set_hint(f"装备近战 {idef.name}") 
+                return 
+ 
+            if idef.kind == "clothes": 
+                new_outfit = self._CLOTHES_OUTFIT_INDEX.get(str(stack.item_id)) 
+                if new_outfit is None: 
                     self._set_hint("未知衣服", seconds=1.0)
                     return
                 if str(getattr(self, "clothes_id", "") or "") == str(stack.item_id):
@@ -25932,28 +26099,74 @@ class HardcoreSurvivalState(State):
             return
 
         saved_meta: dict[str, object] = {}
-        try:
-            if isinstance(getattr(stack, "meta", None), dict):
-                saved_meta = dict(getattr(stack, "meta", {}))
-        except Exception:
-            saved_meta = {}
+        try: 
+            if isinstance(getattr(stack, "meta", None), dict): 
+                saved_meta = dict(getattr(stack, "meta", {})) 
+        except Exception: 
+            saved_meta = {} 
 
-        if stack.qty > 1:
-            stack.qty -= 1
-        else:
-            self.inventory.slots[int(self.inv_index)] = None
+        def clone_obj(o: object) -> object: 
+            if isinstance(o, dict): 
+                return {str(k): clone_obj(v) for k, v in o.items()} 
+            if isinstance(o, list): 
+                return [clone_obj(v) for v in o] 
+            if isinstance(o, tuple): 
+                return tuple(clone_obj(v) for v in o) 
+            return o 
 
-        if self.gun is not None:
-            old_meta = {"mag": int(getattr(self.gun, "mag", 0)), "mods": dict(getattr(self.gun, "mods", {}) or {})}
-            left = self.inventory.add(self.gun.gun_id, 1, self._ITEMS, meta=old_meta)
-            if left > 0:
-                self.inventory.add(stack.item_id, 1, self._ITEMS, meta=saved_meta or None)
-                self._set_hint("背包满了，无法换枪")
-                return
+        before_slots: list[HardcoreSurvivalState._ItemStack | None] = [] 
+        for s in self.inventory.slots: 
+            if s is None: 
+                before_slots.append(None) 
+                continue 
+            before_slots.append( 
+                HardcoreSurvivalState._ItemStack( 
+                    item_id=str(getattr(s, "item_id", "")), 
+                    qty=int(getattr(s, "qty", 0)), 
+                    meta=(clone_obj(getattr(s, "meta", {})) if isinstance(getattr(s, "meta", None), dict) else {}), 
+                ) 
+            ) 
 
-        mag = int(gun_def.mag_size)
-        mods: dict[str, str] = {}
-        try:
+        before_gun: HardcoreSurvivalState._Gun | None = None 
+        if self.gun is not None: 
+            before_gun = HardcoreSurvivalState._Gun( 
+                gun_id=str(getattr(self.gun, "gun_id", "")), 
+                mag=int(getattr(self.gun, "mag", 0)), 
+                mods=dict(getattr(self.gun, "mods", {}) or {}), 
+                cooldown_left=float(getattr(self.gun, "cooldown_left", 0.0)), 
+                reload_left=float(getattr(self.gun, "reload_left", 0.0)), 
+                reload_total=float(getattr(self.gun, "reload_total", 0.0)), 
+            ) 
+        before_melee = str(getattr(self, "melee_weapon_id", "") or "") 
+        before_reload_lock = pygame.Vector2(getattr(self, "_reload_lock_dir", pygame.Vector2(0, 0))) if getattr(self, "_reload_lock_dir", None) is not None else None 
+
+        if stack.qty > 1: 
+            stack.qty -= 1 
+        else: 
+            self.inventory.slots[int(self.inv_index)] = None 
+
+        try: 
+            if before_gun is not None: 
+                old_meta = {"mag": int(getattr(before_gun, "mag", 0)), "mods": dict(getattr(before_gun, "mods", {}) or {})} 
+                left = int(self.inventory.add(str(before_gun.gun_id), 1, self._ITEMS, meta=old_meta)) 
+                if left > 0: 
+                    raise RuntimeError("inv_full_old_gun") 
+
+            if before_melee: 
+                left = int(self.inventory.add(before_melee, 1, self._ITEMS)) 
+                if left > 0: 
+                    raise RuntimeError("inv_full_old_melee") 
+        except Exception: 
+            self.inventory.slots[:] = before_slots 
+            self.gun = before_gun 
+            self.melee_weapon_id = before_melee 
+            self._reload_lock_dir = before_reload_lock 
+            self._set_hint("背包满了，无法换枪", seconds=1.0) 
+            return 
+ 
+        mag = int(gun_def.mag_size)  
+        mods: dict[str, str] = {}  
+        try:  
             if isinstance(saved_meta, dict):
                 if isinstance(saved_meta.get("mag"), (int, float)):
                     mag = int(saved_meta["mag"])
@@ -25963,12 +26176,13 @@ class HardcoreSurvivalState(State):
             mag = int(gun_def.mag_size)
             mods = {}
 
-        self.gun = HardcoreSurvivalState._Gun(gun_id=gun_def.id, mag=int(mag), mods=mods)
-        gdef2 = self._gun_effective_def(self.gun)
-        if gdef2 is not None:
-            self.gun.mag = int(clamp(int(self.gun.mag), 0, int(gdef2.mag_size)))
+        self.gun = HardcoreSurvivalState._Gun(gun_id=gun_def.id, mag=int(mag), mods=mods) 
+        gdef2 = self._gun_effective_def(self.gun) 
+        if gdef2 is not None: 
+            self.gun.mag = int(clamp(int(self.gun.mag), 0, int(gdef2.mag_size))) 
         self._reload_lock_dir = None
-        self._set_hint(f"装备 {gun_def.name}")
+        self.melee_weapon_id = "" 
+        self._set_hint(f"装备 {gun_def.name}") 
 
     def _start_reload(self) -> None:
         if self.gun is None:
@@ -25995,17 +26209,20 @@ class HardcoreSurvivalState(State):
         self.gun.reload_left = float(gun_def.reload_s)
         self._set_hint("换弹中…", seconds=0.8)
 
-    def _start_punch(self) -> None:
-        # J: unarmed punch (works even if holding a gun; uses the free hand).
-        if self.player.hp <= 0:
-            return
-        if getattr(self, "mount", None) is not None:
-            self._set_hint("下车后才能出拳", seconds=0.9)
-            return
-        if (
-            bool(getattr(self, "hr_interior", False))
-            or bool(getattr(self, "sch_interior", False))
-            or bool(getattr(self, "house_interior", False))
+    def _start_punch(self) -> None: 
+        # J: melee swing / punch (only when not holding a gun). 
+        if self.player.hp <= 0: 
+            return 
+        if getattr(self, "mount", None) is not None: 
+            self._set_hint("下车后才能出拳", seconds=0.9) 
+            return 
+        if self.gun is not None: 
+            self._set_hint("手上拿着枪，不能近战；去背包装备木棍/钢管", seconds=1.0) 
+            return 
+        if ( 
+            bool(getattr(self, "hr_interior", False)) 
+            or bool(getattr(self, "sch_interior", False)) 
+            or bool(getattr(self, "house_interior", False)) 
         ):
             return
         if float(getattr(self, "punch_cooldown_left", 0.0)) > 0.0:
@@ -26159,17 +26376,17 @@ class HardcoreSurvivalState(State):
         # Sample a few points along the swing reach to find a furniture tile.
         step_len = max(6.0, float(self.TILE_SIZE) * 0.45)
         steps = int(clamp(int(math.ceil(max_r / step_len)), 1, 10))
-        for i in range(1, int(steps) + 1):
-            p = origin + pdir * (float(i) / float(steps)) * float(max_r)
-            tx = int(math.floor(float(p.x) / float(self.TILE_SIZE)))
-            ty = int(math.floor(float(p.y) / float(self.TILE_SIZE)))
-            if self._world_furniture_damage_at(int(tx), int(ty), dmg=int(struct_dmg), impact_dir=pygame.Vector2(pdir)):
-                nrad = float(getattr(mdef, "noise_radius", 120.0)) if mdef is not None else 120.0
-                loud = 0.18 if swing_id == "fist" else 0.26
-                self.noise_left = max(float(getattr(self, "noise_left", 0.0)), float(loud))
-            self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), float(nrad))
-            return
-        return
+        for i in range(1, int(steps) + 1): 
+            p = origin + pdir * (float(i) / float(steps)) * float(max_r) 
+            tx = int(math.floor(float(p.x) / float(self.TILE_SIZE))) 
+            ty = int(math.floor(float(p.y) / float(self.TILE_SIZE))) 
+            if self._world_furniture_damage_at(int(tx), int(ty), dmg=int(struct_dmg), impact_dir=pygame.Vector2(pdir)): 
+                nrad = float(getattr(mdef, "noise_radius", 120.0)) if mdef is not None else 120.0 
+                loud = 0.18 if swing_id == "fist" else 0.26 
+                self.noise_left = max(float(getattr(self, "noise_left", 0.0)), float(loud)) 
+                self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), float(nrad)) 
+                return 
+        return 
 
     def _spawn_hit_fx(self, pos: pygame.Vector2, *, dir: pygame.Vector2) -> None:
         pos = pygame.Vector2(pos)
@@ -33313,7 +33530,7 @@ class HardcoreSurvivalState(State):
                 if float(self.gun.reload_left) > 0.0 and float(self.gun.reload_total) > 0.0:
                     p = 1.0 - float(self.gun.reload_left) / max(1e-6, float(self.gun.reload_total))
                     deg += float(p) * 360.0
-                gun_spr = rotate_pixel_sprite(base, deg, step_deg=5.0)
+                gun_spr = rotate_pixel_sprite_crisp(base, deg, step_deg=5.0) 
                 grect = gun_spr.get_rect(center=(int(round(hand.x)), int(round(hand.y))))
                 surface.blit(gun_spr, grect)
             else:
@@ -35335,7 +35552,7 @@ class GameState(State):
                     if flip:
                         deg -= 180.0
                     step = 15.0 if w.reload_left > 0.0 else 5.0
-                    rot = rotate_pixel_sprite(spr, deg, step_deg=step)
+                    rot = rotate_pixel_sprite_crisp(spr, deg, step_deg=step) 
                     kick = 0.0
                     if w.muzzle_flash_s > 0.0 and w.reload_left <= 0.0:
                         flash_total = 0.10 if w.weapon_def.aoe_radius > 0.0 else 0.06
