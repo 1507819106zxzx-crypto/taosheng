@@ -2286,6 +2286,40 @@ class HardcoreSurvivalState(State):
     T_GAS_PUMP = 39
     T_STEER = 40
 
+    # World furniture durability/drops (tables/chairs/etc). HP is per connected block.
+    _WORLD_FURNITURE_HP_DEFAULTS: dict[int, int] = {
+        T_TABLE: 26,
+        T_CHAIR: 18,
+        T_SHELF: 24,
+        T_CABINET: 24,
+        T_BED: 34,
+        T_SOFA: 32,
+        T_FRIDGE: 28,
+        T_TV: 20,
+        T_PC: 22,
+        T_LAMP: 10,
+        T_SWITCH: 10,
+        T_TOILET: 24,
+        T_SINK: 20,
+    }
+    _WORLD_FURNITURE_WOOD_TILES: set[int] = {
+        T_TABLE,
+        T_CHAIR,
+        T_SHELF,
+        T_CABINET,
+        T_BED,
+        T_SOFA,
+    }
+    _WORLD_FURNITURE_METAL_TILES: set[int] = {
+        T_FRIDGE,
+        T_TV,
+        T_PC,
+        T_LAMP,
+        T_SWITCH,
+        T_TOILET,
+        T_SINK,
+    }
+
     DAY_LENGTH_S = 8 * 60.0
     SEASON_LENGTH_DAYS = 7
     SEASONS = ("春", "夏", "秋", "冬")
@@ -7407,6 +7441,16 @@ class HardcoreSurvivalState(State):
         aoe_radius: float = 0.0
         aoe_damage: int = 0
 
+    @dataclass
+    class _ThrownFurniture:
+        pos: pygame.Vector2
+        vel: pygame.Vector2
+        ttl: float
+        tid: int
+        offsets: list[tuple[int, int]]
+        space: str = "world"  # home | rv | world
+        hp: int | None = None
+
     @dataclass(frozen=True)
     class _MonsterDef:
         id: str
@@ -11336,6 +11380,7 @@ class HardcoreSurvivalState(State):
         self.gun: HardcoreSurvivalState._Gun | None = None
         self.melee_weapon_id: str | None = None
         self.bullets: list[HardcoreSurvivalState._Bullet] = []
+        self.thrown_furniture: list[HardcoreSurvivalState._ThrownFurniture] = []
         self.zombies: list[HardcoreSurvivalState._Zombie] = []
         self.spawn_left = 8.0
         self.zombie_cap = 8
@@ -11407,6 +11452,8 @@ class HardcoreSurvivalState(State):
         self.home_move_mode = False
         self.home_move_cursor = (0, 0)
         self.home_move_carry = None
+        # World furniture durability (keyed by space/building-floor + tile).
+        self.world_furniture_hp: dict[tuple[object, ...], int] = {}
         self.world_ctx_open = False
         self.world_ctx_target = None
         self.world_ctx_rects = []
@@ -21038,7 +21085,10 @@ class HardcoreSurvivalState(State):
             speed *= 0.80 + 0.20 * (float(self.player.condition) / 100.0)
             speed *= self._weather_move_mult()
 
-            want_sprint = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
+            carrying_furniture = bool(self._world_furniture_carry_active())
+            if carrying_furniture:
+                speed *= 0.62
+            want_sprint = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]) and not bool(carrying_furniture)
             moving_now = move_raw.length_squared() > 0.001
             sprint_intent = bool(want_sprint and moving_now)
             stamina = float(self.player.stamina)
@@ -21155,6 +21205,7 @@ class HardcoreSurvivalState(State):
         self._update_punch(dt)
         self._update_zombies(dt)
         self._update_bullets(dt)
+        self._update_thrown_furniture(dt)
         self._update_hit_fx(dt)
 
     def _set_hint(self, text: str, *, seconds: float = 1.2) -> None:    
@@ -22961,6 +23012,13 @@ class HardcoreSurvivalState(State):
                     self._world_set_tile(int(tx), int(ty), int(tid))
                 except Exception:
                     pass
+            hp = carry.get("hp")
+            if hp is not None and origin:
+                try:
+                    anchor = min((int(v[0]), int(v[1])) for v in origin if isinstance(v, tuple) and len(v) == 2)
+                    self.world_furniture_hp[self._world_furniture_hp_key(int(anchor[0]), int(anchor[1]))] = int(hp)
+                except Exception:
+                    pass
         self.home_move_carry = None
 
     def _home_move_interact(self) -> None:
@@ -23013,7 +23071,19 @@ class HardcoreSurvivalState(State):
                 return
 
             offsets = [(int(x - cx), int(y - cy)) for x, y in cells]
-            self.home_move_carry = {"tid": int(tid), "offsets": offsets, "origin_cells": list(cells)}
+            hp = None
+            try:
+                anchor = min(cells)
+                hp_key = self._world_furniture_hp_key(int(anchor[0]), int(anchor[1]))
+                hp = self.world_furniture_hp.pop(hp_key, None)
+                for x, y in cells:
+                    self.world_furniture_hp.pop(self._world_furniture_hp_key(int(x), int(y)), None)
+            except Exception:
+                hp = None
+            carry: dict[str, object] = {"tid": int(tid), "offsets": offsets, "origin_cells": list(cells), "space": "home"}
+            if hp is not None:
+                carry["hp"] = int(hp)
+            self.home_move_carry = carry
             for x, y in cells:
                 self._world_set_tile(int(x), int(y), int(self.T_FLOOR))
             self._set_hint("已拾起（E放下 / Q取消）", seconds=1.1)
@@ -23047,6 +23117,13 @@ class HardcoreSurvivalState(State):
 
         for tx, ty in target_cells:
             self._world_set_tile(int(tx), int(ty), int(tid))
+        hp = carry.get("hp")
+        if hp is not None:
+            try:
+                anchor = min(target_cells) if target_cells else (int(cx), int(cy))
+                self.world_furniture_hp[self._world_furniture_hp_key(int(anchor[0]), int(anchor[1]))] = int(hp)
+            except Exception:
+                pass
         self.home_move_carry = None
         self._set_hint("已放下", seconds=0.8)
 
@@ -23079,6 +23156,153 @@ class HardcoreSurvivalState(State):
 
     def _world_furniture_carry_active(self) -> bool:
         return isinstance(getattr(self, "home_move_carry", None), dict) and not bool(getattr(self, "home_move_mode", False))
+
+    def _world_furniture_hp_key(self, tx: int, ty: int) -> tuple[object, ...]:
+        tx = int(tx)
+        ty = int(ty)
+        if bool(self._tile_in_rv_world(int(tx), int(ty))):
+            key = getattr(self, "_rv_world_int_active_key", None)
+            if isinstance(key, tuple) and len(key) == 4:
+                try:
+                    rx0, ry0, rw, rh = (int(key[0]), int(key[1]), int(key[2]), int(key[3]))
+                except Exception:
+                    rx0, ry0, rw, rh = (0, 0, 0, 0)
+                return ("rv", rx0, ry0, rw, rh, tx, ty)
+            return ("rv", tx, ty)
+
+        found = self._multi_house_at(int(tx), int(ty))
+        if found is not None:
+            _ch, mh = found
+            try:
+                bkey = (
+                    int(getattr(mh, "tx0", 0)),
+                    int(getattr(mh, "ty0", 0)),
+                    int(getattr(mh, "w", 0)),
+                    int(getattr(mh, "h", 0)),
+                    int(getattr(mh, "cur_floor", 1)),
+                )
+            except Exception:
+                bkey = (0, 0, 0, 0, 1)
+            return ("mh",) + tuple(bkey) + (tx, ty)
+
+        return ("world", tx, ty)
+
+    def _world_furniture_connected_cells(self, tx: int, ty: int, tid: int, *, limit: int = 24) -> list[tuple[int, int]]:
+        tx = int(tx)
+        ty = int(ty)
+        tid = int(tid)
+        limit = int(limit)
+        seen: set[tuple[int, int]] = set()
+        stack = [(int(tx), int(ty))]
+        cells: list[tuple[int, int]] = []
+        while stack and len(cells) < int(limit):
+            cx, cy = stack.pop()
+            cx = int(cx)
+            cy = int(cy)
+            if (cx, cy) in seen:
+                continue
+            seen.add((cx, cy))
+            if int(self.world.get_tile(int(cx), int(cy))) != int(tid):
+                continue
+            cells.append((int(cx), int(cy)))
+            stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+        if not cells:
+            cells = [(int(tx), int(ty))]
+        return cells
+
+    def _world_guess_base_tile_under_furniture(self, tx: int, ty: int) -> int:
+        tx = int(tx)
+        ty = int(ty)
+        if bool(self._tile_in_rv_world(int(tx), int(ty))):
+            base = getattr(self, "_rv_world_floor_base", None)
+            if isinstance(base, dict):
+                bt = base.get((int(tx), int(ty)))
+                if bt is not None:
+                    return int(bt)
+            return int(self.T_FLOOR)
+
+        counts: dict[int, int] = {}
+        ignore = set(int(t) for t in self._WORLD_FURNITURE_HP_DEFAULTS.keys())
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            tid = int(self.world.get_tile(int(tx + dx), int(ty + dy)))
+            if int(tid) in ignore:
+                continue
+            if bool(self._tile_solid(int(tid))):
+                continue
+            counts[int(tid)] = int(counts.get(int(tid), 0)) + 1
+        if not counts:
+            return int(self.T_FLOOR)
+        best_tid = int(self.T_FLOOR)
+        best_n = -1
+        for tid, n in counts.items():
+            if int(n) > int(best_n):
+                best_tid = int(tid)
+                best_n = int(n)
+        return int(best_tid)
+
+    def _world_furniture_damage_at(self, tx: int, ty: int, *, dmg: int, impact_dir: pygame.Vector2) -> bool:
+        tx = int(tx)
+        ty = int(ty)
+        dmg = int(dmg)
+        if dmg <= 0:
+            return False
+        if getattr(self, "mount", None) is not None:
+            return False
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return False
+
+        tid = int(self.world.get_tile(int(tx), int(ty)))
+        if int(tid) not in self._WORLD_FURNITURE_HP_DEFAULTS:
+            return False
+
+        # HP is tracked per connected block (beds/sofas/PC desks may be 2 tiles).
+        cells = self._world_furniture_connected_cells(int(tx), int(ty), int(tid), limit=24)
+        anchor = min(cells) if cells else (int(tx), int(ty))
+        key = self._world_furniture_hp_key(int(anchor[0]), int(anchor[1]))
+        cur = int(self.world_furniture_hp.get(key, int(self._WORLD_FURNITURE_HP_DEFAULTS.get(int(tid), 20))))
+        cur = int(cur) - int(dmg)
+        if cur > 0:
+            self.world_furniture_hp[key] = int(cur)
+            self._spawn_hit_fx(pygame.Vector2((tx + 0.5) * self.TILE_SIZE, (ty + 0.5) * self.TILE_SIZE), dir=pygame.Vector2(impact_dir))
+            self.app.play_sfx("hit")
+            return True
+
+        # Break: clear the whole connected block so 2-tile furniture doesn't split.
+        center = pygame.Vector2((tx + 0.5) * self.TILE_SIZE, (ty + 0.5) * self.TILE_SIZE)
+        try:
+            self.world_furniture_hp.pop(key, None)
+        except Exception:
+            pass
+        for cx, cy in cells:
+            base_tid = int(self._world_guess_base_tile_under_furniture(int(cx), int(cy)))
+            try:
+                self._world_set_tile(int(cx), int(cy), int(base_tid))
+            except Exception:
+                pass
+            # Defensive: clear any stale per-cell keys too.
+            try:
+                self.world_furniture_hp.pop(self._world_furniture_hp_key(int(cx), int(cy)), None)
+            except Exception:
+                pass
+
+        # Drops: simple materials.
+        try:
+            extra = max(0, int(len(cells)) - 1)
+            if int(tid) in self._WORLD_FURNITURE_WOOD_TILES:
+                self._drop_world_item(center, "wood", int(clamp(random.randint(1, 2) + extra, 1, 6)))
+            elif int(tid) in self._WORLD_FURNITURE_METAL_TILES:
+                self._drop_world_item(center, "scrap", int(clamp(random.randint(1, 2) + extra, 1, 6)))
+        except Exception:
+            pass
+
+        self._spawn_hit_fx(center, dir=pygame.Vector2(impact_dir))
+        self.app.play_sfx("hit")
+        self._set_hint("家具被砸坏了", seconds=0.7)
+        return True
 
     def _world_context_action(self, action: str) -> None:
         action = str(action)
@@ -23431,6 +23655,10 @@ class HardcoreSurvivalState(State):
 
         cam_x, cam_y = getattr(self, "_last_cam_draw", (int(getattr(self, "cam_x", 0)), int(getattr(self, "cam_y", 0))))
         tx, ty = self._screen_to_world_tile(int(mx), int(my), int(cam_x), int(cam_y))
+        mods = int(pygame.key.get_mods())
+        if (mods & pygame.KMOD_SHIFT) != 0:
+            if self._world_furniture_throw_to(int(tx), int(ty)):
+                return True
         if self._home_furniture_place_at(int(tx), int(ty)):
             return True
         self._set_hint("放不下", seconds=0.8)
@@ -24601,33 +24829,34 @@ class HardcoreSurvivalState(State):
                     tv_pos = (int(lvx1), int(ty3))
                     break
 
-            # Table near center with one chair.
-            cx2 = int((int(lvx0) + int(lvx1)) // 2)
-            cy2 = int((int(lvy0) + int(lvy1)) // 2)
-            table_pos: tuple[int, int] | None = None
-            for r in range(0, 6):
-                for dy2 in range(-int(r), int(r) + 1):
-                    for dx2 in range(-int(r), int(r) + 1):
-                        tx2 = int(cx2 + dx2)
-                        ty2 = int(cy2 + dy2)
-                        if (tx2, ty2) in reserved:
-                            continue
-                        if (tx2, ty2) not in region:
-                            continue
-                        if int(get(int(tx2), int(ty2))) != int(self.T_FLOOR):
-                            continue
-                        if place(int(self.T_TABLE), [(int(tx2), int(ty2))]):
-                            table_pos = (int(tx2), int(ty2))
+            # Table near center with one chair (some houses are intentionally unfurnished).
+            if random.random() < 0.75:
+                cx2 = int((int(lvx0) + int(lvx1)) // 2)
+                cy2 = int((int(lvy0) + int(lvy1)) // 2)
+                table_pos: tuple[int, int] | None = None
+                for r in range(0, 6):
+                    for dy2 in range(-int(r), int(r) + 1):
+                        for dx2 in range(-int(r), int(r) + 1):
+                            tx2 = int(cx2 + dx2)
+                            ty2 = int(cy2 + dy2)
+                            if (tx2, ty2) in reserved:
+                                continue
+                            if (tx2, ty2) not in region:
+                                continue
+                            if int(get(int(tx2), int(ty2))) != int(self.T_FLOOR):
+                                continue
+                            if place(int(self.T_TABLE), [(int(tx2), int(ty2))]):
+                                table_pos = (int(tx2), int(ty2))
+                                break
+                        if table_pos is not None:
                             break
                     if table_pos is not None:
                         break
                 if table_pos is not None:
-                        break
-            if table_pos is not None:
-                tx2, ty2 = table_pos
-                for (sx, sy) in ((tx2, ty2 + 1), (tx2 + 1, ty2), (tx2 - 1, ty2), (tx2, ty2 - 1)):
-                    if set_if_clear(int(sx), int(sy), int(self.T_CHAIR)):
-                        break
+                    tx2, ty2 = table_pos
+                    for (sx, sy) in ((tx2, ty2 + 1), (tx2 + 1, ty2), (tx2 - 1, ty2), (tx2, ty2 - 1)):
+                        if set_if_clear(int(sx), int(sy), int(self.T_CHAIR)):
+                            break
 
             # Kitchen: fridge + cabinets.
             fridge_ok = False
@@ -24759,32 +24988,33 @@ class HardcoreSurvivalState(State):
                     y1=int(ty3),
                 ):
                     break
-            table_pos: tuple[int, int] | None = None
-            cx2 = int((min_x + living_x1) // 2)
-            cy2 = int((south_top_y + max_y) // 2)
-            for r in range(0, max(2, max(living_x1 - min_x, max_y - south_top_y) + 1)):
-                for dy2 in range(-int(r), int(r) + 1):
-                    for dx2 in range(-int(r), int(r) + 1):
-                        tx2 = int(cx2 + dx2)
-                        ty2 = int(cy2 + dy2)
-                        if (tx2, ty2) in reserved:
-                            continue
-                        if (tx2, ty2) not in region:
-                            continue
-                        if int(get(tx2, ty2)) != int(self.T_FLOOR):
-                            continue
-                        if place(int(self.T_TABLE), [(int(tx2), int(ty2))]):
-                            table_pos = (int(tx2), int(ty2))
+            if random.random() < 0.75:
+                table_pos: tuple[int, int] | None = None
+                cx2 = int((min_x + living_x1) // 2)
+                cy2 = int((south_top_y + max_y) // 2)
+                for r in range(0, max(2, max(living_x1 - min_x, max_y - south_top_y) + 1)):
+                    for dy2 in range(-int(r), int(r) + 1):
+                        for dx2 in range(-int(r), int(r) + 1):
+                            tx2 = int(cx2 + dx2)
+                            ty2 = int(cy2 + dy2)
+                            if (tx2, ty2) in reserved:
+                                continue
+                            if (tx2, ty2) not in region:
+                                continue
+                            if int(get(tx2, ty2)) != int(self.T_FLOOR):
+                                continue
+                            if place(int(self.T_TABLE), [(int(tx2), int(ty2))]):
+                                table_pos = (int(tx2), int(ty2))
+                                break
+                        if table_pos is not None:
                             break
                     if table_pos is not None:
                         break
                 if table_pos is not None:
-                    break
-            if table_pos is not None:
-                tx2, ty2 = table_pos
-                for cells in ([(tx2, ty2 + 1)], [(tx2 + 1, ty2)], [(tx2 - 1, ty2)], [(tx2, ty2 - 1)]):
-                    if place(int(self.T_CHAIR), [(int(c[0]), int(c[1])) for c in cells]):
-                        break
+                    tx2, ty2 = table_pos
+                    for cells in ([(tx2, ty2 + 1)], [(tx2 + 1, ty2)], [(tx2 - 1, ty2)], [(tx2, ty2 - 1)]):
+                        if place(int(self.T_CHAIR), [(int(c[0]), int(c[1])) for c in cells]):
+                            break
 
             # Kitchen: fridge + shelf (if service area exists, prefer it; otherwise tuck into living corner).
             if service_wall_x is not None:
@@ -25866,9 +26096,6 @@ class HardcoreSurvivalState(State):
         self._punch_apply_hit()
 
     def _punch_apply_hit(self) -> None:
-        if not self.zombies:
-            return
-
         pdir = pygame.Vector2(getattr(self, "punch_dir", pygame.Vector2(0, 0)))
         if pdir.length_squared() <= 0.001:
             pdir = pygame.Vector2(self.player.facing)
@@ -25900,26 +26127,49 @@ class HardcoreSurvivalState(State):
                 best = z
                 best_d2 = d2
 
-        if best is None:
+        dmg = int(getattr(mdef, "damage", self._PUNCH_DAMAGE)) if mdef is not None else int(self._PUNCH_DAMAGE)
+
+        if best is not None:
+            best.hp = int(best.hp) - int(dmg)
+            if int(best.hp) > 0:
+                stag_s = float(getattr(mdef, "stagger_s", self._PUNCH_STAGGER_S)) if mdef is not None else float(self._PUNCH_STAGGER_S)
+                stag_spd = float(getattr(mdef, "stagger_speed", self._PUNCH_STAGGER_SPEED)) if mdef is not None else float(self._PUNCH_STAGGER_SPEED)
+                best.stagger_left = max(float(getattr(best, "stagger_left", 0.0)), float(stag_s))
+                best.stagger_vel = pygame.Vector2(pdir) * float(stag_spd)
+            else:
+                self._kill_zombie(best, impact_dir=pdir)
+
+            self._spawn_hit_fx(pygame.Vector2(best.pos), dir=pdir)
+            self.app.play_sfx("hit")
+            nrad = float(getattr(mdef, "noise_radius", 120.0)) if mdef is not None else 120.0
+            loud = 0.22 if str(getattr(mdef, "id", "fist")) == "fist" else 0.30
+            self.noise_left = max(float(getattr(self, "noise_left", 0.0)), float(loud))
+            self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), float(nrad))
+            # Zombies become corpses (decay later) instead of being removed immediately.
             return
 
-        dmg = int(getattr(mdef, "damage", self._PUNCH_DAMAGE)) if mdef is not None else int(self._PUNCH_DAMAGE)
-        best.hp = int(best.hp) - int(dmg)
-        if int(best.hp) > 0:
-            stag_s = float(getattr(mdef, "stagger_s", self._PUNCH_STAGGER_S)) if mdef is not None else float(self._PUNCH_STAGGER_S)
-            stag_spd = float(getattr(mdef, "stagger_speed", self._PUNCH_STAGGER_SPEED)) if mdef is not None else float(self._PUNCH_STAGGER_SPEED)
-            best.stagger_left = max(float(getattr(best, "stagger_left", 0.0)), float(stag_s))
-            best.stagger_vel = pygame.Vector2(pdir) * float(stag_spd)
-        else:
-            self._kill_zombie(best, impact_dir=pdir)
+        # No zombie hit: allow melee to damage/break furniture (tables/chairs/etc).
+        swing_id = str(getattr(mdef, "id", "fist")) if mdef is not None else "fist"
+        struct_dmg = int(max(1, int(round(float(dmg) * 0.80))))
+        if swing_id == "fist":
+            struct_dmg = 1
+        elif swing_id == "melee_pipe":
+            struct_dmg = int(max(struct_dmg, 10))
 
-        self._spawn_hit_fx(pygame.Vector2(best.pos), dir=pdir)
-        self.app.play_sfx("hit")
-        nrad = float(getattr(mdef, "noise_radius", 120.0)) if mdef is not None else 120.0
-        loud = 0.22 if str(getattr(mdef, "id", "fist")) == "fist" else 0.30
-        self.noise_left = max(float(getattr(self, "noise_left", 0.0)), float(loud))
-        self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), float(nrad))
-        # Zombies become corpses (decay later) instead of being removed immediately.
+        # Sample a few points along the swing reach to find a furniture tile.
+        step_len = max(6.0, float(self.TILE_SIZE) * 0.45)
+        steps = int(clamp(int(math.ceil(max_r / step_len)), 1, 10))
+        for i in range(1, int(steps) + 1):
+            p = origin + pdir * (float(i) / float(steps)) * float(max_r)
+            tx = int(math.floor(float(p.x) / float(self.TILE_SIZE)))
+            ty = int(math.floor(float(p.y) / float(self.TILE_SIZE)))
+            if self._world_furniture_damage_at(int(tx), int(ty), dmg=int(struct_dmg), impact_dir=pygame.Vector2(pdir)):
+                nrad = float(getattr(mdef, "noise_radius", 120.0)) if mdef is not None else 120.0
+                loud = 0.18 if swing_id == "fist" else 0.26
+                self.noise_left = max(float(getattr(self, "noise_left", 0.0)), float(loud))
+            self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), float(nrad))
+            return
+        return
 
     def _spawn_hit_fx(self, pos: pygame.Vector2, *, dir: pygame.Vector2) -> None:
         pos = pygame.Vector2(pos)
@@ -26462,6 +26712,176 @@ class HardcoreSurvivalState(State):
 
         self.bullets = alive
         # Zombies become corpses (decay later) instead of being removed immediately.
+
+    def _thrown_furniture_try_place_at(self, tf: "HardcoreSurvivalState._ThrownFurniture", anchor_tx: int, anchor_ty: int) -> bool:
+        try:
+            tid = int(getattr(tf, "tid", 0))
+            offsets = getattr(tf, "offsets", [])
+        except Exception:
+            return False
+        if tid <= 0 or not isinstance(offsets, list) or not offsets:
+            return False
+
+        space = str(getattr(tf, "space", "world"))
+        if space not in ("home", "rv", "world"):
+            space = "world"
+
+        anchor_tx = int(anchor_tx)
+        anchor_ty = int(anchor_ty)
+        cells: list[tuple[int, int]] = []
+        for off in offsets:
+            if not (isinstance(off, tuple) and len(off) == 2):
+                continue
+            dx, dy = int(off[0]), int(off[1])
+            cells.append((int(anchor_tx + dx), int(anchor_ty + dy)))
+        if not cells:
+            return False
+
+        for tx, ty in cells:
+            if space == "rv":
+                if not self._tile_in_rv_world(int(tx), int(ty)):
+                    return False
+                base = getattr(self, "_rv_world_floor_base", None)
+                if not isinstance(base, dict):
+                    return False
+                want = base.get((int(tx), int(ty)))
+                if want is None:
+                    return False
+                if int(self.world.peek_tile(int(tx), int(ty))) != int(want):
+                    return False
+            elif space == "home":
+                if not self._tile_in_home_world(int(tx), int(ty)):
+                    return False
+                if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_FLOOR):
+                    return False
+            else:
+                base_tid = int(self.world.peek_tile(int(tx), int(ty)))
+                if int(base_tid) in self._WORLD_FURNITURE_HP_DEFAULTS:
+                    return False
+                if int(base_tid) in (
+                    int(self.T_DOOR),
+                    int(self.T_DOOR_HOME),
+                    int(self.T_DOOR_BROKEN),
+                    int(self.T_STAIRS_UP),
+                    int(self.T_STAIRS_DOWN),
+                    int(self.T_ELEVATOR),
+                ):
+                    return False
+                if bool(self._tile_solid(int(base_tid))):
+                    return False
+
+        for tx, ty in cells:
+            self._world_set_tile(int(tx), int(ty), int(tid))
+
+        hp = getattr(tf, "hp", None)
+        if hp is not None:
+            try:
+                anchor = min(cells)
+                self.world_furniture_hp[self._world_furniture_hp_key(int(anchor[0]), int(anchor[1]))] = int(hp)
+            except Exception:
+                pass
+        return True
+
+    def _thrown_furniture_break_drop(self, *, tid: int, cells_n: int, pos: pygame.Vector2, impact_dir: pygame.Vector2) -> None:
+        tid = int(tid)
+        cells_n = int(max(1, int(cells_n)))
+        pos = pygame.Vector2(pos)
+        d = pygame.Vector2(impact_dir)
+        if d.length_squared() <= 0.001:
+            d = pygame.Vector2(1, 0)
+        self._spawn_hit_fx(pos, dir=d)
+        self.app.play_sfx("hit")
+        try:
+            extra = max(0, int(cells_n) - 1)
+            if int(tid) in self._WORLD_FURNITURE_WOOD_TILES:
+                self._drop_world_item(pos, "wood", int(clamp(random.randint(1, 2) + extra, 1, 6)))
+            elif int(tid) in self._WORLD_FURNITURE_METAL_TILES:
+                self._drop_world_item(pos, "scrap", int(clamp(random.randint(1, 2) + extra, 1, 6)))
+        except Exception:
+            pass
+        self.noise_left = max(float(getattr(self, "noise_left", 0.0)), 0.28)
+        self.noise_radius = max(float(getattr(self, "noise_radius", 0.0)), 190.0)
+
+    def _update_thrown_furniture(self, dt: float) -> None:
+        thrown = getattr(self, "thrown_furniture", None)
+        if not isinstance(thrown, list) or not thrown:
+            return
+        alive: list[HardcoreSurvivalState._ThrownFurniture] = []
+        ts = float(max(1, int(self.TILE_SIZE)))
+
+        for tf in thrown:
+            if not isinstance(tf, HardcoreSurvivalState._ThrownFurniture):
+                continue
+
+            tf.ttl = float(getattr(tf, "ttl", 0.0)) - float(dt)
+            # Simple drag so throws feel weighty.
+            try:
+                tf.vel *= max(0.0, 1.0 - float(dt) * 1.8)
+            except Exception:
+                pass
+
+            next_pos = pygame.Vector2(getattr(tf, "pos", pygame.Vector2(0, 0))) + pygame.Vector2(getattr(tf, "vel", pygame.Vector2(0, 0))) * float(dt)
+            cells_n = int(max(1, len(getattr(tf, "offsets", []))))
+            hit_rad = 6 + 2 * int(min(4, max(0, cells_n - 1)))
+
+            # Zombie hit first (treat as a weapon impact; it breaks on hit).
+            hit_z: HardcoreSurvivalState._Zombie | None = None
+            for z in self.zombies:
+                if int(getattr(z, "hp", 0)) <= 0:
+                    continue
+                try:
+                    if z.rect().inflate(int(hit_rad), int(hit_rad)).collidepoint(int(round(next_pos.x)), int(round(next_pos.y))):
+                        hit_z = z
+                        break
+                except Exception:
+                    continue
+            if hit_z is not None:
+                dmg = int(10 + 3 * int(min(4, max(0, cells_n - 1))))
+                try:
+                    hit_z.hp = int(hit_z.hp) - int(dmg)
+                except Exception:
+                    pass
+                if int(getattr(hit_z, "hp", 0)) > 0:
+                    try:
+                        hit_z.stagger_left = max(float(getattr(hit_z, "stagger_left", 0.0)), 0.22)
+                        v = pygame.Vector2(getattr(tf, "vel", pygame.Vector2(1, 0)))
+                        if v.length_squared() > 0.001:
+                            hit_z.stagger_vel = v.normalize() * 140.0
+                    except Exception:
+                        pass
+                else:
+                    self._kill_zombie(hit_z, impact_dir=pygame.Vector2(getattr(tf, "vel", pygame.Vector2(1, 0))))
+                self._thrown_furniture_break_drop(tid=int(getattr(tf, "tid", 0)), cells_n=int(cells_n), pos=pygame.Vector2(hit_z.pos), impact_dir=pygame.Vector2(getattr(tf, "vel", pygame.Vector2(1, 0))))
+                continue
+
+            # Tile collision / landing.
+            tx = int(math.floor(float(next_pos.x) / ts))
+            ty = int(math.floor(float(next_pos.y) / ts))
+            if float(getattr(tf, "ttl", 0.0)) <= 0.0 or bool(self._tile_solid(int(self.world.get_tile(int(tx), int(ty))))):
+                placed = False
+                # Try a few nearby tiles so it "lands" naturally instead of always breaking.
+                for ox, oy in (
+                    (0, 0),
+                    (1, 0),
+                    (-1, 0),
+                    (0, 1),
+                    (0, -1),
+                    (1, 1),
+                    (1, -1),
+                    (-1, 1),
+                    (-1, -1),
+                ):
+                    if self._thrown_furniture_try_place_at(tf, int(tx + ox), int(ty + oy)):
+                        placed = True
+                        break
+                if not placed:
+                    self._thrown_furniture_break_drop(tid=int(getattr(tf, "tid", 0)), cells_n=int(cells_n), pos=pygame.Vector2(getattr(tf, "pos", next_pos)), impact_dir=pygame.Vector2(getattr(tf, "vel", pygame.Vector2(1, 0))))
+                continue
+
+            tf.pos = pygame.Vector2(next_pos)
+            alive.append(tf)
+
+        self.thrown_furniture = alive
 
     def _kill_zombie(self, z: "HardcoreSurvivalState._Zombie", *, impact_dir: pygame.Vector2 | None = None) -> None:
         # Convert a zombie into a corpse that slowly decays away.
@@ -29123,8 +29543,7 @@ class HardcoreSurvivalState(State):
             return False
         in_home = bool(self._tile_in_home_world(int(tx), int(ty)))
         in_rv = bool(self._tile_in_rv_world(int(tx), int(ty)))
-        if not (in_home or in_rv):
-            return False
+        space = "rv" if in_rv else "home" if in_home else "world"
 
         movable = {
             int(self.T_TABLE),
@@ -29159,15 +29578,15 @@ class HardcoreSurvivalState(State):
             if (cx, cy) in seen:
                 continue
             seen.add((cx, cy))
-            if in_rv:
+            if space == "rv":
                 if not self._tile_in_rv_world(int(cx), int(cy)):
                     continue
-            else:
+            elif space == "home":
                 if not self._tile_in_home_world(int(cx), int(cy)):
                     continue
             if int(self.world.get_tile(int(cx), int(cy))) != int(tid):
                 continue
-            if in_rv:
+            if space == "rv":
                 fixed = getattr(self, "_rv_world_fixed_furniture", None)
                 if isinstance(fixed, set) and (int(cx), int(cy)) in fixed:
                     return False
@@ -29176,11 +29595,26 @@ class HardcoreSurvivalState(State):
 
         if not cells:
             return False
+
+        # Preserve durability for partially-damaged furniture blocks.
+        hp = None
+        try:
+            anchor = min(cells)
+            hp_key = self._world_furniture_hp_key(int(anchor[0]), int(anchor[1]))
+            hp = self.world_furniture_hp.pop(hp_key, None)
+            # Clear any stale per-cell keys too.
+            for cx, cy in cells:
+                self.world_furniture_hp.pop(self._world_furniture_hp_key(int(cx), int(cy)), None)
+        except Exception:
+            hp = None
+
         offsets = [(int(cx - tx), int(cy - ty)) for cx, cy in cells]
-        space = "rv" if in_rv else "home"
-        self.home_move_carry = {"tid": int(tid), "offsets": offsets, "origin_cells": list(cells), "space": str(space)}
+        carry: dict[str, object] = {"tid": int(tid), "offsets": offsets, "origin_cells": list(cells), "space": str(space)}
+        if hp is not None:
+            carry["hp"] = int(hp)
+        self.home_move_carry = carry
         for cx, cy in cells:
-            if in_rv:
+            if space == "rv":
                 base = getattr(self, "_rv_world_floor_base", None)
                 base_tid = None
                 if isinstance(base, dict):
@@ -29188,9 +29622,12 @@ class HardcoreSurvivalState(State):
                 if base_tid is None:
                     base_tid = int(self.T_FLOOR)
                 self._world_set_tile(int(cx), int(cy), int(base_tid))
-            else:
+            elif space == "home":
                 self._world_set_tile(int(cx), int(cy), int(self.T_FLOOR))
-        self._set_hint("搬运：左键放下 | 右键取消", seconds=1.4)
+            else:
+                base_tid = int(self._world_guess_base_tile_under_furniture(int(cx), int(cy)))
+                self._world_set_tile(int(cx), int(cy), int(base_tid))
+        self._set_hint("搬运：左键放下 | Shift+左键投掷 | 右键取消", seconds=1.6)
         return True
 
     def _home_furniture_can_place_at(self, anchor_tx: int, anchor_ty: int) -> tuple[bool, list[tuple[int, int]]]:
@@ -29203,8 +29640,8 @@ class HardcoreSurvivalState(State):
             return False, []
 
         space = str(carry.get("space", "home"))
-        if space not in ("home", "rv"):
-            space = "home"
+        if space not in ("home", "rv", "world"):
+            space = "world"
         anchor_tx = int(anchor_tx)
         anchor_ty = int(anchor_ty)
         cells = [(int(anchor_tx + int(dx)), int(anchor_ty + int(dy))) for dx, dy in offsets]
@@ -29220,10 +29657,25 @@ class HardcoreSurvivalState(State):
                     return False, cells
                 if int(self.world.peek_tile(int(tx), int(ty))) != int(want):
                     return False, cells
-            else:
+            elif space == "home":
                 if not self._tile_in_home_world(int(tx), int(ty)):
                     return False, cells
                 if int(self.world.peek_tile(int(tx), int(ty))) != int(self.T_FLOOR):
+                    return False, cells
+            else:
+                base_tid = int(self.world.peek_tile(int(tx), int(ty)))
+                if int(base_tid) in self._WORLD_FURNITURE_HP_DEFAULTS:
+                    return False, cells
+                if int(base_tid) in (
+                    int(self.T_DOOR),
+                    int(self.T_DOOR_HOME),
+                    int(self.T_DOOR_BROKEN),
+                    int(self.T_STAIRS_UP),
+                    int(self.T_STAIRS_DOWN),
+                    int(self.T_ELEVATOR),
+                ):
+                    return False, cells
+                if bool(self._tile_solid(int(base_tid))):
                     return False, cells
         return True, cells
 
@@ -29239,8 +29691,62 @@ class HardcoreSurvivalState(State):
             return False
         for tx, ty in cells:
             self._world_set_tile(int(tx), int(ty), int(tid))
+
+        # Restore durability to the placed furniture block (if it was previously damaged).
+        hp = carry.get("hp")
+        if hp is not None:
+            try:
+                anchor = min(cells) if cells else (int(anchor_tx), int(anchor_ty))
+                self.world_furniture_hp[self._world_furniture_hp_key(int(anchor[0]), int(anchor[1]))] = int(hp)
+            except Exception:
+                pass
         self.home_move_carry = None
         self._set_hint("已放下", seconds=0.9)
+        return True
+
+    def _world_furniture_throw_to(self, tx: int, ty: int) -> bool:
+        carry = getattr(self, "home_move_carry", None)
+        if not isinstance(carry, dict):
+            return False
+        tid = int(carry.get("tid", 0))
+        offsets = carry.get("offsets", [])
+        if tid <= 0 or not isinstance(offsets, list) or not offsets:
+            return False
+
+        space = str(carry.get("space", "world"))
+        if space not in ("home", "rv", "world"):
+            space = "world"
+
+        # Aim at the target tile center.
+        tx = int(tx)
+        ty = int(ty)
+        target = pygame.Vector2((tx + 0.5) * float(self.TILE_SIZE), (ty + 0.5) * float(self.TILE_SIZE))
+        start = pygame.Vector2(self.player.pos)
+        d = target - start
+        if d.length_squared() <= 0.001:
+            d = pygame.Vector2(self.player.facing)
+        if d.length_squared() <= 0.001:
+            d = pygame.Vector2(1, 0)
+        d = d.normalize()
+
+        size_bonus = int(min(len(offsets), 6))
+        speed = 220.0 + 18.0 * float(size_bonus)
+        spawn = start + d * 10.0
+        hp = carry.get("hp")
+        self.thrown_furniture.append(
+            HardcoreSurvivalState._ThrownFurniture(
+                pos=pygame.Vector2(spawn),
+                vel=pygame.Vector2(d) * float(speed),
+                ttl=1.25,
+                tid=int(tid),
+                offsets=[(int(o[0]), int(o[1])) for o in offsets if isinstance(o, tuple) and len(o) == 2],
+                space=str(space),
+                hp=(int(hp) if hp is not None else None),
+            )
+        )
+        self.home_move_carry = None
+        self.app.play_sfx("swing")
+        self._set_hint("投掷！", seconds=0.7)
         return True
 
     def _draw_world_furniture_carry_preview(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
@@ -29268,7 +29774,7 @@ class HardcoreSurvivalState(State):
             pygame.draw.rect(surface, col, r, 1)
 
         # Tiny hint near the cursor (minimal text).
-        hint = "放下/取消"
+        hint = "放下/投掷/取消"
         font = self.app.font_s
         w = int(font.size(hint)[0]) + 10
         h = int(font.get_height()) + 6
@@ -29359,8 +29865,6 @@ class HardcoreSurvivalState(State):
             tid = int(self.world.get_tile(int(cx), int(cy)))
             if tid not in interact:
                 continue
-            if not (self._tile_in_home_world(int(cx), int(cy)) or self._tile_in_rv_world(int(cx), int(cy))):
-                continue
             d = max(abs(int(cx) - int(tx)), abs(int(cy) - int(ty)))
             key = (int(pri.get(int(tid), 9)), int(d), int(cy), int(cx))
             if best is None or key < best:
@@ -29413,30 +29917,52 @@ class HardcoreSurvivalState(State):
         pygame.draw.rect(surface, (255, 220, 140), tile_rect, 1)
 
         # Build options.
+        in_owned_space = bool(self._tile_in_home_world(int(cx), int(cy)) or self._tile_in_rv_world(int(cx), int(cy)))
         opts: list[tuple[str, str]] = []
         if int(tid) in (int(self.T_SOFA), int(self.T_CHAIR)):
-            opts = [("坐", "sit"), ("搬运", "move")]
+            opts = [("搬运", "move")]
+            if in_owned_space:
+                opts.insert(0, ("坐", "sit"))
         elif int(tid) == int(self.T_BED):
-            opts = [("睡觉", "sleep"), ("搬运", "move")]
+            opts = [("搬运", "move")]
+            if in_owned_space:
+                opts.insert(0, ("睡觉", "sleep"))
         elif int(tid) in (int(self.T_FRIDGE), int(self.T_SHELF), int(self.T_CABINET)):
-            opts = [("打开", "open"), ("搬运", "move")]
+            opts = [("搬运", "move")]
+            if in_owned_space:
+                opts.insert(0, ("打开", "open"))
         elif int(tid) == int(self.T_SINK):
-            opts = [("接水", "water"), ("搬运", "move")]
+            opts = [("搬运", "move")]
+            if in_owned_space:
+                opts.insert(0, ("接水", "water"))
         elif int(tid) == int(self.T_TABLE):
             opts = [("搬运", "move")]
         elif int(tid) == int(self.T_PC):
-            opts = [("用电脑", "pc"), ("搬运", "move")]
+            opts = [("搬运", "move")]
+            if in_owned_space:
+                opts.insert(0, ("用电脑", "pc"))
         elif int(tid) == int(self.T_STEER):
             opts = [("开车", "drive")]
         elif int(tid) == int(self.T_TV):
-            tv_on = bool(getattr(self, "world_tv_states", {}).get((int(cx), int(cy)), False))
-            opts = [("关电视" if tv_on else "开电视", "tv"), ("搬运", "move")]
+            opts = [("搬运", "move")]
+            if in_owned_space:
+                tv_on = bool(getattr(self, "world_tv_states", {}).get((int(cx), int(cy)), False))
+                opts.insert(0, ("关电视" if tv_on else "开电视", "tv"))
         elif int(tid) == int(self.T_LAMP):
-            opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("设置", "lamp_cfg"), ("搬运", "move")]
+            opts = [("搬运", "move")]
+            if in_owned_space:
+                opts.insert(0, ("设置", "lamp_cfg"))
+                opts.insert(0, ("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"))
         elif int(tid) == int(self.T_SWITCH):
-            opts = [("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"), ("设置", "lamp_cfg"), ("搬运", "move")]
+            opts = [("搬运", "move")]
+            if in_owned_space:
+                opts.insert(0, ("设置", "lamp_cfg"))
+                opts.insert(0, ("关灯" if bool(getattr(self, "home_light_on", True)) else "开灯", "light"))
         elif int(tid) == int(self.T_TOILET):
-            opts = [("小便", "pee"), ("大便", "poop"), ("搬运", "move")]
+            opts = [("搬运", "move")]
+            if in_owned_space:
+                opts.insert(0, ("大便", "poop"))
+                opts.insert(0, ("小便", "pee"))
         if not opts:
             return
 
@@ -31566,6 +32092,28 @@ class HardcoreSurvivalState(State):
             if 0 <= x < INTERNAL_W and 0 <= y < INTERNAL_H:
                 surface.set_at((x, y), (250, 250, 250))
 
+    def _draw_thrown_furniture(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        thrown = getattr(self, "thrown_furniture", None)
+        if not isinstance(thrown, list) or not thrown:
+            return
+        for tf in thrown:
+            if not isinstance(tf, HardcoreSurvivalState._ThrownFurniture):
+                continue
+            p = pygame.Vector2(getattr(tf, "pos", pygame.Vector2(0, 0))) - pygame.Vector2(cam_x, cam_y)
+            x = iround(float(p.x))
+            y = iround(float(p.y))
+            if not (0 <= x < INTERNAL_W and 0 <= y < INTERNAL_H):
+                continue
+            tid = int(getattr(tf, "tid", 0))
+            col = (210, 200, 180)
+            tdef = self._TILES.get(int(tid))
+            if tdef is not None:
+                col = tuple(getattr(tdef, "color", col))
+            r = pygame.Rect(int(x - 3), int(y - 3), 6, 6)
+            pygame.draw.rect(surface, (10, 10, 12), r.inflate(2, 2))
+            pygame.draw.rect(surface, col, r)
+            pygame.draw.rect(surface, (0, 0, 0), r, 1)
+
     def _draw_inventory_ui(self, surface: pygame.Surface) -> None:
         overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 170))
@@ -32318,6 +32866,7 @@ class HardcoreSurvivalState(State):
         self._draw_bike(surface, cam_x, cam_y_draw)
         self._draw_zombies(surface, cam_x, cam_y_draw, corpses=False, alive=True)
         self._draw_bullets(surface, cam_x, cam_y_draw)
+        self._draw_thrown_furniture(surface, cam_x, cam_y_draw)
         overlay = getattr(self, "_inside_highrise_floor_overlay", None)
         if self.mount is None and overlay is None:
             self._draw_player(surface, cam_x, cam_y_draw)
@@ -32512,17 +33061,23 @@ class HardcoreSurvivalState(State):
         run: bool,
         height_delta: int,
     ) -> None:
-        held = getattr(self, "held_item", None)
-        if not isinstance(held, HardcoreSurvivalState._ItemStack):
-            return
-        if int(getattr(held, "qty", 0)) <= 0:
-            return
         if self.gun is not None:
             return
         if getattr(self, "mount", None) is not None:
             return
 
-        item_id = str(getattr(held, "item_id", ""))
+        held = getattr(self, "held_item", None)
+        item_id = ""
+        is_melee = False
+        if isinstance(held, HardcoreSurvivalState._ItemStack) and int(getattr(held, "qty", 0)) > 0:
+            item_id = str(getattr(held, "item_id", ""))
+        else:
+            mid = str(getattr(self, "melee_weapon_id", "") or "")
+            if mid:
+                idef = self._ITEMS.get(mid)
+                if idef is not None and str(getattr(idef, "kind", "")) == "melee":
+                    item_id = str(mid)
+                    is_melee = True
         if not item_id:
             return
 
@@ -32532,9 +33087,9 @@ class HardcoreSurvivalState(State):
             return
 
         img = spr
-        # Flip some tools so the "held" side matches the player's hand.
+        # Flip some tools/weapons so the "held" side matches the player's hand.
         flipped = False
-        if item_id in ("cup", "cup_water") and str(direction) == "left":
+        if (item_id in ("cup", "cup_water") or bool(is_melee)) and str(direction) == "left":
             img = flip_x_pixel_sprite(img)
             flipped = True
 
@@ -32555,6 +33110,11 @@ class HardcoreSurvivalState(State):
             if item_id in ("cup", "cup_water"):
                 # Anchor at the handle center so it actually sits in the hand.
                 hold = (9, 7)
+                if flipped:
+                    hold = (int(img.get_width() - 1 - int(hold[0])), int(hold[1]))
+            elif bool(is_melee):
+                # Anchor near the grip end (our melee icons are diagonal).
+                hold = (3, 9)
                 if flipped:
                     hold = (int(img.get_width() - 1 - int(hold[0])), int(hold[1]))
 
@@ -32581,6 +33141,35 @@ class HardcoreSurvivalState(State):
                 r.midtop = (int(player_rect.centerx), int(player_rect.bottom - 2))
 
         surface.blit(img, r)
+
+    def _draw_player_back_carry(self, surface: pygame.Surface, player_rect: pygame.Rect, *, direction: str) -> None:
+        if not bool(self._world_furniture_carry_active()):
+            return
+        carry = getattr(self, "home_move_carry", None)
+        if not isinstance(carry, dict):
+            return
+        tid = int(carry.get("tid", 0))
+        if tid <= 0:
+            return
+        tdef = self._TILES.get(int(tid))
+        col = tuple(getattr(tdef, "color", (210, 200, 180))) if tdef is not None else (210, 200, 180)
+        offsets = carry.get("offsets", [])
+        n = int(len(offsets)) if isinstance(offsets, list) else 1
+        w = int(clamp(8 + 2 * min(3, max(0, n - 1)), 8, 14))
+        h = int(clamp(6 + 2 * min(3, max(0, n - 1)), 6, 14))
+        r = pygame.Rect(0, 0, int(w), int(h))
+        d = str(direction)
+        if d == "down":
+            r.midtop = (int(player_rect.centerx), int(player_rect.top + 1))
+        elif d == "up":
+            r.midbottom = (int(player_rect.centerx), int(player_rect.bottom - 10))
+        elif d == "left":
+            r.midright = (int(player_rect.left + 3), int(player_rect.centery))
+        else:
+            r.midleft = (int(player_rect.right - 3), int(player_rect.centery))
+        pygame.draw.rect(surface, (10, 10, 12), r.inflate(2, 2))
+        pygame.draw.rect(surface, col, r)
+        pygame.draw.rect(surface, (0, 0, 0), r, 1)
 
     def _draw_player(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         p = self.player.pos - pygame.Vector2(cam_x, cam_y)
@@ -32683,6 +33272,7 @@ class HardcoreSurvivalState(State):
         rect.midbottom = (px, iround(float(p.y) + float(self.player.h) / 2.0))
         surface.blit(spr, rect)
         self._last_player_screen_rect = pygame.Rect(rect)
+        self._draw_player_back_carry(surface, rect, direction=str(d))
         self._draw_player_held_item(
             surface,
             rect,
