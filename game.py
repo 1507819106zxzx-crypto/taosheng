@@ -29051,16 +29051,23 @@ class HardcoreSurvivalState(State):
         w = int(w)
         h = int(h)
         doors: list[tuple[int, int]] = []
+        door_ids = {
+            int(self.T_DOOR),
+            int(self.T_DOOR_HOME),
+            int(self.T_DOOR_LOCKED),
+            int(self.T_DOOR_HOME_LOCKED),
+            int(self.T_DOOR_BROKEN),
+        }
         # Perimeter only (skip interior doors).
         for x in range(tx0, tx0 + w):
-            if int(self.world.peek_tile(x, ty0)) == int(self.T_DOOR):
+            if int(self.world.peek_tile(x, ty0)) in door_ids:
                 doors.append((x, ty0))
-            if int(self.world.peek_tile(x, ty0 + h - 1)) == int(self.T_DOOR):
+            if int(self.world.peek_tile(x, ty0 + h - 1)) in door_ids:
                 doors.append((x, ty0 + h - 1))
         for y in range(ty0 + 1, ty0 + h - 1):
-            if int(self.world.peek_tile(tx0, y)) == int(self.T_DOOR):
+            if int(self.world.peek_tile(tx0, y)) in door_ids:
                 doors.append((tx0, y))
-            if int(self.world.peek_tile(tx0 + w - 1, y)) == int(self.T_DOOR):
+            if int(self.world.peek_tile(tx0 + w - 1, y)) in door_ids:
                 doors.append((tx0 + w - 1, y))
         if not doors:
             return None
@@ -29349,9 +29356,15 @@ class HardcoreSurvivalState(State):
                     by = int(ty0 * self.TILE_SIZE - cam_y)
                     bw = int(w * self.TILE_SIZE)
                     bh = int(h * self.TILE_SIZE)
-                    if bx > INTERNAL_W or by > INTERNAL_H:
+                    # IMPORTANT: facades can extend above the building footprint (face_h),
+                    # so cull using an expanded bound, otherwise facades/doors pop or disappear
+                    # when the footprint is barely off-screen.
+                    ground_y_cull = int(by + bh)
+                    top_y_cull = int(min(int(by), int(ground_y_cull - self.TILE_SIZE - max(0, int(face_h)))))
+                    bottom_y_cull = int(ground_y_cull)
+                    if bx > INTERNAL_W or top_y_cull > INTERNAL_H:
                         continue
-                    if (bx + bw) < 0 or (by + bh) < 0:
+                    if (bx + bw) < 0 or bottom_y_cull < 0:
                         continue
 
                     front, side, trim, shadow = self._building_wall_palette(style=style, var=var)
