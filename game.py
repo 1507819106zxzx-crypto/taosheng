@@ -138,9 +138,10 @@ def sprite_from_pixels(pixels: Sequence[str], palette: dict[str, tuple[int, int,
 
 _BLEED_CACHE: dict[int, pygame.Surface] = {} 
 _ROTATE_CACHE: dict[tuple[int, int], pygame.Surface] = {} 
-_ROTATE_CRISP_CACHE: dict[tuple[int, int, int], pygame.Surface] = {} 
-_FLIPX_CACHE: dict[int, pygame.Surface] = {} 
-_PALETTE_CACHE: dict[int, tuple[tuple[int, int, int], ...]] = {} 
+_ROTATE_CRISP_CACHE: dict[tuple[int, int, int], pygame.Surface] = {}  
+_FLIPX_CACHE: dict[int, pygame.Surface] = {}  
+_PALETTE_CACHE: dict[int, tuple[tuple[int, int, int], ...]] = {}  
+_FURNITURE_SPR_CACHE: dict[tuple[int, tuple[tuple[int, int], ...], int], pygame.Surface] = {} 
 
 
 def _alpha_bleed(sprite: pygame.Surface, *, passes: int = 2) -> pygame.Surface:
@@ -259,7 +260,7 @@ def _sprite_palette_rgb(sprite: pygame.Surface, *, max_colors: int = 64) -> tupl
     return _PALETTE_CACHE[id(sprite)] 
 
 
-def _quantize_rgb_to_palette(sprite: pygame.Surface, palette: tuple[tuple[int, int, int], ...]) -> pygame.Surface: 
+def _quantize_rgb_to_palette(sprite: pygame.Surface, palette: tuple[tuple[int, int, int], ...]) -> pygame.Surface:  
     if not palette: 
         return sprite 
     w, h = sprite.get_size() 
@@ -284,41 +285,171 @@ def _quantize_rgb_to_palette(sprite: pygame.Surface, palette: tuple[tuple[int, i
                 dst = (int(br), int(bg), int(bb)) 
                 cache[src] = dst 
             sprite.set_at((x, y), (int(dst[0]), int(dst[1]), int(dst[2]), 255)) 
-    return sprite 
-
-
-def rotate_pixel_sprite_crisp(sprite: pygame.Surface, deg: float, *, step_deg: float = 5.0, upscale: int = 4) -> pygame.Surface: 
+    return sprite  
+ 
+ 
+def _remove_isolated_pixels(sprite: pygame.Surface) -> None: 
+    w, h = sprite.get_size() 
+    if w <= 2 or h <= 2: 
+        return 
+    keep = [[False] * w for _ in range(h)] 
+    for y in range(h): 
+        for x in range(w): 
+            _r, _g, _b, a = sprite.get_at((x, y)) 
+            keep[y][x] = a != 0 
+    for y in range(1, h - 1): 
+        for x in range(1, w - 1): 
+            if not keep[y][x]: 
+                continue 
+            n = 0 
+            for dy in (-1, 0, 1): 
+                for dx in (-1, 0, 1): 
+                    if dx == 0 and dy == 0: 
+                        continue 
+                    if keep[y + dy][x + dx]: 
+                        n += 1 
+            if n == 0: 
+                sprite.set_at((x, y), (0, 0, 0, 0)) 
+ 
+ 
+def ensure_black_outline_inplace( 
+    sprite: pygame.Surface, 
+    *, 
+    outline_rgb: tuple[int, int, int] = (10, 10, 12), 
+    alpha_threshold: int = 1, 
+    diagonal: bool = True, 
+) -> None: 
+    w, h = sprite.get_size() 
+    if w <= 0 or h <= 0: 
+        return 
+ 
+    alpha_threshold = int(alpha_threshold) 
+    if alpha_threshold <= 0: 
+        alpha_threshold = 1 
+ 
+    src = sprite.copy() 
+ 
+    # Body pixels exclude the existing outline color; avoids double-thick borders. 
+    body = [[False] * w for _ in range(h)] 
+    alpha = [[0] * w for _ in range(h)] 
+    for yy in range(h): 
+        for xx in range(w): 
+            r, g, b, a = src.get_at((xx, yy)) 
+            a = int(a) 
+            alpha[yy][xx] = a 
+            if a >= alpha_threshold and (int(r), int(g), int(b)) != outline_rgb: 
+                body[yy][xx] = True 
+ 
+    outside = [[False] * w for _ in range(h)] 
+    stack: list[tuple[int, int]] = [] 
+ 
+    def push(xx: int, yy: int) -> None: 
+        if outside[yy][xx]: 
+            return 
+        if alpha[yy][xx] >= alpha_threshold: 
+            return 
+        outside[yy][xx] = True 
+        stack.append((xx, yy)) 
+ 
+    for xx in range(w): 
+        push(xx, 0) 
+        push(xx, h - 1) 
+    for yy in range(h): 
+        push(0, yy) 
+        push(w - 1, yy) 
+ 
+    while stack: 
+        xx, yy = stack.pop() 
+        if xx > 0: 
+            push(xx - 1, yy) 
+        if xx + 1 < w: 
+            push(xx + 1, yy) 
+        if yy > 0: 
+            push(xx, yy - 1) 
+        if yy + 1 < h: 
+            push(xx, yy + 1) 
+ 
+    col = (outline_rgb[0], outline_rgb[1], outline_rgb[2], 255) 
+ 
+    if diagonal: 
+        neighbors = [(dx, dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if not (dx == 0 and dy == 0)] 
+    else: 
+        neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)] 
+ 
+    for yy in range(h): 
+        for xx in range(w): 
+            if not outside[yy][xx]: 
+                continue 
+            found = False 
+            for dx, dy in neighbors: 
+                nx = xx + dx 
+                ny = yy + dy 
+                if nx < 0 or nx >= w or ny < 0 or ny >= h: 
+                    continue 
+                if body[ny][nx]: 
+                    found = True 
+                    break 
+            if found: 
+                sprite.set_at((xx, yy), col) 
+ 
+    # If the body touches the edge, force outline pixels so the border closes. 
+    for xx in range(w): 
+        if body[0][xx]: 
+            sprite.set_at((xx, 0), col) 
+        if body[h - 1][xx]: 
+            sprite.set_at((xx, h - 1), col) 
+    for yy in range(h): 
+        if body[yy][0]: 
+            sprite.set_at((0, yy), col) 
+        if body[yy][w - 1]: 
+            sprite.set_at((w - 1, yy), col) 
+ 
+ 
+def rotate_pixel_sprite_crisp(sprite: pygame.Surface, deg: float, *, step_deg: float = 5.0, upscale: int = 3) -> pygame.Surface: 
+    # Pixel-perfect rotation for small sprites (weapons/tools). Inspired by the xiaotou pipeline: 
+    # alpha-bleed -> supersample rotate -> downsample -> clamp alpha -> palette quantize -> outline. 
     step_deg = float(step_deg) if step_deg else 5.0 
     step_deg = float(clamp(step_deg, 1.0, 45.0)) 
     qdeg = int(round(float(deg) / step_deg) * step_deg) % 360 
-    upscale = int(clamp(int(upscale), 2, 12)) 
-    key = (id(sprite), qdeg, int(upscale)) 
+    pixel_scale = int(clamp(int(upscale), 1, 8)) 
+    key = (id(sprite), int(qdeg), int(pixel_scale)) 
     cached = _ROTATE_CRISP_CACHE.get(key) 
     if cached is not None: 
         return cached 
+ 
+    if int(qdeg) % 90 == 0: 
+        out = sprite if int(qdeg) == 0 else pygame.transform.rotate(sprite, int(qdeg)) 
+        _ROTATE_CRISP_CACHE[key] = out 
+        return out 
+ 
     w, h = sprite.get_size() 
     if w <= 0 or h <= 0: 
         _ROTATE_CRISP_CACHE[key] = sprite 
         return sprite 
-    src = _alpha_bleed(sprite, passes=2) 
-    try: 
-        up = pygame.transform.scale(src, (int(w * upscale), int(h * upscale))) 
-    except Exception: 
-        up = src 
-        upscale = 1 
-    rot_up = pygame.transform.rotate(up, qdeg) 
-
-    if upscale > 1: 
-        rw, rh = rot_up.get_size() 
-        dw = max(1, int(round(float(rw) / float(upscale)))) 
-        dh = max(1, int(round(float(rh) / float(upscale)))) 
-        rot = pygame.transform.scale(rot_up, (int(dw), int(dh))) 
-    else: 
-        rot = rot_up 
-
-    rot = _clamp_alpha(rot, threshold=150) 
-    pal = _sprite_palette_rgb(sprite, max_colors=64) 
-    rot = _quantize_rgb_to_palette(rot, pal) 
+ 
+    pad = 10 
+    src = _alpha_bleed(sprite, passes=6) 
+    pal = _sprite_palette_rgb(sprite, max_colors=48) 
+    if int(pixel_scale) != 1: 
+        try: 
+            src = pygame.transform.scale(src, (int(src.get_width()) * int(pixel_scale), int(src.get_height()) * int(pixel_scale))) 
+        except Exception: 
+            pixel_scale = 1 
+    padded = pygame.Surface( 
+        (int(src.get_width()) + int(pad) * 2 * int(pixel_scale), int(src.get_height()) + int(pad) * 2 * int(pixel_scale)), 
+        pygame.SRCALPHA, 
+    ) 
+    padded.blit(src, (int(pad) * int(pixel_scale), int(pad) * int(pixel_scale))) 
+    rot = pygame.transform.rotate(padded, int(qdeg)) 
+    if int(pixel_scale) != 1: 
+        nw = max(1, int(round(float(rot.get_width()) / float(pixel_scale)))) 
+        nh = max(1, int(round(float(rot.get_height()) / float(pixel_scale)))) 
+        rot = pygame.transform.scale(rot, (int(nw), int(nh))) 
+    rot = _clamp_alpha(rot, threshold=210) 
+    if pal: 
+        _quantize_rgb_to_palette(rot, pal) 
+        _remove_isolated_pixels(rot) 
+    ensure_black_outline_inplace(rot, outline_rgb=(10, 10, 12), alpha_threshold=1, diagonal=True) 
     _ROTATE_CRISP_CACHE[key] = rot 
     return rot 
 
@@ -5797,13 +5928,21 @@ class HardcoreSurvivalState(State):
     except Exception:
         pass
 
-    def _make_hand_pistol_sprite(_src: pygame.Surface = _ITEM_SPRITES_WORLD["pistol"]) -> pygame.Surface:
-        # Keep the held pistol consistent with the pickup sprite.
-        return _src
-
-    _GUN_HAND_SPRITES: dict[str, pygame.Surface] = {
-        "pistol": _make_hand_pistol_sprite(),
-    }
+    def _make_hand_pistol_sprite(_src: pygame.Surface = _ITEM_SPRITES_WORLD["pistol"]) -> pygame.Surface: 
+        # Keep the held pistol consistent with the pickup sprite. 
+        return _src 
+ 
+    def _make_hand_gun_sprite(iid: str, fallback: pygame.Surface) -> pygame.Surface: 
+        spr = _ITEM_SPRITES_WORLD.get(str(iid)) or _ITEM_SPRITES.get(str(iid)) 
+        return spr if spr is not None else fallback 
+ 
+    _GUN_HAND_SPRITES: dict[str, pygame.Surface] = { 
+        "pistol": _make_hand_pistol_sprite(), 
+        "uzi": _make_hand_gun_sprite("uzi", _make_hand_pistol_sprite()), 
+        "ak47": _make_hand_gun_sprite("ak47", _make_hand_pistol_sprite()), 
+        "scar_l": _make_hand_gun_sprite("scar_l", _make_hand_pistol_sprite()), 
+        "rpg": _make_hand_gun_sprite("rpg", _make_hand_pistol_sprite()), 
+    } 
 
     # Auto item sprites for the bulk item library.
 
@@ -10686,76 +10825,110 @@ class HardcoreSurvivalState(State):
                                     tiles[idx(x, y)] = self.state.T_BED    
                                     tiles[idx(x + 1, y)] = self.state.T_BED
 
-                elif town_kind == "学校":
-                    # School: some schools are multi-floor and become a portal to a
-                    # separate interior scene (world-map interior is sealed).
-                    is_city = bool(self._is_city_chunk(int(cx), int(cy)))
-                    floors = int(rng.randint(3, 6)) if is_city else int(rng.randint(2, 4))
-                    if (not is_city) and rng.random() < 0.35:
-                        floors = 1
-
-                    if floors > 1:
-                        for y in range(y0 + 1, y0 + h - 1):
-                            for x in range(x0 + 1, x0 + w - 1):
-                                if tiles[idx(x, y)] != self.state.T_DOOR:
-                                    tiles[idx(x, y)] = self.state.T_WALL
-
-                        tx0w = cx * self.state.CHUNK_SIZE + x0
-                        ty0w = cy * self.state.CHUNK_SIZE + y0
-                        doors_w = tuple(
-                            (cx * self.state.CHUNK_SIZE + int(dx), cy * self.state.CHUNK_SIZE + int(dy))
-                            for dx, dy in door_tiles
-                        )
-                        special_buildings.append(
-                            HardcoreSurvivalState._SpecialBuilding(
-                                kind="school",
-                                name="学校",
-                                tx0=int(tx0w),
-                                ty0=int(ty0w),
-                                w=int(w),
-                                h=int(h),
-                                door_tiles=doors_w,
-                                floors=int(floors),
-                            )
-                        )
-                    else:
-                        # Single-floor school: keep corridor clear, add desks + lockers.
-                        # Lockers along one side.
-                        if door_side in ("N", "S"):
-                            lx = in_left + 1
-                            for y in range(in_top + 1, in_bottom):
-                                if (lx, y) in corridor or near_door(lx, y):
-                                    continue
-                                if (y - (in_top + 1)) % 2 == 0:
-                                    set_interior(lx, y, self.state.T_SHELF)
-                        else:
-                            ly = in_top + 1
-                            for x in range(in_left + 1, in_right):
-                                if (x, ly) in corridor or near_door(x, ly):
-                                    continue
-                                if (x - (in_left + 1)) % 2 == 0:
-                                    set_interior(x, ly, self.state.T_SHELF)
-
-                        # Desks in rows (reads as classrooms).
-                        for y in range(in_top + 2, in_bottom, 2):
-                            for x in range(in_left + 2, in_right, 3):
-                                set_interior(x, y, self.state.T_TABLE)
-
-                        # Small office/storage room.
-                        if w >= 12 and h >= 9:
-                            rx = x0 + w - 6 if door_side in ("N", "S") else x0 + 2
-                            ry = y0 + 2 if door_side in ("N", "S") else y0 + h - 5
-                            room = build_room(int(rx), int(ry), 3, 2)
-                            if room is not None:
-                                for x in range(int(rx), int(rx) + 3):
-                                    for y in range(int(ry), int(ry) + 2):
-                                        if tiles[idx(x, y)] == self.state.T_FLOOR and ((x + y) % 2 == 0):
-                                            tiles[idx(x, y)] = self.state.T_SHELF
-
-                elif town_kind in ("高层住宅", "高层住宅大"):
-                    # High-rise: keep world-map interior walkable (no full-screen portal).
-                    tx0w = cx * self.state.CHUNK_SIZE + x0
-                    ty0w = cy * self.state.CHUNK_SIZE + y0
+                elif town_kind == "学校": 
+                    # School: keep world-map interior (camera view) like other buildings. 
+                    is_city = bool(self._is_city_chunk(int(cx), int(cy))) 
+                    floors = int(rng.randint(3, 6)) if is_city else int(rng.randint(2, 4)) 
+                    if (not is_city) and rng.random() < 0.35: 
+                        floors = 1 
+                    building_floors = int(floors) 
+ 
+                    # Keep corridor clear, add desks + lockers (always on 1F). 
+                    # Lockers along one side. 
+                    if door_side in ("N", "S"): 
+                        lx = in_left + 1 
+                        for y in range(in_top + 1, in_bottom): 
+                            if (lx, y) in corridor or near_door(lx, y): 
+                                continue 
+                            if (y - (in_top + 1)) % 2 == 0: 
+                                set_interior(lx, y, self.state.T_SHELF) 
+                    else: 
+                        ly = in_top + 1 
+                        for x in range(in_left + 1, in_right): 
+                            if (x, ly) in corridor or near_door(x, ly): 
+                                continue 
+                            if (x - (in_left + 1)) % 2 == 0: 
+                                set_interior(x, ly, self.state.T_SHELF) 
+ 
+                    # Desks in rows (reads as classrooms). 
+                    for y in range(in_top + 2, in_bottom, 2): 
+                        for x in range(in_left + 2, in_right, 3): 
+                            set_interior(x, y, self.state.T_TABLE) 
+ 
+                    # Small office/storage room. 
+                    if w >= 12 and h >= 9: 
+                        rx = x0 + w - 6 if door_side in ("N", "S") else x0 + 2 
+                        ry = y0 + 2 if door_side in ("N", "S") else y0 + h - 5 
+                        room = build_room(int(rx), int(ry), 3, 2) 
+                        if room is not None: 
+                            for x in range(int(rx), int(rx) + 3): 
+                                for y in range(int(ry), int(ry) + 2): 
+                                    if tiles[idx(x, y)] == self.state.T_FLOOR and ((x + y) % 2 == 0): 
+                                        tiles[idx(x, y)] = self.state.T_SHELF 
+ 
+                    if int(floors) > 1: 
+                        # Add a staircase and register multi-floor snapshots (like houses/highrise). 
+                        stair_pos: tuple[int, int] | None = None 
+                        tx0c = int(clamp(int(round((in_left + in_right) / 2.0)), in_left + 1, in_right - 1)) 
+                        ty0c = int(clamp(int(round((in_top + in_bottom) / 2.0)), in_top + 1, in_bottom - 1)) 
+                        cand = [ 
+                            (int(tx0c), int(ty0c)), 
+                            (int(tx0c + 2), int(ty0c)), 
+                            (int(tx0c - 2), int(ty0c)), 
+                            (int(tx0c), int(ty0c + 2)), 
+                            (int(tx0c), int(ty0c - 2)), 
+                            (int(in_left + 2), int(in_bottom - 2)), 
+                            (int(in_right - 2), int(in_bottom - 2)), 
+                        ] 
+                        for sx, sy in cand: 
+                            if not (int(in_left) <= int(sx) <= int(in_right) and int(in_top) <= int(sy) <= int(in_bottom)): 
+                                continue 
+                            if (int(sx), int(sy)) in corridor or near_door(int(sx), int(sy)): 
+                                continue 
+                            if tiles[idx(int(sx), int(sy))] != int(self.state.T_FLOOR): 
+                                continue 
+                            tiles[idx(int(sx), int(sy))] = int(self.state.T_STAIRS_UP) 
+                            stair_pos = (int(sx), int(sy)) 
+                            break 
+ 
+                        if stair_pos is None: 
+                            building_floors = 1 
+                        else: 
+                            tx0w = cx * self.state.CHUNK_SIZE + x0 
+                            ty0w = cy * self.state.CHUNK_SIZE + y0 
+                            f1: list[int] = [] 
+                            for yy in range(int(h)): 
+                                for xx in range(int(w)): 
+                                    f1.append(int(tiles[idx(int(x0 + xx), int(y0 + yy))])) 
+ 
+                            f_up = list(f1) 
+                            for i2 in range(len(f_up)): 
+                                tcur = int(f_up[i2]) 
+                                if tcur == int(self.state.T_DOOR): 
+                                    f_up[i2] = int(self.state.T_WALL) 
+                                elif tcur == int(self.state.T_STAIRS_UP): 
+                                    f_up[i2] = int(self.state.T_STAIRS_DOWN) 
+ 
+                            if mh_out is not None: 
+                                floor_tiles: dict[int, list[int]] = {1: f1} 
+                                for fl in range(2, int(building_floors) + 1): 
+                                    floor_tiles[int(fl)] = f_up 
+                                mh_out.append( 
+                                    HardcoreSurvivalState._MultiHouse( 
+                                        tx0=int(tx0w), 
+                                        ty0=int(ty0w), 
+                                        w=int(w), 
+                                        h=int(h), 
+                                        floors=int(building_floors), 
+                                        cur_floor=1, 
+                                        floor_tiles=floor_tiles, 
+                                    ) 
+                                ) 
+ 
+                elif town_kind in ("高层住宅", "高层住宅大"): 
+                    # High-rise: keep world-map interior walkable (no full-screen portal). 
+                    tx0w = cx * self.state.CHUNK_SIZE + x0 
+                    ty0w = cy * self.state.CHUNK_SIZE + y0 
                     doors_w = tuple((cx * self.state.CHUNK_SIZE + int(dx), cy * self.state.CHUNK_SIZE + int(dy)) for dx, dy in door_tiles)
                     floors = int(building_floors)
                     apt_doors: list[tuple[int, int, bool]] = []
@@ -22484,13 +22657,10 @@ class HardcoreSurvivalState(State):
             if sb is None:
                 continue
             kind = str(getattr(sb, "kind", ""))
-            if kind == "house":
-                self._house_interior_enter(sb)
-                return True
-            if kind == "school":
-                self._sch_interior_enter(sb)
-                return True
-        return False
+            if kind == "house": 
+                self._house_interior_enter(sb) 
+                return True 
+        return False 
 
     def _try_open_home_storage_world(self) -> bool:
         if getattr(self, "mount", None) is not None:
@@ -32309,31 +32479,33 @@ class HardcoreSurvivalState(State):
             if 0 <= x < INTERNAL_W and 0 <= y < INTERNAL_H:
                 surface.set_at((x, y), (250, 250, 250))
 
-    def _draw_thrown_furniture(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
-        thrown = getattr(self, "thrown_furniture", None)
-        if not isinstance(thrown, list) or not thrown:
-            return
-        for tf in thrown:
-            if not isinstance(tf, HardcoreSurvivalState._ThrownFurniture):
-                continue
-            p = pygame.Vector2(getattr(tf, "pos", pygame.Vector2(0, 0))) - pygame.Vector2(cam_x, cam_y)
-            x = iround(float(p.x))
-            y = iround(float(p.y))
-            if not (0 <= x < INTERNAL_W and 0 <= y < INTERNAL_H):
-                continue
-            tid = int(getattr(tf, "tid", 0))
-            col = (210, 200, 180)
-            tdef = self._TILES.get(int(tid))
-            if tdef is not None:
-                col = tuple(getattr(tdef, "color", col))
-            r = pygame.Rect(int(x - 3), int(y - 3), 6, 6)
-            pygame.draw.rect(surface, (10, 10, 12), r.inflate(2, 2))
-            pygame.draw.rect(surface, col, r)
-            pygame.draw.rect(surface, (0, 0, 0), r, 1)
-
-    def _draw_inventory_ui(self, surface: pygame.Surface) -> None:
-        overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 170))
+    def _draw_thrown_furniture(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None: 
+        thrown = getattr(self, "thrown_furniture", None) 
+        if not isinstance(thrown, list) or not thrown: 
+            return 
+        for tf in thrown: 
+            if not isinstance(tf, HardcoreSurvivalState._ThrownFurniture): 
+                continue 
+            p = pygame.Vector2(getattr(tf, "pos", pygame.Vector2(0, 0))) - pygame.Vector2(cam_x, cam_y) 
+            x = iround(float(p.x)) 
+            y = iround(float(p.y)) 
+            if not (0 <= x < INTERNAL_W and 0 <= y < INTERNAL_H): 
+                continue 
+            tid = int(getattr(tf, "tid", 0)) 
+            spr = getattr(tf, "sprite", None) 
+            if not isinstance(spr, pygame.Surface): 
+                spr = self._furniture_sprite(int(tid), getattr(tf, "offsets", []), scale_div=1) 
+                try: 
+                    setattr(tf, "sprite", spr) 
+                except Exception: 
+                    pass 
+            if spr is None: 
+                continue 
+            surface.blit(spr, spr.get_rect(center=(int(x), int(y)))) 
+ 
+    def _draw_inventory_ui(self, surface: pygame.Surface) -> None: 
+        overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA) 
+        overlay.fill((0, 0, 0, 170)) 
         surface.blit(overlay, (0, 0))
 
         cols = max(1, int(self.inventory.cols))
@@ -33267,25 +33439,27 @@ class HardcoreSurvivalState(State):
         finally:
             surface.set_clip(prev_clip)
 
-    def _draw_player_held_item(
-        self,
-        surface: pygame.Surface,
-        player_rect: pygame.Rect,
-        *,
-        direction: str,
-        step: int,
-        idle: bool,
-        run: bool,
-        height_delta: int,
-    ) -> None:
-        if self.gun is not None:
-            return
-        if getattr(self, "mount", None) is not None:
-            return
-
-        held = getattr(self, "held_item", None)
-        item_id = ""
-        is_melee = False
+    def _draw_player_held_item( 
+        self, 
+        surface: pygame.Surface, 
+        player_rect: pygame.Rect, 
+        *, 
+        direction: str, 
+        step: int, 
+        idle: bool, 
+        run: bool, 
+        height_delta: int, 
+    ) -> None: 
+        if self.gun is not None: 
+            return 
+        if getattr(self, "mount", None) is not None: 
+            return 
+        if float(getattr(self, "punch_left", 0.0)) > 0.0: 
+            return 
+ 
+        held = getattr(self, "held_item", None) 
+        item_id = "" 
+        is_melee = False 
         if isinstance(held, HardcoreSurvivalState._ItemStack) and int(getattr(held, "qty", 0)) > 0:
             item_id = str(getattr(held, "item_id", ""))
         else:
@@ -33357,40 +33531,83 @@ class HardcoreSurvivalState(State):
             else:
                 r.midtop = (int(player_rect.centerx), int(player_rect.bottom - 2))
 
-        surface.blit(img, r)
-
-    def _draw_player_back_carry(self, surface: pygame.Surface, player_rect: pygame.Rect, *, direction: str) -> None:
-        if not bool(self._world_furniture_carry_active()):
-            return
-        carry = getattr(self, "home_move_carry", None)
+        surface.blit(img, r) 
+ 
+    def _furniture_sprite(self, tid: int, offsets: object, *, scale_div: int = 1) -> pygame.Surface | None: 
+        tid = int(tid) 
+        if tid <= 0: 
+            return None 
+        scale_div = int(max(1, int(scale_div))) 
+        offs: list[tuple[int, int]] = [] 
+        if isinstance(offsets, list): 
+            for o in offsets: 
+                if not (isinstance(o, tuple) and len(o) == 2): 
+                    continue 
+                try: 
+                    offs.append((int(o[0]), int(o[1]))) 
+                except Exception: 
+                    continue 
+        if not offs: 
+            offs = [(0, 0)] 
+        key = (int(tid), tuple(sorted(offs)), int(scale_div)) 
+        cached = _FURNITURE_SPR_CACHE.get(key) 
+        if cached is not None: 
+            return cached 
+ 
+        ts = int(max(1, int(self.TILE_SIZE))) 
+        minx = min(int(dx) for dx, _dy in offs) 
+        maxx = max(int(dx) for dx, _dy in offs) 
+        miny = min(int(dy) for _dx, dy in offs) 
+        maxy = max(int(dy) for _dx, dy in offs) 
+        w = int(max(1, (int(maxx) - int(minx) + 1) * int(ts))) 
+        h = int(max(1, (int(maxy) - int(miny) + 1) * int(ts))) 
+        surf = pygame.Surface((int(w), int(h)), pygame.SRCALPHA) 
+ 
+        # Use far-away "virtual" coords to avoid any interior visibility masks. 
+        base_tx = 1_000_000 
+        base_ty = 1_000_000 
+        for dx, dy in offs: 
+            rx = int(dx - minx) * int(ts) 
+            ry = int(dy - miny) * int(ts) 
+            rect = pygame.Rect(int(rx), int(ry), int(ts), int(ts)) 
+            self._draw_world_tile(surf, rect, tx=int(base_tx + dx), ty=int(base_ty + dy), tile_id=int(tid), apply_mask=False) 
+ 
+        if int(scale_div) > 1: 
+            nw = max(1, int(round(float(surf.get_width()) / float(scale_div)))) 
+            nh = max(1, int(round(float(surf.get_height()) / float(scale_div)))) 
+            surf = pygame.transform.scale(surf, (int(nw), int(nh))) 
+ 
+        _FURNITURE_SPR_CACHE[key] = surf 
+        return surf 
+ 
+    def _draw_player_back_carry(self, surface: pygame.Surface, player_rect: pygame.Rect, *, direction: str) -> None: 
+        if not bool(self._world_furniture_carry_active()): 
+            return 
+        carry = getattr(self, "home_move_carry", None) 
         if not isinstance(carry, dict):
             return
         tid = int(carry.get("tid", 0))
         if tid <= 0:
             return
-        tdef = self._TILES.get(int(tid))
-        col = tuple(getattr(tdef, "color", (210, 200, 180))) if tdef is not None else (210, 200, 180)
-        offsets = carry.get("offsets", [])
-        n = int(len(offsets)) if isinstance(offsets, list) else 1
-        w = int(clamp(8 + 2 * min(3, max(0, n - 1)), 8, 14))
-        h = int(clamp(6 + 2 * min(3, max(0, n - 1)), 6, 14))
-        r = pygame.Rect(0, 0, int(w), int(h))
-        d = str(direction)
-        if d == "down":
-            r.midtop = (int(player_rect.centerx), int(player_rect.top + 1))
-        elif d == "up":
-            r.midbottom = (int(player_rect.centerx), int(player_rect.bottom - 10))
-        elif d == "left":
-            r.midright = (int(player_rect.left + 3), int(player_rect.centery))
-        else:
-            r.midleft = (int(player_rect.right - 3), int(player_rect.centery))
-        pygame.draw.rect(surface, (10, 10, 12), r.inflate(2, 2))
-        pygame.draw.rect(surface, col, r)
-        pygame.draw.rect(surface, (0, 0, 0), r, 1)
-
-    def _draw_player(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
-        p = self.player.pos - pygame.Vector2(cam_x, cam_y)
-        px = iround(float(p.x))
+        offsets = carry.get("offsets", []) 
+        spr = self._furniture_sprite(int(tid), offsets, scale_div=2) 
+        if spr is None: 
+            return 
+        r = spr.get_rect() 
+        d = str(direction) 
+        if d == "down": 
+            r.midtop = (int(player_rect.centerx), int(player_rect.top + 1)) 
+        elif d == "up": 
+            r.midbottom = (int(player_rect.centerx), int(player_rect.bottom - 10)) 
+        elif d == "left": 
+            r.midright = (int(player_rect.left + 3), int(player_rect.centery)) 
+        else: 
+            r.midleft = (int(player_rect.right - 3), int(player_rect.centery)) 
+        surface.blit(spr, r) 
+ 
+    def _draw_player(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None: 
+        p = self.player.pos - pygame.Vector2(cam_x, cam_y) 
+        px = iround(float(p.x)) 
         py = iround(float(p.y))
 
         pose = str(getattr(self, "player_pose", "")).strip()
@@ -33544,9 +33761,11 @@ class HardcoreSurvivalState(State):
                 pygame.draw.circle(surface, (255, 240, 190), (int(round(muzzle.x)), int(round(muzzle.y))), r)
                 pygame.draw.circle(surface, (255, 200, 120), (int(round(muzzle.x)), int(round(muzzle.y))), max(1, r - 1))
 
-        if punch_left > 0.0:
-            total = float(self._PUNCH_TOTAL_S)
-            t = 1.0 - float(punch_left) / max(1e-6, total)
+        if punch_left > 0.0: 
+            swing_id = str(getattr(self, "_melee_swing_id", "fist") or "fist") 
+            mdef = self._MELEE_DEFS.get(swing_id) or self._MELEE_DEFS.get("fist") 
+            total = float(getattr(mdef, "total_s", self._PUNCH_TOTAL_S)) if mdef is not None else float(self._PUNCH_TOTAL_S) 
+            t = 1.0 - float(punch_left) / max(1e-6, total) 
             ext = math.sin(float(clamp(t, 0.0, 1.0)) * math.pi)
             # Keep the fist close to the body (match 12x16 sprite scale).
             reach = 1.0 + ext * 4.0
@@ -33601,51 +33820,82 @@ class HardcoreSurvivalState(State):
                 else:
                     base_hand = pygame.Vector2(rect.centerx, rect.centery + 3)
 
-            fist = base_hand + pdir * float(reach)
-            outline = (10, 10, 12)
-            skin = tuple(getattr(self, "_PLAYER_PAL", {}).get("S", (220, 190, 160)))
-
-            fx = int(round(float(fist.x)))
-            fy = int(round(float(fist.y)))
-            # Arm connection: bridge pixels (cute, less "stick-arm" than lines).
-            step_n = int(clamp(int(round(float(reach))), 0, 6))
-            for s in range(1, int(step_n)):
-                bx = int(round(float(base_hand.x) + float(pdir.x) * float(s)))
-                by = int(round(float(base_hand.y) + float(pdir.y) * float(s)))
-                if 0 <= bx < INTERNAL_W and 0 <= by < INTERNAL_H:
-                    surface.set_at((bx, by), skin)
-            fr = pygame.Rect(int(fx - 1), int(fy - 1), 3, 3)
-            surface.fill(skin, fr)
-            pygame.draw.rect(surface, outline, fr, 1)
-            # If a melee weapon is equipped, draw a quick "stick" so the swing reads.
-            try:
-                swing_id = str(getattr(self, "_melee_swing_id", "fist"))
-                mdef = self._MELEE_DEFS.get(swing_id)
-                if mdef is not None and float(getattr(mdef, "visual_len", 0.0)) > 0.5:
-                    idef = self._ITEMS.get(swing_id)
-                    wcol = tuple(getattr(idef, "color", (200, 200, 210))) if idef is not None else (200, 200, 210)
-                    thick = int(clamp(int(getattr(mdef, "visual_thick", 2)), 1, 4))
-                    wlen = float(getattr(mdef, "visual_len", 10.0)) * max(0.25, float(ext))
-                    a = base_hand + pdir * 1.0
-                    b = base_hand + pdir * (1.0 + float(wlen))
-                    ax2 = int(round(float(a.x)))
-                    ay2 = int(round(float(a.y)))
-                    bx2 = int(round(float(b.x)))
-                    by2 = int(round(float(b.y)))
-                    pygame.draw.line(surface, outline, (ax2, ay2), (bx2, by2), int(thick + 2))
-                    pygame.draw.line(surface, wcol, (ax2, ay2), (bx2, by2), int(thick))
-                    if 0 <= bx2 < INTERNAL_W and 0 <= by2 < INTERNAL_H:
-                        surface.set_at((bx2, by2), (255, 220, 160))
-            except Exception:
-                pass
-            # Tiny motion trail (doesn't add a long "stick arm").
-            tx = int(clamp(fx - int(round(float(pdir.x))), 0, INTERNAL_W - 1))
-            ty = int(clamp(fy - int(round(float(pdir.y))), 0, INTERNAL_H - 1))
-            surface.set_at((tx, ty), outline)
-            if ext > 0.6:
-                hlx = int(clamp(fx + int(round(pdir.x)), 0, INTERNAL_W - 1))
-                hly = int(clamp(fy + int(round(pdir.y)), 0, INTERNAL_H - 1))
-                surface.set_at((hlx, hly), (255, 220, 160))
+            outline = (10, 10, 12) 
+            skin = tuple(getattr(self, "_PLAYER_PAL", {}).get("S", (220, 190, 160))) 
+ 
+            use_weapon = bool(swing_id and swing_id != "fist") 
+            weapon_img: pygame.Surface | None = None 
+            if use_weapon: 
+                idef = self._ITEMS.get(str(swing_id)) 
+                if idef is None or str(getattr(idef, "kind", "")) != "melee": 
+                    use_weapon = False 
+                else: 
+                    self._ensure_item_visuals(str(swing_id)) 
+                    weapon_img = self._ITEM_SPRITES_WORLD.get(str(swing_id)) or self._ITEM_SPRITES.get(str(swing_id)) 
+                    if weapon_img is None: 
+                        use_weapon = False 
+ 
+            if not use_weapon: 
+                fist = base_hand + pdir * float(reach) 
+                fx = int(round(float(fist.x))) 
+                fy = int(round(float(fist.y))) 
+                # Arm connection: bridge pixels (cute, less "stick-arm" than lines). 
+                step_n = int(clamp(int(round(float(reach))), 0, 6)) 
+                for s in range(1, int(step_n)): 
+                    bx = int(round(float(base_hand.x) + float(pdir.x) * float(s))) 
+                    by = int(round(float(base_hand.y) + float(pdir.y) * float(s))) 
+                    if 0 <= bx < INTERNAL_W and 0 <= by < INTERNAL_H: 
+                        surface.set_at((bx, by), skin) 
+                fr = pygame.Rect(int(fx - 1), int(fy - 1), 3, 3) 
+                surface.fill(skin, fr) 
+                pygame.draw.rect(surface, outline, fr, 1) 
+                # Tiny motion trail. 
+                tx2 = int(clamp(int(fx - int(round(float(pdir.x)))), 0, INTERNAL_W - 1)) 
+                ty2 = int(clamp(int(fy - int(round(float(pdir.y)))), 0, INTERNAL_H - 1)) 
+                surface.set_at((tx2, ty2), outline) 
+                if ext > 0.6: 
+                    hlx = int(clamp(int(fx + int(round(float(pdir.x)))), 0, INTERNAL_W - 1)) 
+                    hly = int(clamp(int(fy + int(round(float(pdir.y)))), 0, INTERNAL_H - 1)) 
+                    surface.set_at((hlx, hly), (255, 220, 160)) 
+            else: 
+                # Weapon swing: rotate the equipped melee sprite (甩动棍子/钢管) instead of drawing a punch fist. 
+                weapon_len = float(getattr(mdef, "visual_len", 10.0)) if mdef is not None else 10.0 
+                weapon_reach = 2.0 + float(ext) * float(max(6.0, float(weapon_len) * 0.85)) 
+                center = base_hand + pdir * float(weapon_reach) 
+ 
+                # Arm connection (short): draw to the grip area so it doesn't look like a punch. 
+                step_n = int(clamp(int(round(float(weapon_reach))), 0, 8)) 
+                for s in range(1, int(step_n)): 
+                    bx = int(round(float(base_hand.x) + float(pdir.x) * float(s))) 
+                    by = int(round(float(base_hand.y) + float(pdir.y) * float(s))) 
+                    if 0 <= bx < INTERNAL_W and 0 <= by < INTERNAL_H: 
+                        surface.set_at((bx, by), skin) 
+ 
+                # Alternate swing direction so it doesn't feel robotic. 
+                arc = 150.0 
+                dir_sign = 1.0 if bool(getattr(self, "punch_hand", 0)) else -1.0 
+                aim_deg = -math.degrees(math.atan2(float(pdir.y), float(pdir.x))) 
+                swing_phase = float(clamp(t, 0.0, 1.0)) 
+                desired = float(aim_deg) + float(dir_sign) * float(arc) * (0.5 - float(swing_phase)) 
+                # Melee sprites are drawn diagonally by default (see _make_item_sprite_auto). 
+                baseline = 31.0 
+                rot_deg = float(desired) - float(baseline) 
+                rot = rotate_pixel_sprite_crisp(weapon_img, rot_deg, step_deg=6.0) if weapon_img is not None else None 
+                if rot is not None: 
+                    cx2 = int(round(float(center.x))) 
+                    cy2 = int(round(float(center.y))) 
+                    surface.blit(rot, rot.get_rect(center=(int(cx2), int(cy2)))) 
+                    # Tiny motion trail. 
+                    tx2 = int(clamp(int(cx2 - int(round(float(pdir.x)))), 0, INTERNAL_W - 1)) 
+                    ty2 = int(clamp(int(cy2 - int(round(float(pdir.y)))), 0, INTERNAL_H - 1)) 
+                    surface.set_at((tx2, ty2), outline) 
+ 
+                # Small hand pixel at the grip. 
+                hx2 = int(round(float(base_hand.x))) 
+                hy2 = int(round(float(base_hand.y))) 
+                hr = pygame.Rect(int(hx2 - 1), int(hy2 - 1), 3, 3) 
+                surface.fill(skin, hr) 
+                pygame.draw.rect(surface, outline, hr, 1) 
 
     def _draw_sun_moon_widget(self, surface: pygame.Surface, *, tday: float) -> None:
         rect = pygame.Rect(0, 0, 116, 22)
