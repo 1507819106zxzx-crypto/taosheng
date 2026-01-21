@@ -299,12 +299,43 @@ def _patch_melee_aim() -> None:
     cls._start_punch = start_punch
 
 
+def _patch_aim_dir_stable() -> None:
+    # Stabilize aim_dir against sub-pixel player movement: use rounded player
+    # world coords when computing the aim vector so diagonal movement doesn't
+    # cause tiny aim oscillations (which can flip 4-dir sprites).
+    cls = game.HardcoreSurvivalState
+
+    def compute_aim_dir(self: game.HardcoreSurvivalState) -> pygame.Vector2:
+        m = self.app.screen_to_internal(pygame.mouse.get_pos())
+        if m is None:
+            d = pygame.Vector2(getattr(getattr(self, "player", None), "facing", pygame.Vector2(1, 0)))
+            return d.normalize() if d.length_squared() > 0.001 else pygame.Vector2(1, 0)
+
+        mw = pygame.Vector2(m) + pygame.Vector2(float(getattr(self, "cam_x", 0)), float(getattr(self, "cam_y", 0)))
+
+        p = getattr(self, "player", None)
+        if p is None:
+            v = mw
+        else:
+            px = float(game.iround(float(p.pos.x)))
+            py = float(game.iround(float(p.pos.y)))
+            v = mw - pygame.Vector2(px, py)
+
+        if v.length_squared() <= 0.001:
+            d = pygame.Vector2(getattr(getattr(self, "player", None), "facing", pygame.Vector2(1, 0)))
+            return d.normalize() if d.length_squared() > 0.001 else pygame.Vector2(1, 0)
+        return v.normalize()
+
+    cls._compute_aim_dir = compute_aim_dir
+
+
 def apply_patches() -> None:
     _patch_weapon_rotation()
     _patch_grip_point()
     _patch_item_visual_sizes()
     _patch_camera_snap()
     _patch_melee_aim()
+    _patch_aim_dir_stable()
 
 
 def main() -> int:
