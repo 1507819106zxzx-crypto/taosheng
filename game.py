@@ -12220,6 +12220,8 @@ class HardcoreSurvivalState(State):
         self.toilet_task: dict[str, object] | None = None
         # Simple "held in hand" item (for carrying tools like cups).
         self.held_item: HardcoreSurvivalState._ItemStack | None = None
+        # Flashlight (tool) state.
+        self.flashlight_on = False
         self.muzzle_flash_left = 0.0
         self.noise_left = 0.0
         self.noise_radius = 0.0
@@ -12515,6 +12517,12 @@ class HardcoreSurvivalState(State):
             if not self.inv_open and event.key in (pygame.K_r,):
                 self._start_reload()
                 return
+            if not self.inv_open and event.key in (pygame.K_t,):
+                self._flashlight_toggle()
+                return
+            if event.key in (pygame.K_x,):
+                self._stow_held_item()
+                return
             if not self.inv_open and event.key in (pygame.K_j,):
                 self._start_punch()
                 return
@@ -12616,6 +12624,10 @@ class HardcoreSurvivalState(State):
             if isinstance(held, HardcoreSurvivalState._ItemStack) and str(getattr(held, "item_id", "")) == str(getattr(idef, "id", "")):
                 return "放回"
             return "拿在手上"
+        if str(getattr(idef, "id", "")) == "battery":
+            held = getattr(self, "held_item", None)
+            if isinstance(held, HardcoreSurvivalState._ItemStack) and str(getattr(held, "item_id", "")) == "flashlight":
+                return "换电池"
         return None
 
     def _inv_open_ctx(self, idx: int) -> None:
@@ -19955,7 +19967,7 @@ class HardcoreSurvivalState(State):
 
         # Small tools (e.g. cup) are more usable when transferred directly into the hand.
         take_hand = 0
-        if not from_player and idef is not None and str(getattr(idef, "kind", "")) == "tool":
+        if not from_player and idef is not None and self.gun is None and str(getattr(idef, "kind", "")) == "tool":
             if getattr(self, "held_item", None) is None and int(before) > 0:
                 take_hand = 1
 
@@ -19974,7 +19986,12 @@ class HardcoreSurvivalState(State):
             return
 
         if take_hand > 0:
-            self.held_item = HardcoreSurvivalState._ItemStack(item_id=str(st.item_id), qty=1)
+            hmeta: dict[str, object] = dict(getattr(st, "meta", {})) if isinstance(getattr(st, "meta", None), dict) else {}
+            if str(getattr(st, "item_id", "")) == "flashlight" and "charge" not in hmeta:
+                hmeta["charge"] = 1.0
+            self.held_item = HardcoreSurvivalState._ItemStack(item_id=str(st.item_id), qty=1, meta=hmeta)
+            if str(getattr(st, "item_id", "")) == "flashlight":
+                self.flashlight_on = False
 
         if left <= 0:
             src.slots[idx] = None
@@ -21361,6 +21378,8 @@ class HardcoreSurvivalState(State):
             self.rv.vel.update(0, 0)
             self.bike.vel.update(0, 0)
             return
+
+        self._update_flashlight(float(dt))
 
         dt_time = float(dt)
         if str(getattr(self, "player_pose", "")) == "sleep" and str(getattr(self, "player_pose_space", "")) == "world":
@@ -26284,10 +26303,14 @@ class HardcoreSurvivalState(State):
 
         # If it's a small tool (like a cup) and the hand is empty, carry it in-hand.
         held = getattr(self, "held_item", None)
-        if held is None and str(getattr(idef, "kind", "")) == "tool":
+        if held is None and self.gun is None and str(getattr(idef, "kind", "")) == "tool":
             take = int(clamp(int(getattr(it, "qty", 1)), 0, 1))
             if take > 0:
-                self.held_item = HardcoreSurvivalState._ItemStack(item_id=str(it.item_id), qty=int(take))
+                st = HardcoreSurvivalState._ItemStack(item_id=str(it.item_id), qty=int(take))
+                if str(getattr(st, "item_id", "")) == "flashlight":
+                    if "charge" not in st.meta:
+                        st.meta["charge"] = 1.0
+                self.held_item = st
                 left2 = int(getattr(it, "qty", 1)) - int(take)
                 if left2 <= 0:
                     try:
@@ -26298,7 +26321,10 @@ class HardcoreSurvivalState(State):
                     it.qty = int(left2)
                 self._set_hint(f"拿在手上 {idef.name}")
                 return True
-        left = self.inventory.add(it.item_id, int(it.qty), self._ITEMS)
+        add_meta: dict[str, object] | None = None
+        if str(getattr(it, "item_id", "")) == "flashlight":
+            add_meta = {"charge": 1.0}
+        left = self.inventory.add(it.item_id, int(it.qty), self._ITEMS, meta=add_meta)
         taken = int(it.qty) - int(left)
         if taken <= 0:
             self._set_hint("背包满了")
@@ -26323,6 +26349,84 @@ class HardcoreSurvivalState(State):
         offset = pygame.Vector2(random.randint(-6, 6), random.randint(-6, 6))
         self._drop_world_item(pygame.Vector2(self.player.pos) + offset, stack.item_id, int(stack.qty))
         self._set_hint(f"丢弃 {name} x{stack.qty}")
+
+    def _stow_held_item(self, *, quiet: bool = False) -> bool:
+        held = getattr(self, "held_item", None)
+        if not isinstance(held, HardcoreSurvivalState._ItemStack) or int(getattr(held, "qty", 0)) <= 0:
+            return False
+
+        meta = dict(getattr(held, "meta", {})) if isinstance(getattr(held, "meta", None), dict) else None
+        left = int(self.inventory.add(str(getattr(held, "item_id", "")), int(getattr(held, "qty", 1)), self._ITEMS, meta=meta))
+        if left > 0:
+            if not bool(quiet):
+                self._set_hint("背包满了，无法收起", seconds=1.0)
+            return False
+
+        if str(getattr(held, "item_id", "")) == "flashlight":
+            self.flashlight_on = False
+        self.held_item = None
+
+        if not bool(quiet):
+            idef = self._ITEMS.get(str(getattr(held, "item_id", "")))
+            name = idef.name if idef is not None else str(getattr(held, "item_id", ""))
+            self._set_hint(f"已收起 {name}", seconds=0.8)
+        return True
+
+    def _flashlight_charge(self) -> float:
+        held = getattr(self, "held_item", None)
+        if not isinstance(held, HardcoreSurvivalState._ItemStack) or str(getattr(held, "item_id", "")) != "flashlight":
+            return 0.0
+        meta = getattr(held, "meta", None)
+        if not isinstance(meta, dict):
+            meta = {}
+            held.meta = meta
+        try:
+            charge = float(meta.get("charge", 1.0))
+        except Exception:
+            charge = 1.0
+        charge = float(clamp(charge, 0.0, 1.0))
+        meta["charge"] = float(charge)
+        return float(charge)
+
+    def _flashlight_toggle(self) -> None:
+        held = getattr(self, "held_item", None)
+        if not isinstance(held, HardcoreSurvivalState._ItemStack) or str(getattr(held, "item_id", "")) != "flashlight":
+            self.flashlight_on = False
+            self._set_hint("先把手电筒拿在手上", seconds=1.0)
+            return
+
+        charge = float(self._flashlight_charge())
+        if charge <= 0.01:
+            self.flashlight_on = False
+            self._set_hint("手电筒没电了（用电池更换）", seconds=1.2)
+            return
+
+        self.flashlight_on = not bool(getattr(self, "flashlight_on", False))
+        self._set_hint("手电筒：开" if bool(self.flashlight_on) else "手电筒：关", seconds=0.8)
+
+    def _update_flashlight(self, dt: float) -> None:
+        # Keep flashlight state consistent (and drain battery when on).
+        held = getattr(self, "held_item", None)
+        if not isinstance(held, HardcoreSurvivalState._ItemStack) or str(getattr(held, "item_id", "")) != "flashlight":
+            self.flashlight_on = False
+            return
+
+        charge = float(self._flashlight_charge())
+        if charge <= 0.01:
+            self.flashlight_on = False
+            return
+
+        if not bool(getattr(self, "flashlight_on", False)):
+            return
+
+        # Drain ~10 minutes from full to empty.
+        drain_per_s = 1.0 / 600.0
+        charge = float(clamp(charge - float(dt) * float(drain_per_s), 0.0, 1.0))
+        held.meta["charge"] = float(charge)
+        if charge <= 0.01:
+            held.meta["charge"] = 0.0
+            self.flashlight_on = False
+            self._set_hint("手电筒没电了", seconds=1.0)
 
     def _use_consumable(self, item_id: str) -> bool:
         item_id = str(item_id)
@@ -26645,6 +26749,13 @@ class HardcoreSurvivalState(State):
             self._set_hint(f"已安装 {getattr(mdef, 'name', '')}")
             return
 
+        # Hands are exclusive: stow any held tool before equipping a weapon.
+        if str(getattr(idef, "kind", "")) in ("gun", "melee"):
+            if isinstance(getattr(self, "held_item", None), HardcoreSurvivalState._ItemStack):
+                if not self._stow_held_item(quiet=True):
+                    self._set_hint("背包满了，先收起手上的东西", seconds=1.0)
+                    return
+
         if idef.kind != "gun": 
             if idef.kind == "melee": 
                 def clone_obj(o: object) -> object: 
@@ -26764,23 +26875,48 @@ class HardcoreSurvivalState(State):
                     self.inventory.slots[int(self.inv_index)] = None     
                 return
 
+            if str(stack.item_id) == "battery":
+                held = getattr(self, "held_item", None)
+                if isinstance(held, HardcoreSurvivalState._ItemStack) and str(getattr(held, "item_id", "")) == "flashlight":
+                    if not isinstance(getattr(held, "meta", None), dict):
+                        held.meta = {}
+                    held.meta["charge"] = 1.0
+                    self.flashlight_on = False
+                    stack.qty -= 1
+                    if int(stack.qty) <= 0:
+                        self.inventory.slots[int(self.inv_index)] = None
+                    self._set_hint("已更换电池（满电）", seconds=1.0)
+                else:
+                    self._set_hint("需要手持手电筒才能换电池", seconds=1.0)
+                return
+
             if str(getattr(idef, "kind", "")) == "tool":
-                # Toggle "held in hand" for small tools (e.g. cup).
+                # Hold a small tool in-hand (e.g. cup).
                 held = getattr(self, "held_item", None)
                 if isinstance(held, HardcoreSurvivalState._ItemStack):
-                    left = int(self.inventory.add(str(held.item_id), int(held.qty), self._ITEMS))
+                    held_meta = dict(getattr(held, "meta", {})) if isinstance(getattr(held, "meta", None), dict) else None
+                    left = int(self.inventory.add(str(held.item_id), int(held.qty), self._ITEMS, meta=held_meta))
                     if left > 0:
                         self._set_hint("背包满了")
                         return
+                    if str(getattr(held, "item_id", "")) == "flashlight":
+                        self.flashlight_on = False
                     self.held_item = None
 
                 take = int(min(int(getattr(stack, "qty", 1)), 1))
                 if take <= 0:
                     return
+                new_meta: dict[str, object] = dict(getattr(stack, "meta", {})) if isinstance(getattr(stack, "meta", None), dict) else {}
+                if str(stack.item_id) == "flashlight" and "charge" not in new_meta:
+                    new_meta["charge"] = 1.0
                 stack.qty -= int(take)
                 if int(stack.qty) <= 0:
                     self.inventory.slots[int(self.inv_index)] = None
-                self.held_item = HardcoreSurvivalState._ItemStack(item_id=str(stack.item_id), qty=int(take))
+                self.held_item = HardcoreSurvivalState._ItemStack(item_id=str(stack.item_id), qty=int(take), meta=new_meta)
+                if str(stack.item_id) == "flashlight":
+                    self.flashlight_on = False
+                    self._set_hint("手电筒：T 开/关  X 收起", seconds=1.2)
+                    return
                 self._set_hint(f"拿在手上 {idef.name}")
                 return
             self._set_hint("不能使用/装备")
@@ -28475,6 +28611,10 @@ class HardcoreSurvivalState(State):
         overlay = self._make_day_night_overlay_surface(in_rv=in_rv)
         if overlay is None:
             return
+        try:
+            self._carve_flashlight_from_night_overlay(overlay)
+        except Exception:
+            pass
         surface.blit(overlay, (0, 0))
 
     def _blit_screen(self, surface: pygame.Surface, src: pygame.Surface, *, pos: tuple[int, int], alpha: int = 255) -> None:
@@ -28817,6 +28957,112 @@ class HardcoreSurvivalState(State):
         carve_cone(base + side * head_sep)
         carve_cone(base - side * head_sep)
 
+    def _carve_flashlight_from_night_overlay(self, overlay: pygame.Surface) -> None:
+        if not bool(getattr(self, "flashlight_on", False)):
+            return
+
+        held = getattr(self, "held_item", None)
+        if not isinstance(held, HardcoreSurvivalState._ItemStack) or str(getattr(held, "item_id", "")) != "flashlight":
+            self.flashlight_on = False
+            return
+
+        charge = float(self._flashlight_charge())
+        if charge <= 0.01:
+            self.flashlight_on = False
+            return
+
+        try:
+            night_a = int(overlay.get_at((0, 0))[3])
+        except Exception:
+            night_a = int(overlay.get_alpha() or 0)
+        if int(night_a) <= 0:
+            return
+
+        r = getattr(self, "_last_player_screen_rect", None)
+        if not isinstance(r, pygame.Rect):
+            return
+
+        sx = int(r.centerx)
+        sy = int(r.centery + 2)
+
+        # Aim direction (screen-space so it works in interiors too).
+        aim: pygame.Vector2 | None = None
+        try:
+            m = self.app.screen_to_internal(pygame.mouse.get_pos())
+        except Exception:
+            m = None
+        if m is not None:
+            v = pygame.Vector2(float(m[0]) - float(sx), float(m[1]) - float(sy))
+            if v.length_squared() > 0.001:
+                aim = v.normalize()
+        if aim is None:
+            face = None
+            if bool(getattr(self, "house_interior", False)):
+                face = getattr(self, "house_int_facing", None)
+            elif bool(getattr(self, "sch_interior", False)):
+                face = getattr(self, "sch_int_facing", None)
+            elif bool(getattr(self, "hr_interior", False)):
+                face = getattr(self, "hr_int_facing", None)
+            if not isinstance(face, pygame.Vector2):
+                face = getattr(getattr(self, "player", None), "facing", pygame.Vector2(1, 0))
+            aim = pygame.Vector2(face)
+            if aim.length_squared() <= 0.001:
+                aim = pygame.Vector2(1, 0)
+            aim = aim.normalize()
+
+        max_sub_alpha = int(clamp(int(round(float(night_a) * 1.25 * float(charge))), 0, int(night_a)))
+        if max_sub_alpha <= 0:
+            return
+
+        length = int(clamp(int(round(160.0 + 20.0 * float(charge))), 110, 200))
+        base_half_ang = 28.0
+
+        left_dir = aim.rotate(-base_half_ang)
+        right_dir = aim.rotate(base_half_ang)
+        p1 = pygame.Vector2(float(sx), float(sy)) + left_dir * float(length)
+        p2 = pygame.Vector2(float(sx), float(sy)) + right_dir * float(length)
+
+        pad = 10
+        minx = int(math.floor(min(float(sx), float(p1.x), float(p2.x)) - pad))
+        miny = int(math.floor(min(float(sy), float(p1.y), float(p2.y)) - pad))
+        maxx = int(math.ceil(max(float(sx), float(p1.x), float(p2.x)) + pad))
+        maxy = int(math.ceil(max(float(sy), float(p1.y), float(p2.y)) + pad))
+
+        bounds = overlay.get_rect()
+        if maxx < bounds.left or maxy < bounds.top or minx > bounds.right or miny > bounds.bottom:
+            return
+        minx = int(clamp(minx, 0, bounds.w - 1))
+        miny = int(clamp(miny, 0, bounds.h - 1))
+        maxx = int(clamp(maxx, 0, bounds.w - 1))
+        maxy = int(clamp(maxy, 0, bounds.h - 1))
+        bw = int(maxx - minx + 1)
+        bh = int(maxy - miny + 1)
+        if bw <= 1 or bh <= 1:
+            return
+
+        beam = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        ox = sx - minx
+        oy = sy - miny
+
+        # Strong at the center, fades forward.
+        steps = 8
+        for i in range(steps):
+            t = float(i) / float(max(1, steps - 1))
+            a = int(round(float(max_sub_alpha) * ((1.0 - t) ** 2)))
+            if a <= 0:
+                continue
+            l = float(length) * (0.30 + 0.70 * t)
+            ang = float(base_half_ang) * (0.60 + 0.40 * t)
+            ld = aim.rotate(-ang)
+            rd = aim.rotate(ang)
+            q1 = pygame.Vector2(float(ox), float(oy)) + ld * l
+            q2 = pygame.Vector2(float(ox), float(oy)) + rd * l
+            pts = [(float(ox), float(oy)), (float(q1.x), float(q1.y)), (float(q2.x), float(q2.y))]
+            pygame.draw.polygon(beam, (0, 0, 0, int(a)), pts)
+
+        pygame.draw.circle(beam, (0, 0, 0, int(max_sub_alpha)), (int(ox), int(oy)), 7)
+        overlay.blit(beam, (int(minx), int(miny)), special_flags=pygame.BLEND_RGBA_SUB)
+
     def _draw_world_lighting(
         self,
         surface: pygame.Surface,
@@ -28832,6 +29078,7 @@ class HardcoreSurvivalState(State):
             try:
                 self._carve_world_lamps_from_night_overlay(overlay, cam_x, cam_y, start_tx, end_tx, start_ty, end_ty)
                 self._carve_vehicle_headlights_from_night_overlay(overlay, cam_x, cam_y)
+                self._carve_flashlight_from_night_overlay(overlay)
             except Exception:
                 pass
             surface.blit(overlay, (0, 0))
@@ -33732,6 +33979,7 @@ class HardcoreSurvivalState(State):
             self._hover_tooltip = None
             self._draw_house_interior_scene(surface)
             self._draw_day_night_overlay(surface, in_rv=True)
+            self._draw_weather_effects(surface, in_rv=True)
             self._draw_survival_ui(surface)
             if getattr(self, "world_map_open", False):
                 self._draw_world_map_ui(surface)
@@ -33748,6 +33996,7 @@ class HardcoreSurvivalState(State):
             self._hover_tooltip = None
             self._draw_sch_interior_scene(surface)
             self._draw_day_night_overlay(surface, in_rv=True)
+            self._draw_weather_effects(surface, in_rv=True)
             self._draw_survival_ui(surface)
             if getattr(self, "world_map_open", False):
                 self._draw_world_map_ui(surface)
@@ -33766,6 +34015,7 @@ class HardcoreSurvivalState(State):
             self._hover_tooltip = None
             self._draw_hr_interior_scene(surface)
             self._draw_day_night_overlay(surface, in_rv=True)
+            self._draw_weather_effects(surface, in_rv=True)
             self._draw_survival_ui(surface)
             if getattr(self, "world_map_open", False):
                 self._draw_world_map_ui(surface)
@@ -35900,6 +36150,15 @@ class HardcoreSurvivalState(State):
             idef = self._ITEMS.get(it.item_id)
             name = idef.name if idef is not None else it.item_id
             draw_text(surface, self.app.font_s, f"E 拾取：{name} x{int(it.qty)}", (6, 96), pygame.Color(220, 220, 230), anchor="topleft")
+
+        held = getattr(self, "held_item", None)
+        if isinstance(held, HardcoreSurvivalState._ItemStack) and str(getattr(held, "item_id", "")) == "flashlight":
+            pct = int(round(float(self._flashlight_charge()) * 100.0))
+            on = bool(getattr(self, "flashlight_on", False))
+            col = pygame.Color(230, 230, 240) if on else pygame.Color(180, 180, 190)
+            if int(pct) <= 15:
+                col = pygame.Color(230, 120, 120)
+            draw_text(surface, self.app.font_s, f"T 手电筒:{'开' if on else '关'}  电量{pct}%  X 收起", (6, 108), col, anchor="topleft")
 
         if self.hint_text:
             draw_text(surface, self.app.font_s, self.hint_text, (INTERNAL_W // 2, INTERNAL_H - 30), pygame.Color(255, 220, 140), anchor="center")
