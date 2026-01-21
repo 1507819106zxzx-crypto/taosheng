@@ -21992,32 +21992,19 @@ class HardcoreSurvivalState(State):
         self._update_world_door_open_anim(float(dt))
         self._maybe_show_home_highrise_dialog()
 
-        focus = pygame.Vector2(self.player.pos)
-        target_cam_x = float(focus.x - INTERNAL_W / 2)
-        target_cam_y = float(focus.y - INTERNAL_H / 2)
-
-        # Camera: reduce diagonal jitter by smoothing only when moving diagonally.
-        cur_fx = float(getattr(self, "cam_fx", target_cam_x))
-        cur_fy = float(getattr(self, "cam_fy", target_cam_y))
+        # Pixel-locked camera follow: track the player's integer world position.
+        # Using floor() keeps diagonal motion stable (no 1px wobble) even when
+        # the underlying float position moves by sub-pixels per frame.
         try:
-            vx = float(getattr(self.player.vel, "x", 0.0))
-            vy = float(getattr(self.player.vel, "y", 0.0))
+            fx = int(math.floor(float(self.player.pos.x)))
+            fy = int(math.floor(float(self.player.pos.y)))
         except Exception:
-            vx = 0.0
-            vy = 0.0
-        moving_diag = abs(float(vx)) > 1e-6 and abs(float(vy)) > 1e-6
-        if moving_diag:
-            follow = 14.0 if bool(getattr(self, "player_sprinting", False)) else 18.0
-            a = float(clamp(float(dt) * float(follow), 0.0, 1.0))
-            self.cam_fx = float(cur_fx + (float(target_cam_x) - float(cur_fx)) * float(a))
-            self.cam_fy = float(cur_fy + (float(target_cam_y) - float(cur_fy)) * float(a))
-        else:
-            self.cam_fx = float(target_cam_x)
-            self.cam_fy = float(target_cam_y)
-        # Pixel-perfect camera: snap to int pixels. Use iround() (instead of
-        # floor) to avoid diagonal "flicker" from asymmetric rounding.
-        self.cam_x = int(iround(float(self.cam_fx)))
-        self.cam_y = int(iround(float(self.cam_fy)))
+            fx = int(iround(float(self.player.pos.x)))
+            fy = int(iround(float(self.player.pos.y)))
+        self.cam_x = int(fx - int(INTERNAL_W // 2))
+        self.cam_y = int(fy - int(INTERNAL_H // 2))
+        self.cam_fx = float(self.cam_x)
+        self.cam_fy = float(self.cam_y)
 
         self._stream_world_chunks()
 
@@ -34390,11 +34377,11 @@ class HardcoreSurvivalState(State):
         # Draw the player at integer world coords (pixel-lock) so diagonal motion
         # doesn't produce 1px jitter from float -> int rounding differences.
         try:
+            pwx = int(math.floor(float(self.player.pos.x)))
+            pwy = int(math.floor(float(self.player.pos.y)))
+        except Exception:
             pwx = int(iround(float(self.player.pos.x)))
             pwy = int(iround(float(self.player.pos.y)))
-        except Exception:
-            pwx = int(self.player.pos.x)
-            pwy = int(self.player.pos.y)
         px = int(pwx - int(cam_x))
         py = int(pwy - int(cam_y))
         p = pygame.Vector2(float(px), float(py))
