@@ -12572,12 +12572,21 @@ class HardcoreSurvivalState(State):
         gap = 4
         grid_w = cols * slot + (cols - 1) * gap
         grid_h = rows * slot + (rows - 1) * gap
-        x0 = (INTERNAL_W - grid_w) // 2
-        y0 = (INTERNAL_H - grid_h) // 2 - 10
+        panel_pad_x = 10
+        header_h = 26
+        footer_gap = 10
+        footer_outer_h = 52
+
+        panel_w = int(grid_w + panel_pad_x * 2)
+        panel_h = int(header_h + grid_h + footer_gap + footer_outer_h)
+        panel_x = int((INTERNAL_W - panel_w) // 2)
+        panel_y = int((INTERNAL_H - panel_h) // 2)
+        panel = pygame.Rect(int(panel_x), int(panel_y), int(panel_w), int(panel_h))
+
+        x0 = int(panel_x + panel_pad_x)
+        y0 = int(panel_y + header_h)
         grid = pygame.Rect(int(x0), int(y0), int(grid_w), int(grid_h))
-        panel = pygame.Rect(int(x0 - 10), int(y0 - 26), int(grid_w + 20), int(grid_h + 58))
-        footer_h = 52
-        footer = pygame.Rect(int(panel.x + 8), int(panel.bottom - footer_h), int(panel.w - 16), int(footer_h - 6))
+        footer = pygame.Rect(int(panel.x + 8), int(grid.bottom + footer_gap), int(panel.w - 16), int(footer_outer_h - 6))
         return grid, panel, footer, int(x0), int(y0), int(cols), int(rows), int(slot), int(gap)
 
     def _inv_hit_test(self, mx: int, my: int) -> int | None:
@@ -33498,14 +33507,36 @@ class HardcoreSurvivalState(State):
                     hi = mid
             return text[: max(0, lo - 1)].rstrip() + suffix
 
-        sel = self.inventory.slots[int(self.inv_index)]
+        info_idx: int | None = None
+        try:
+            if hover_idx is not None:
+                hi = int(hover_idx)
+                if 0 <= hi < len(self.inventory.slots) and self.inventory.slots[hi] is not None:
+                    info_idx = int(hi)
+        except Exception:
+            info_idx = None
+        if info_idx is None:
+            info_idx = int(self.inv_index)
+
+        sel = self.inventory.slots[int(info_idx)] if 0 <= int(info_idx) < len(self.inventory.slots) else None
         name_line = "空"
         desc_line = ""
         if sel is not None:
             idef = self._ITEMS.get(sel.item_id)
             name = idef.name if idef is not None else sel.item_id
-            name_line = f"{name} x{int(sel.qty)}"
-            desc_line = str(getattr(idef, "desc", "")).strip() if idef is not None else ""
+            prefix = "[H] " if hover_idx is not None and int(info_idx) == int(hover_idx) and int(info_idx) != int(self.inv_index) else ""
+            name_line = f"{prefix}{name} x{int(sel.qty)}"
+            parts: list[str] = []
+            base_desc = str(getattr(idef, "desc", "")).strip() if idef is not None else ""
+            if base_desc:
+                parts.append(base_desc)
+            meta = getattr(sel, "meta", None)
+            if isinstance(meta, dict) and meta:
+                if str(sel.item_id) == "flashlight":
+                    ch = meta.get("charge")
+                    if isinstance(ch, (int, float)):
+                        parts.append(f"Charge: {int(round(100.0 * clamp(float(ch), 0.0, 1.0)))}%")
+            desc_line = " | ".join([p for p in parts if p])
 
         help_line = "左键拖拽移动 | 单击操作 | 右键菜单 | 双击快速使用 | Q 丢弃 | Tab 关闭"
 
