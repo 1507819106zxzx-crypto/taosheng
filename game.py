@@ -21993,14 +21993,9 @@ class HardcoreSurvivalState(State):
         self._maybe_show_home_highrise_dialog()
 
         # Pixel-locked camera follow: track the player's integer world position.
-        # Using floor() keeps diagonal motion stable (no 1px wobble) even when
-        # the underlying float position moves by sub-pixels per frame.
-        try:
-            fx = int(math.floor(float(self.player.pos.x)))
-            fy = int(math.floor(float(self.player.pos.y)))
-        except Exception:
-            fx = int(iround(float(self.player.pos.x)))
-            fy = int(iround(float(self.player.pos.y)))
+        # Direction-aware rounding avoids visible 1-frame stalls on diagonals.
+        fx, fy = self._compute_player_pixel_lock_world_xy()
+        self._player_pixel_lock_world_xy = (int(fx), int(fy))
         self.cam_x = int(fx - int(INTERNAL_W // 2))
         self.cam_y = int(fy - int(INTERNAL_H // 2))
         self.cam_fx = float(self.cam_x)
@@ -27363,6 +27358,35 @@ class HardcoreSurvivalState(State):
         name = model.name if model is not None else str(getattr(self.rv, "model_id", "rv"))
         self._set_hint(f"上车：{name}", seconds=1.0)
 
+    def _compute_player_pixel_lock_world_xy(self) -> tuple[int, int]:
+        # Integer world coords used for pixel-locked camera/render/aim.
+        # NOTE: Pure floor/floor can produce a visible "stutter" on same-sign
+        # diagonals (up-left/down-right) when per-axis motion is < 1px/frame. Mixing rounding on
+        # one axis avoids frames where *both* axes don't advance.
+        try:
+            px = float(self.player.pos.x)
+            py = float(self.player.pos.y)
+        except Exception:
+            px = float(getattr(getattr(self.player, "pos", None), "x", 0.0))
+            py = float(getattr(getattr(self.player, "pos", None), "y", 0.0))
+
+        try:
+            vx = float(self.player.vel.x)
+            vy = float(self.player.vel.y)
+        except Exception:
+            vx = float(getattr(getattr(self.player, "vel", None), "x", 0.0))
+            vy = float(getattr(getattr(self.player, "vel", None), "y", 0.0))
+
+        eps = 1e-6
+        diag = abs(vx) > eps and abs(vy) > eps
+        if diag and (vx * vy) > 0.0:
+            ix = int(math.floor(px))
+            iy = int(iround(py))
+        else:
+            ix = int(math.floor(px))
+            iy = int(math.floor(py))
+        return int(ix), int(iy)
+
     def _compute_aim_dir(self) -> pygame.Vector2:
         m = self.app.screen_to_internal(pygame.mouse.get_pos())
         if m is None:
@@ -27373,8 +27397,14 @@ class HardcoreSurvivalState(State):
         # vector from the *same pixel-locked anchor* used by the camera/render.
         # This prevents tiny aim jitter (and 4-dir sprite flicker) while walking
         # diagonally with the mouse held steady.
-        px = float(math.floor(float(self.player.pos.x)))
-        py = float(math.floor(float(self.player.pos.y)))
+        try:
+            px, py = getattr(self, "_player_pixel_lock_world_xy")
+            px = float(px)
+            py = float(py)
+        except Exception:
+            px_i, py_i = self._compute_player_pixel_lock_world_xy()
+            px = float(px_i)
+            py = float(py_i)
         v = mw - pygame.Vector2(float(px), float(py))
         if v.length_squared() <= 0.001:
             d = pygame.Vector2(self.player.facing)
@@ -34378,11 +34408,11 @@ class HardcoreSurvivalState(State):
         # Draw the player at integer world coords (pixel-lock) so diagonal motion
         # doesn't produce 1px jitter from float -> int rounding differences.
         try:
-            pwx = int(math.floor(float(self.player.pos.x)))
-            pwy = int(math.floor(float(self.player.pos.y)))
+            pwx, pwy = getattr(self, "_player_pixel_lock_world_xy")
+            pwx = int(pwx)
+            pwy = int(pwy)
         except Exception:
-            pwx = int(iround(float(self.player.pos.x)))
-            pwy = int(iround(float(self.player.pos.y)))
+            pwx, pwy = self._compute_player_pixel_lock_world_xy()
         px = int(pwx - int(cam_x))
         py = int(pwy - int(cam_y))
         p = pygame.Vector2(float(px), float(py))
