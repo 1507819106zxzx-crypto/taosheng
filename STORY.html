@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>灾难前三天：小镇剧情与 NPC 设计（策划稿）</title>
+    <style>
+      :root {
+        --bg: #0e0f12;
+        --panel: #171923;
+        --panel2: #11131a;
+        --text: #e9ecf1;
+        --muted: #a9b0bf;
+        --accent: #ffd36a;
+        --bad: #ff6b7a;
+        --good: #69f0ae;
+        --line: #2a2f3a;
+        --code: #0c0d10;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+        line-height: 1.55;
+      }
+      a {
+        color: var(--accent);
+      }
+      .wrap {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 28px 18px 64px;
+      }
+      h1,
+      h2,
+      h3 {
+        line-height: 1.25;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 28px;
+      }
+      h2 {
+        margin: 26px 0 10px;
+        font-size: 20px;
+        color: var(--accent);
+      }
+      h3 {
+        margin: 18px 0 8px;
+        font-size: 16px;
+      }
+      p {
+        margin: 8px 0;
+        color: var(--text);
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .panel {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)) , var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px 14px;
+        margin: 12px 0;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+      @media (min-width: 920px) {
+        .grid-2 {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      code,
+      pre {
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 2px 6px;
+        color: #d9e3ff;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      pre {
+        padding: 12px;
+        overflow: auto;
+      }
+      ul,
+      ol {
+        margin: 8px 0 8px 20px;
+      }
+      li {
+        margin: 4px 0;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 10px 0;
+        font-size: 14px;
+      }
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 8px 10px;
+        vertical-align: top;
+      }
+      th {
+        background: var(--panel2);
+        color: var(--accent);
+        text-align: left;
+        font-weight: 700;
+      }
+      details {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.02);
+        margin: 8px 0;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .tag {
+        display: inline-block;
+        padding: 1px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.02);
+        color: var(--muted);
+        font-size: 12px;
+        margin-left: 8px;
+      }
+      .bad {
+        color: var(--bad);
+      }
+      .good {
+        color: var(--good);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>灾难前三天：小镇剧情与 NPC 设计（策划稿）</h1>
+      <p class="muted">
+        用途：作为“灾难前 3 天”章节的剧情总纲 + NPC 名单 + 对话框/分支事件设计，便于直接落地到任务系统与对话系统。
+      </p>
+
+      <div class="panel">
+        <h3>核心感觉</h3>
+        <ul>
+          <li><b>前 3 天</b>：小镇正常运转，但细节开始“不对劲”（新闻、气味、动物行为、停电、救护车频率）。</li>
+          <li><b>玩家目标</b>：在“看似正常”的日子里提前加固住处、补齐物资、采购工具和武器、建立人脉。</li>
+          <li><b>灾难爆发后</b>：敲门事件、求助与背刺、资源争夺、道德选择、长期生存压力。</li>
+        </ul>
+        <p class="muted">
+          说明：你提到的“萝莉/小女孩”类角色，本文只作为<b>未成年人路人/学生 NPC</b>，对话与剧情保持非恋爱/非性化，聚焦求助与生存。
+        </p>
+      </div>
+
+      <h2>1) 开局：输入姓名 + 身份设定</h2>
+      <div class="panel">
+        <h3>开局输入姓名（必做）</h3>
+        <ul>
+          <li>新游戏第一步弹窗：<code>请输入你的名字</code>（默认随机一个昵称；允许中文/英文/数字；长度 2–10）。</li>
+          <li>名字将被用于：NPC 叫你、短信/聊天记录、门外呼唤、工作打卡、存档名。</li>
+        </ul>
+        <h3>身份背景（建议固定，便于写剧情）</h3>
+        <ul>
+          <li>玩家：小镇居民，住在“湖景小区 3 栋 502”。</li>
+          <li>职业：物流园/超市后场/物业/医院后勤（任选其一作为主线岗位）。</li>
+          <li>隐藏优势：懂一点维修（可加固门窗/做简易武器/修发电机）。</li>
+        </ul>
+      </div>
+
+      <h2>2) 小镇地图（剧情用 POI）</h2>
+      <div class="panel">
+        <div class="grid grid-2">
+          <div>
+            <h3>生活区</h3>
+            <ul>
+              <li>湖景小区（玩家家、保安亭、快递柜、小卖部）</li>
+              <li>商业街（奶茶店、服装店、五金店、药店、网吧）</li>
+              <li>公交站/地铁口（上班通勤、事件高发）</li>
+            </ul>
+          </div>
+          <div>
+            <h3>关键设施</h3>
+            <ul>
+              <li>镇医院（医生/护士 NPC、医疗物资、后期安全区传闻）</li>
+              <li>中学（学生、老师、体育器材；后期可能沦为据点）</li>
+              <li>派出所（警员 NPC、广播、后期武器锁柜线索）</li>
+              <li>物流园/工厂（玩家上班地点；托盘车/铁管/胶带/工具）</li>
+            </ul>
+          </div>
+        </div>
+        <p class="muted">地图要点：前 3 天 NPC 有完整“上下班/吃饭/回家”日程，灾难爆发后日程崩塌，改为“避难/逃亡/求生”。</p>
+      </div>
+
+      <h2>3) 时间线总览（灾难前 3 天）</h2>
+      <div class="panel">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 120px">时间</th>
+              <th>世界状态</th>
+              <th>玩家可做的事</th>
+              <th>埋伏笔（提示灾难）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>D-3</b>（周一）</td>
+              <td>一切正常，新闻里提到“外地流感”“动物袭击”。</td>
+              <td>上班、领工资/加班费；第一次逛五金店/药店；认识关键 NPC。</td>
+              <td>医院急诊爆满、救护车增加；流浪猫狗聚集；停电 5 分钟。</td>
+            </tr>
+            <tr>
+              <td><b>D-2</b>（周二）</td>
+              <td>谣言扩散：有人咬人；官方辟谣；超市开始抢购。</td>
+              <td>采购清单任务；加固房门（门链/门闩/猫眼）；囤水和罐头。</td>
+              <td>同事受伤请假；商业街出现“打架”其实是咬伤；手机短视频刷屏。</td>
+            </tr>
+            <tr>
+              <td><b>D-1</b>（周三）</td>
+              <td>局部混乱：医院封控、学校停课传闻；派出所巡逻增多。</td>
+              <td>最后的“和平窗口”：买最后一批工具/电池/绷带；选择信任/疏远 NPC。</td>
+              <td>远处爆炸声/黑烟；无线电求助；“别开门”涂鸦出现在楼道。</td>
+            </tr>
+            <tr>
+              <td><b>D0</b>（周四清晨）</td>
+              <td class="bad"><b>爆发</b>：全镇警报、通讯不稳、街头出现第一波尸变。</td>
+              <td class="good"><b>活下去</b>：锁门、点灯、筛选敲门者；建立临时基地；探索周边。</td>
+              <td>门外哭喊、广播、枪声；NPC 命运分叉开始。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>4) 机制落地：对话/信任/事件系统</h2>
+      <div class="panel">
+        <h3>NPC 的核心参数（建议）</h3>
+        <ul>
+          <li><code>Trust</code>（信任 0–100）：影响是否说真话、是否背刺、是否愿意交易。</li>
+          <li><code>Need</code>（需求强度）：饥饿/口渴/受伤/恐惧，越高越可能做极端行为。</li>
+          <li><code>Morality</code>（道德/底线）：影响是否会抢劫、是否会伤害他人。</li>
+          <li><code>Bond</code>（羁绊/关系）：同事、邻居、暗恋、救命之恩、债务等标签。</li>
+          <li><code>Flag</code>（剧情标记）：例如<code>PLAYER_HELPED_ONCE</code>、<code>SAW_PEEPHOLE</code>、<code>KNOWS_YOUR_NAME</code>。</li>
+        </ul>
+
+        <h3>对话 UI（你要的“对话框”）</h3>
+        <ul>
+          <li>屏幕下方弹出对话框：左侧头像 + 名字，右侧台词；下方 2–5 个选项按钮。</li>
+          <li>按钮类型：<code>继续</code> / <code>询问</code> / <code>给物资</code> / <code>交易</code> / <code>拒绝</code> / <code>威胁</code> / <code>开门</code> / <code>不开门</code>。</li>
+          <li>避免文字重叠：文本自动换行；选项按钮按内容高度自适应；超长台词做分页。</li>
+        </ul>
+
+        <h3>“门洞洞/猫眼”视野规则（你指定的玩法）</h3>
+        <ul>
+          <li>玩家家门：默认<b>看不到门外</b>（只能听声音：脚步/喘气/敲门强度）。</li>
+          <li>若加装<code>猫眼/门洞</code>：可在对话时看到门外人物立绘 + 距离 + 是否携带武器。</li>
+          <li>若加装<code>门链/门栓</code>：可以“半开门交易”（降低冲门风险）。</li>
+          <li>若加装<code>门口障碍</code>：例如家具顶门、沙包，会让强行闯入需要更多时间/噪声。</li>
+        </ul>
+      </div>
+
+      <h2>5) NPC 名单（第一批：灾难前三天可遇到）</h2>
+      <div class="panel">
+        <p class="muted">说明：名字可后续替换为随机库；此处用“好记的外号”方便你快速对齐角色定位。</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 120px">NPC</th>
+              <th style="width: 140px">身份/地点</th>
+              <th>性格标签</th>
+              <th>前 3 天日程</th>
+              <th>关键剧情钩子</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>老周</b><span class="tag">保安</span></td>
+              <td>湖景小区门岗</td>
+              <td>嘴碎但可靠、爱面子、讲规矩</td>
+              <td>D-3 到 D-1 正常值班；D0 起可能拉人封楼</td>
+              <td>给你“门闩/门链”折扣；灾后会来敲门求水（看你前期关系）</td>
+            </tr>
+            <tr>
+              <td><b>小林</b><span class="tag">同事</span></td>
+              <td>物流园</td>
+              <td>实干派、信息灵通、胆子小</td>
+              <td>D-3 提醒你“别去医院”；D-2 受伤请假</td>
+              <td>给你仓库钥匙线索；灾后可能变成求助者或被感染</td>
+            </tr>
+            <tr>
+              <td><b>阿乔</b><span class="tag">白月光</span></td>
+              <td>商业街咖啡店</td>
+              <td>温柔克制、聪明、对你有旧好感</td>
+              <td>D-3 你可偶遇；D-2 她开始囤货；D-1 她要你帮忙送药</td>
+              <td>“送药任务”决定她后续命运；也决定你灾后是否有可靠同盟</td>
+            </tr>
+            <tr>
+              <td><b>娜娜</b><span class="tag">网红</span></td>
+              <td>商业街/广场</td>
+              <td>外向、爱拍视频、胆大但缺常识</td>
+              <td>D-2 开直播“抢购潮”；D-1 因直播被人围堵</td>
+              <td>她能提供“谣言/新闻”快速情报；灾后可能引来危险敲门事件</td>
+            </tr>
+            <tr>
+              <td><b>叶医生</b><span class="tag">医生</span></td>
+              <td>镇医院</td>
+              <td>专业冷静、规则感强、对你保持距离</td>
+              <td>D-3 忙到崩；D-2 医院封控；D-1 只通过电话联系</td>
+              <td>给你“消毒/止血”配方；灾后可能请求你护送一名伤员</td>
+            </tr>
+            <tr>
+              <td><b>白护士</b><span class="tag">护士</span></td>
+              <td>镇医院</td>
+              <td>嘴硬心软、行动力强</td>
+              <td>D-3 有短对话；D-2 起你很难见到她</td>
+              <td>灾后若你帮助她，她会教你“简易夹板/换药流程”</td>
+            </tr>
+            <tr>
+              <td><b>“绿茶姐”</b><span class="tag">邻居</span></td>
+              <td>同楼层/小区</td>
+              <td>表面热情、目的性强、擅长拿捏</td>
+              <td>D-3 借充电宝；D-2 旁敲侧击你囤了啥；D-1 说要去外地</td>
+              <td class="bad">灾后敲门“喊你名字诱你开门”（需要你已输入姓名 + 她知道你名字）</td>
+            </tr>
+            <tr>
+              <td><b>肌肉男</b><span class="tag">“男朋友”</span></td>
+              <td>绿茶姐同行</td>
+              <td>强势、冲动、武力威胁</td>
+              <td>D-2 在小区出现；D-1 半夜吵架</td>
+              <td class="bad">灾后作为“冲门”执行者；门链/顶门可大幅降低风险</td>
+            </tr>
+            <tr>
+              <td><b>小栀</b><span class="tag">善良妹子</span></td>
+              <td>服装店/便利店</td>
+              <td>善良、社恐、会缝补</td>
+              <td>D-3 正常上班；D-2 被客人欺负；D-1 关店回家</td>
+              <td>给你“衣物修补/简易背包扩容”线索；灾后可能来换药求布条</td>
+            </tr>
+            <tr>
+              <td><b>周老师</b><span class="tag">老师</span></td>
+              <td>中学</td>
+              <td>负责、强硬、对学生保护欲强</td>
+              <td>D-2 准备停课；D-1 组织学生回家</td>
+              <td>灾后学校可能成为据点；你可选择帮忙守门或偷拿体育器材</td>
+            </tr>
+            <tr>
+              <td><b>小雨</b><span class="tag">学生</span></td>
+              <td>中学周边</td>
+              <td>机灵、爱问问题、胆子大</td>
+              <td>D-3 放学路上偶遇；D-2 起家长不让出门</td>
+              <td>灾后作为“迷路的孩子”敲门事件：不涉及恋爱，只做求助/护送/风险判断</td>
+            </tr>
+            <tr>
+              <td><b>老胡</b><span class="tag">五金店老板</span></td>
+              <td>商业街</td>
+              <td>精明、话多、懂材料</td>
+              <td>D-3 正常卖货；D-2 涨价；D-1 关门自保</td>
+              <td>提供加固配方：门闩、猫眼、钉板、简易武器；灾后可交易但更苛刻</td>
+            </tr>
+            <tr>
+              <td><b>小桃</b><span class="tag">同事/暗恋对象</span></td>
+              <td>玩家工作地点</td>
+              <td>嘴上嫌弃你、实际在意</td>
+              <td>D-3 和你一起加班；D-2 你可陪她下班；D-1 她失联</td>
+              <td>灾后可能成为“救援支线”：找到她 = 获得强力同伴/或者只找到遗留物</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>6) 对话树示例（可直接照抄进对话系统）</h2>
+      <p class="muted">
+        约定：玩家名字变量为 <code>{PLAYER_NAME}</code>。每段对话包含：触发条件、选项、结果/标记。
+      </p>
+
+      <details>
+        <summary>对话 01：保安老周（D-3）“门链折扣” <span class="tag">前置加固线</span></summary>
+        <pre>
+触发：D-3 18:00~22:00，小区门岗，玩家与老周互动
+
+老周：哎 {PLAYER_NAME}，你这两天怎么老往外跑？外面乱，少折腾。
+
+选项：
+1) “老周，最近是不是不太对劲？”（询问）
+   老周：你也感觉到了？医院那边天天救护车。反正你记住——门关严点。
+   结果：获得线索【加固门】；Trust(老周)+5
+
+2) “我想装个门链/猫眼，哪儿买靠谱？”（求建议）
+   老周：五金店老胡那儿。你报我名……算你便宜点。
+   结果：解锁商店折扣；Flag(LOCKDOWN_PREP)+1；Trust(老周)+8
+
+3) “没事，我就遛个弯。”（敷衍）
+   老周：行行行，别出事我就谢天谢地。
+   结果：无
+        </pre>
+      </details>
+
+      <details>
+        <summary>对话 02：网红娜娜（D-2）“直播引发的麻烦” <span class="tag">信息/风险</span></summary>
+        <pre>
+触发：D-2 19:00 商业街广场
+
+娜娜：哇！你看这个！今天超市抢空了，我直播都爆了！
+
+选项：
+1) “别直播了，会惹麻烦。”（劝阻）
+   娜娜：我就拍一会儿……哎等等，那边怎么有人盯着我？
+   结果：减少后续事件难度；Trust(娜娜)+10
+
+2) “你知道医院发生什么吗？”（打听）
+   娜娜：我听说……有人咬人！但官方说是谣言。你信吗？
+   结果：获得谣言情报；Flag(RUMOR_BITE)+1
+
+3) “随你。”（冷漠）
+   娜娜：切，没劲。
+   结果：Trust(娜娜)-5；后续“被围堵”事件概率上升
+        </pre>
+      </details>
+
+      <details>
+        <summary>对话 03：绿茶姐 + 肌肉男（D0）“敲门诱骗” <span class="tag bad">高危</span></summary>
+        <pre>
+触发：D0 爆发后，玩家在家；门外出现两人；若玩家前期在楼道/借东西透露了姓名，则他们能喊出 {PLAYER_NAME}
+可视规则：无猫眼 = 只能听声音；有猫眼 = 看到两人站位 + 手上是否拿武器
+
+绿茶姐（门外，声音甜）：{PLAYER_NAME}～开门呀！我好害怕！外面有人在追我！
+肌肉男（压低声音，急促）：快点！别磨叽！
+
+选项：
+1) “不开门，你先说你是谁。”（审问）
+   绿茶姐：是我呀！隔壁的……你不记得了？
+   -> 若玩家没有见过她/Trust 低：她会编更多话，语气逐渐急躁
+   结果：如果你继续拖延，可能引来丧尸（噪声）；但你更安全
+
+2) “半开门交易（门链）。”（需要门链）
+   你：把手举起来，离门远点。你要什么？
+   绿茶姐：水……求你了……
+   -> 若你给 1 瓶水：Trust(绿茶姐)+10，但她会记住你有物资（后续风险）
+   -> 若你拒绝：她翻脸（Threat+）
+
+3) “开门。”（高危）
+   -> 若无门链/无顶门：他们冲入，触发战斗/死亡分支（你描述的“占领你家”）
+   -> 若有顶门/障碍：冲门失败，转为砸门，吸引更多危险
+        </pre>
+      </details>
+
+      <h2>7) 灾难后：敲门事件库（可随机/可剧情）</h2>
+      <div class="panel">
+        <h3>敲门事件类型</h3>
+        <ul>
+          <li><b>求助型</b>：邻居受伤、孩子迷路、同事找避难。</li>
+          <li><b>交易型</b>：拿药换水、拿电池换食物。</li>
+          <li><b>欺骗型</b>：假装求助，实则探你家底、诱你开门。</li>
+          <li><b>强闯型</b>：团伙来占点；你门的加固等级决定生死。</li>
+        </ul>
+        <h3>门外信息呈现（没猫眼 vs 有猫眼）</h3>
+        <ul>
+          <li>没猫眼：仅“声音标签”（喘、哭、怒、抖）+ 敲门力度条 + 说话内容。</li>
+          <li>有猫眼：加“立绘/人数/是否持械/是否被追赶（后方影子）”。</li>
+        </ul>
+      </div>
+
+      <h2>8) 生理需求：排便/尿尿（真实但不恶心的做法）</h2>
+      <div class="panel">
+        <h3>数值与提示</h3>
+        <ul>
+          <li><code>Bladder</code>（尿意）与 <code>Bowel</code>（便意）随时间上升；饮水/进食会加速。</li>
+          <li>阈值提示：轻度提示（UI 图标闪）→ 中度（移动略慢/分心）→ 重度（必须处理）。</li>
+        </ul>
+        <h3>动作与物体</h3>
+        <ul>
+          <li>可交互物：马桶/蹲坑/临时桶（制作：桶 + 垃圾袋）。</li>
+          <li>使用动作：短时间读条；中断会造成“尴尬惩罚”（心态下降/脏污）。</li>
+          <li>生成物：<code>waste</code>（污物）作为地面物体，带“气味”属性。</li>
+          <li>卫生系统：污物不处理会引来虫/增加感染风险；可用消毒水/肥皂清理。</li>
+        </ul>
+      </div>
+
+      <h2>9) 你要的“有趣事情”（灾难前）</h2>
+      <div class="panel">
+        <ul>
+          <li>D-3：公交上有人咳得离谱，网红偷拍被乘客追骂（你可劝架/装看不见）。</li>
+          <li>D-2：超市抢购潮，老胡五金店涨价引发争执（你可趁乱买到便宜钉子）。</li>
+          <li>D-1：楼道出现“别开门”涂鸦；同事群里有人发“听见楼下咬人”的语音。</li>
+        </ul>
+      </div>
+
+      <h2>10) 任务清单（前 3 天主线 + 支线）</h2>
+      <div class="panel">
+        <h3>主线（推荐强引导）</h3>
+        <ol>
+          <li>D-3：上班 → 领工资/加班费 → 解锁商店（五金/药店/超市）</li>
+          <li>D-2：采购清单（食物/水/电池/绷带）→ 加固门（门链/门闩/猫眼）</li>
+          <li>D-1：选择帮助谁（送药/护送回家/借物资）→ 触发“关系标记”</li>
+          <li>D0：第一波敲门事件 → 你是否存活取决于前期准备与判断</li>
+        </ol>
+        <h3>支线（可选）</h3>
+        <ul>
+          <li>“送药给阿乔”：换取可靠同盟/医疗技能</li>
+          <li>“帮老周修门禁”：换取小区钥匙/应急广播信息</li>
+          <li>“阻止网红直播”：降低灾后被盯上的概率</li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <p class="muted">
+          交付建议：先把“姓名输入 + 对话框 UI + 敲门事件框架”做成可跑的 MVP，
+          然后再逐步把本文的 NPC/对话树塞进去，剧情就会自然长出来。
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
+
