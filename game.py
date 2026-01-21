@@ -21992,21 +21992,32 @@ class HardcoreSurvivalState(State):
         self._update_world_door_open_anim(float(dt))
         self._maybe_show_home_highrise_dialog()
 
-        # Pixel-locked camera follow: track the player's integer world position.
-        # This removes the visible camera "shake" that can happen when diagonal
-        # movement produces fractional positions that get rounded differently per axis.
+        focus = pygame.Vector2(self.player.pos)
+        target_cam_x = float(focus.x - INTERNAL_W / 2)
+        target_cam_y = float(focus.y - INTERNAL_H / 2)
+
+        # Camera: reduce diagonal jitter by smoothing only when moving diagonally.
+        cur_fx = float(getattr(self, "cam_fx", target_cam_x))
+        cur_fy = float(getattr(self, "cam_fy", target_cam_y))
         try:
-            fx = int(math.floor(float(self.player.pos.x)))
-            fy = int(math.floor(float(self.player.pos.y)))
+            vx = float(getattr(self.player.vel, "x", 0.0))
+            vy = float(getattr(self.player.vel, "y", 0.0))
         except Exception:
-            fx = int(iround(float(self.player.pos.x)))
-            fy = int(iround(float(self.player.pos.y)))
-        target_cam_x = int(fx - int(INTERNAL_W // 2))
-        target_cam_y = int(fy - int(INTERNAL_H // 2))
-        self.cam_x = int(target_cam_x)
-        self.cam_y = int(target_cam_y)
-        self.cam_fx = float(self.cam_x)
-        self.cam_fy = float(self.cam_y)
+            vx = 0.0
+            vy = 0.0
+        moving_diag = abs(float(vx)) > 1e-6 and abs(float(vy)) > 1e-6
+        if moving_diag:
+            follow = 14.0 if bool(getattr(self, "player_sprinting", False)) else 18.0
+            a = float(clamp(float(dt) * float(follow), 0.0, 1.0))
+            self.cam_fx = float(cur_fx + (float(target_cam_x) - float(cur_fx)) * float(a))
+            self.cam_fy = float(cur_fy + (float(target_cam_y) - float(cur_fy)) * float(a))
+        else:
+            self.cam_fx = float(target_cam_x)
+            self.cam_fy = float(target_cam_y)
+        # Pixel-perfect camera: snap to int pixels. Use iround() (instead of
+        # floor) to avoid diagonal "flicker" from asymmetric rounding.
+        self.cam_x = int(iround(float(self.cam_fx)))
+        self.cam_y = int(iround(float(self.cam_fy)))
 
         self._stream_world_chunks()
 
@@ -26928,12 +26939,17 @@ class HardcoreSurvivalState(State):
         if float(getattr(self, "punch_cooldown_left", 0.0)) > 0.0:
             return
 
-        # Melee swing direction follows mouse aim (same as gun direction).
-        aim = pygame.Vector2(getattr(self, "aim_dir", pygame.Vector2(0, 0)))
-        if aim.length_squared() <= 0.001:
-            aim = pygame.Vector2(getattr(self.player, "facing", pygame.Vector2(1, 0)))
+        # Melee direction follows player movement/facing (snapped to 4-dir) so
+        # pressing J always attacks the way you're moving (no "右打变左打").
+        aim = pygame.Vector2(getattr(self.player, "facing", pygame.Vector2(1, 0)))
         if aim.length_squared() <= 0.001:
             aim = pygame.Vector2(1, 0)
+        ax = abs(float(aim.x))
+        ay = abs(float(aim.y))
+        if ax >= ay:
+            aim = pygame.Vector2(1 if float(aim.x) >= 0.0 else -1, 0)
+        else:
+            aim = pygame.Vector2(0, 1 if float(aim.y) >= 0.0 else -1)
         self.punch_dir = aim.normalize()
         self.punch_hand = 1 - int(getattr(self, "punch_hand", 0))
         mdef = self._MELEE_DEFS.get(str(getattr(self, "melee_weapon_id", "")) or "") or self._MELEE_DEFS.get("fist")
@@ -34374,11 +34390,11 @@ class HardcoreSurvivalState(State):
         # Draw the player at integer world coords (pixel-lock) so diagonal motion
         # doesn't produce 1px jitter from float -> int rounding differences.
         try:
-            pwx = int(math.floor(float(self.player.pos.x)))
-            pwy = int(math.floor(float(self.player.pos.y)))
-        except Exception:
             pwx = int(iround(float(self.player.pos.x)))
             pwy = int(iround(float(self.player.pos.y)))
+        except Exception:
+            pwx = int(self.player.pos.x)
+            pwy = int(self.player.pos.y)
         px = int(pwx - int(cam_x))
         py = int(pwy - int(cam_y))
         p = pygame.Vector2(float(px), float(py))
@@ -34627,24 +34643,13 @@ class HardcoreSurvivalState(State):
                 fist = base_hand + pdir * float(reach) 
                 fx = int(round(float(fist.x))) 
                 fy = int(round(float(fist.y))) 
-                # Arm connection: bridge pixels (cute, less "stick-arm" than lines). 
-                step_n = int(clamp(int(round(float(reach))), 0, 6)) 
-                for s in range(1, int(step_n)): 
-                    bx = int(round(float(base_hand.x) + float(pdir.x) * float(s))) 
-                    by = int(round(float(base_hand.y) + float(pdir.y) * float(s))) 
-                    if 0 <= bx < INTERNAL_W and 0 <= by < INTERNAL_H: 
-                        surface.set_at((bx, by), skin) 
+                # Arm connection: keep it straight (old-school punch look).
+                bx0 = int(round(float(base_hand.x)))
+                by0 = int(round(float(base_hand.y)))
+                pygame.draw.line(surface, skin, (bx0, by0), (int(fx), int(fy)), 1)
                 fr = pygame.Rect(int(fx - 1), int(fy - 1), 3, 3) 
                 surface.fill(skin, fr) 
                 pygame.draw.rect(surface, outline, fr, 1) 
-                # Tiny motion trail. 
-                tx2 = int(clamp(int(fx - int(round(float(pdir.x)))), 0, INTERNAL_W - 1)) 
-                ty2 = int(clamp(int(fy - int(round(float(pdir.y)))), 0, INTERNAL_H - 1)) 
-                surface.set_at((tx2, ty2), outline) 
-                if ext > 0.6: 
-                    hlx = int(clamp(int(fx + int(round(float(pdir.x)))), 0, INTERNAL_W - 1)) 
-                    hly = int(clamp(int(fy + int(round(float(pdir.y)))), 0, INTERNAL_H - 1)) 
-                    surface.set_at((hlx, hly), (255, 220, 160)) 
             else: 
                 # Weapon swing: rotate the equipped melee sprite (甩动棍子/钢管) instead of drawing a punch fist. 
                 # Draw on the scaled surface (draw_scaled_overlay) for stable pixel rotation.
@@ -34899,7 +34904,16 @@ class HardcoreSurvivalState(State):
             rot_deg = float(start + (end - start) * u)
 
             grip = pygame.Vector2(base_hand) + pdir * float(2.0 + ext * 4.0)
-            blit_rotated_weapon(sprite=spr, grip_internal=grip, deg=float(rot_deg), step_deg=3.0, baseline_deg=31.0, outline_diagonal=True, flip_x=bool(float(pdir.x) < 0.0))
+            no_outline = str(swing_id) == "melee_machete"
+            blit_rotated_weapon(
+                sprite=spr,
+                grip_internal=grip,
+                deg=float(rot_deg),
+                step_deg=3.0,
+                baseline_deg=31.0,
+                outline_diagonal=not bool(no_outline),
+                flip_x=bool(float(pdir.x) < 0.0),
+            )
             return
 
         # Idle melee held (rotate with aim, like guns).
@@ -34919,7 +34933,16 @@ class HardcoreSurvivalState(State):
 
         hand = pygame.Vector2(base_hand) + aim * 3.0
         deg = -math.degrees(math.atan2(float(aim.y), float(aim.x)))
-        blit_rotated_weapon(sprite=spr, grip_internal=hand, deg=float(deg), step_deg=3.0, baseline_deg=31.0, outline_diagonal=True, flip_x=bool(float(aim.x) < 0.0))
+        no_outline = str(mid) == "melee_machete"
+        blit_rotated_weapon(
+            sprite=spr,
+            grip_internal=hand,
+            deg=float(deg),
+            step_deg=3.0,
+            baseline_deg=31.0,
+            outline_diagonal=not bool(no_outline),
+            flip_x=bool(float(aim.x) < 0.0),
+        )
 
     def _draw_sun_moon_widget(self, surface: pygame.Surface, *, tday: float) -> None:
         rect = pygame.Rect(0, 0, 116, 22)
