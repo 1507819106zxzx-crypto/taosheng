@@ -143,8 +143,36 @@ _ROTATE_WEAPON_CACHE: dict[tuple[int, int, int, int], pygame.Surface] = {}
 _ROTATE_WEAPON_TEX_CACHE: dict[tuple[int, int, int], pygame.Surface] = {}
 _FLIPX_CACHE: dict[int, pygame.Surface] = {}  
 _PALETTE_CACHE: dict[int, tuple[tuple[int, int, int], ...]] = {}  
+_SCALE_CACHE: dict[tuple[int, int, int], pygame.Surface] = {}
+_SMOOTHSCALE_CACHE: dict[tuple[int, int, int], pygame.Surface] = {}
 _FURNITURE_SPR_CACHE: dict[tuple[int, tuple[tuple[int, int], ...], int], pygame.Surface] = {} 
 _SPRITE_GRIP_CACHE: dict[int, tuple[int, int]] = {}
+
+
+def _scale_cached(sprite: pygame.Surface, size: tuple[int, int]) -> pygame.Surface:
+    w, h = int(size[0]), int(size[1])
+    if w <= 0 or h <= 0:
+        return sprite
+    key = (id(sprite), w, h)
+    cached = _SCALE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    out = pygame.transform.scale(sprite, (w, h))
+    _SCALE_CACHE[key] = out
+    return out
+
+
+def _smoothscale_cached(sprite: pygame.Surface, size: tuple[int, int]) -> pygame.Surface:
+    w, h = int(size[0]), int(size[1])
+    if w <= 0 or h <= 0:
+        return sprite
+    key = (id(sprite), w, h)
+    cached = _SMOOTHSCALE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    out = pygame.transform.smoothscale(sprite, (w, h))
+    _SMOOTHSCALE_CACHE[key] = out
+    return out
 
 
 def _alpha_bleed(sprite: pygame.Surface, *, passes: int = 2) -> pygame.Surface:
@@ -328,7 +356,7 @@ def rotate_weapon_texture(
     if int(qdeg) % 90 == 0:
         out = sprite if int(qdeg) == 0 else pygame.transform.rotate(sprite, int(qdeg))
     else:
-        pal = _sprite_palette_rgb(sprite, max_colors=48)
+        pal = _sprite_palette_rgb(sprite, max_colors=96)
         src = _alpha_bleed(sprite, passes=6)
         pad = max(10, int(round(max(src.get_width(), src.get_height()) * 0.35)))
         padded = pygame.Surface((src.get_width() + pad * 2, src.get_height() + pad * 2), pygame.SRCALPHA)
@@ -339,14 +367,16 @@ def rotate_weapon_texture(
             _quantize_rgb_to_palette(out, pal)
             _remove_isolated_pixels(out)
         if outline_diagonal:
-            ensure_black_outline_inplace(out, outline_rgb=(10, 10, 12), alpha_threshold=1, diagonal=True)
+            ensure_black_outline_inplace(out, outline_rgb=(16, 16, 16), alpha_threshold=1, diagonal=True)
 
     _ROTATE_WEAPON_TEX_CACHE[key] = out
     return out
 
 
 def _sprite_grip_point(sprite: pygame.Surface) -> tuple[int, int]:
-    # Heuristic: grip near the rear/bottom of the opaque bbox (works for gun/bat/pipe icons).
+    # Heuristic: find a stable "handle" point near the bottom of the opaque
+    # silhouette (works well for our small gun/bat/pipe icons). This is used as
+    # the pivot when rotating weapons, so stability matters more than precision.
     cached = _SPRITE_GRIP_CACHE.get(id(sprite))
     if cached is not None:
         return cached
@@ -354,7 +384,7 @@ def _sprite_grip_point(sprite: pygame.Surface) -> tuple[int, int]:
     if w <= 0 or h <= 0:
         _SPRITE_GRIP_CACHE[id(sprite)] = (0, 0)
         return (0, 0)
-    minx = int(w)
+
     maxy = -1
     for yy in range(int(h)):
         for xx in range(int(w)):
@@ -363,16 +393,34 @@ def _sprite_grip_point(sprite: pygame.Surface) -> tuple[int, int]:
                     continue
             except Exception:
                 continue
-            if int(xx) < int(minx):
-                minx = int(xx)
             if int(yy) > int(maxy):
                 maxy = int(yy)
+
     if maxy < 0:
         pt = (int(w // 2), int(h // 2))
-    else:
-        gx = int(clamp(int(minx) + 2, 0, int(w) - 1))
-        gy = int(clamp(int(maxy) - 2, 0, int(h) - 1))
-        pt = (int(gx), int(gy))
+        _SPRITE_GRIP_CACHE[id(sprite)] = pt
+        return pt
+
+    band_y0 = max(0, int(maxy) - 1)
+    xs: list[int] = []
+    for yy in range(int(band_y0), int(h)):
+        for xx in range(int(w)):
+            try:
+                if int(sprite.get_at((int(xx), int(yy))).a) <= 0:
+                    continue
+            except Exception:
+                continue
+            xs.append(int(xx))
+
+    if not xs:
+        pt = (int(w // 2), int(h // 2))
+        _SPRITE_GRIP_CACHE[id(sprite)] = pt
+        return pt
+
+    xs.sort()
+    gx = int(xs[len(xs) // 2])
+    gy = int(clamp(int(maxy) - 1, 0, int(h) - 1))
+    pt = (int(gx), int(gy))
     _SPRITE_GRIP_CACHE[id(sprite)] = pt
     return pt
 
@@ -2189,6 +2237,15 @@ class App:
         if self._grid_overlay is not None:
             self._scaled.blit(self._grid_overlay, (0, 0))
             self._draw_grid_markers(self._scaled)
+        # Optional post-scale overlay hook (xiaotou-style): lets gameplay draw
+        # pixel-perfect rotated weapons on the *scaled* surface so diagonals
+        # don't look like magnified jaggies.
+        try:
+            draw_scaled_overlay = getattr(self.state, "draw_scaled_overlay", None)
+            if callable(draw_scaled_overlay):
+                draw_scaled_overlay(self._scaled)
+        except Exception:
+            pass
         self.screen.fill((0, 0, 0))
         self.screen.blit(self._scaled, getattr(self, "view_offset", (0, 0)))
 
@@ -9565,18 +9622,21 @@ class HardcoreSurvivalState(State):
             except Exception:
                 pass
 
-            def has_walkable_interior(x0: int, y0: int, w: int, h: int) -> bool: 
-                # Decorative blocks (e.g., podium ring) are all-wall; skip them. 
-                t_floor = int(self.state.T_FLOOR) 
-                t_elev = int(self.state.T_ELEVATOR) 
-                t_up = int(self.state.T_STAIRS_UP) 
-                t_dn = int(self.state.T_STAIRS_DOWN) 
+            def has_walkable_interior(x0: int, y0: int, w: int, h: int) -> bool:
+                # Decorative blocks (e.g., podium ring) are all-wall; skip them.
+                # Treat any non-solid interior tile as "walkable interior" so
+                # we don't miss buildings that use alternate floor materials.
                 for yy in range(int(y0) + 1, int(y0 + h) - 1):
                     for xx in range(int(x0) + 1, int(x0 + w) - 1):
                         t = int(tiles[idx(int(xx), int(yy))])
-                        if t in (t_floor, t_elev, t_up, t_dn):
+                        if t == int(self.state.T_WALL):
+                            continue
+                        tdef = self.state._TILES.get(int(t))
+                        if tdef is None:
+                            continue
+                        if not bool(getattr(tdef, "solid", False)):
                             return True
-                return False 
+                return False
 
             def clear_if_solid(x: int, y: int) -> None: 
                 if not (0 <= int(x) < chunk_size and 0 <= int(y) < chunk_size): 
@@ -17224,11 +17284,14 @@ class HardcoreSurvivalState(State):
     def _draw_sch_interior_scene(self, surface: pygame.Surface) -> None:
         surface.fill((10, 10, 14))
         tile = int(self._SCH_INT_TILE_SIZE)
-        map_w = int(self._SCH_INT_W) * tile
-        map_h = int(self._SCH_INT_H) * tile
-        map_x = (INTERNAL_W - map_w) // 2
-        map_y = 38
-        panel = pygame.Rect(map_x - 10, map_y - 10, map_w + 20, map_h + 20)
+        full_map_w = int(self._SCH_INT_W) * tile
+        full_map_h = int(self._SCH_INT_H) * tile
+        map_y0 = 38
+        map_w = int(min(int(full_map_w), max(1, int(INTERNAL_W) - 20)))
+        map_h = int(min(int(full_map_h), max(1, int(INTERNAL_H) - int(map_y0) - 10)))
+        map_x0 = (INTERNAL_W - map_w) // 2
+        map_y0 = int(map_y0)
+        panel = pygame.Rect(map_x0 - 10, map_y0 - 10, map_w + 20, map_h + 20)
         pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=12)
         pygame.draw.rect(surface, (70, 70, 86), panel, 2, border_radius=12)
 
@@ -17243,8 +17306,21 @@ class HardcoreSurvivalState(State):
             anchor="center",
         )
 
-        map_rect = pygame.Rect(map_x, map_y, map_w, map_h)
-        surface.blit(self._interior_floor_surface(map_w, map_h, kind="school"), map_rect.topleft)
+        map_rect = pygame.Rect(map_x0, map_y0, map_w, map_h)
+
+        # Camera within the interior so the school can be larger than the viewport.
+        focus = pygame.Vector2(self.sch_int_pos)
+        if int(full_map_w) <= int(map_w):
+            cam_x = 0
+        else:
+            cam_x = int(clamp(float(focus.x) - float(map_w) / 2.0, 0.0, float(full_map_w - map_w)))
+        if int(full_map_h) <= int(map_h):
+            cam_y = 0
+        else:
+            cam_y = int(clamp(float(focus.y) - float(map_h) / 2.0, 0.0, float(full_map_h - map_h)))
+
+        map_x = int(map_x0) - int(cam_x)
+        map_y = int(map_y0) - int(cam_y)
 
         wall = (26, 26, 32)
         wall_hi = (54, 54, 68)
@@ -17260,79 +17336,89 @@ class HardcoreSurvivalState(State):
         door = (96, 70, 46)
         door_hi = (132, 100, 68)
 
-        for y in range(int(self._SCH_INT_H)):
-            for x in range(int(self._SCH_INT_W)):
-                ch = self._sch_int_char_at(x, y)
-                r = pygame.Rect(map_x + x * tile, map_y + y * tile, tile, tile)
-                if ch == "W":
-                    pygame.draw.rect(surface, wall, r)
-                    pygame.draw.rect(surface, edge, r, 1)
-                    pygame.draw.line(surface, wall_hi, (r.left + 1, r.top + 1), (r.right - 2, r.top + 1), 1)
-                elif ch == "V":
-                    view = self._window_view_surface(tile - 6, tile - 6)
-                    surface.blit(view, (r.x + 3, r.y + 3))
-                    pygame.draw.rect(surface, (20, 20, 26), pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), 1)
-                    pygame.draw.rect(surface, (70, 70, 86), pygame.Rect(r.x + 1, r.y + 1, tile - 2, tile - 2), 1)
-                elif ch == "L":
-                    pygame.draw.rect(surface, locker, pygame.Rect(r.x + 3, r.y + 2, tile - 6, tile - 4), border_radius=2)
-                    pygame.draw.rect(surface, edge, pygame.Rect(r.x + 3, r.y + 2, tile - 6, tile - 4), 1, border_radius=2)
-                    pygame.draw.rect(surface, locker_hi, pygame.Rect(r.x + 4, r.y + 4, tile - 8, 3))
-                    pygame.draw.line(surface, edge, (r.x + tile // 2, r.y + 3), (r.x + tile // 2, r.y + tile - 3), 1)
-                elif ch == "T":
-                    pygame.draw.rect(surface, desk, pygame.Rect(r.x + 2, r.y + 5, tile - 4, tile - 8), border_radius=2)
-                    pygame.draw.rect(surface, edge, pygame.Rect(r.x + 2, r.y + 5, tile - 4, tile - 8), 1, border_radius=2)
-                    pygame.draw.rect(surface, desk_hi, pygame.Rect(r.x + 3, r.y + 6, tile - 6, 3))
-                elif ch == "E":
-                    pygame.draw.rect(surface, elev, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), border_radius=2)
-                    pygame.draw.rect(surface, edge, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), 1, border_radius=2)
-                    pygame.draw.rect(surface, elev_hi, pygame.Rect(r.x + 3, r.y + 4, tile - 6, 3))
-                    pygame.draw.line(surface, edge, (r.x + tile // 2, r.y + 4), (r.x + tile // 2, r.y + tile - 4), 1)
-                elif ch in ("^", "v"):
-                    pygame.draw.rect(surface, stairs, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), border_radius=2)
-                    pygame.draw.rect(surface, edge, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), 1, border_radius=2)
-                    pygame.draw.rect(surface, stairs_hi, pygame.Rect(r.x + 3, r.y + 4, tile - 6, 3))
-                    cx = r.centerx
-                    cy = r.centery + (1 if ch == "v" else -1)
-                    if ch == "^":
-                        pygame.draw.polygon(surface, (230, 230, 240), [(cx, cy - 4), (cx - 4, cy + 3), (cx + 4, cy + 3)])
-                    else:
-                        pygame.draw.polygon(surface, (230, 230, 240), [(cx, cy + 4), (cx - 4, cy - 3), (cx + 4, cy - 3)])
-                elif ch == "D":
-                    pygame.draw.rect(surface, door, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), border_radius=2)
-                    pygame.draw.rect(surface, edge, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), 1, border_radius=2)
-                    pygame.draw.rect(surface, door_hi, pygame.Rect(r.x + 3, r.y + 4, tile - 6, 3))
-                    pygame.draw.circle(surface, (30, 30, 34), (r.right - 6, r.centery), 1)
+        prev_clip = surface.get_clip()
+        surface.set_clip(map_rect)
+        try:
+            surface.blit(
+                self._interior_floor_surface(int(full_map_w), int(full_map_h), kind="school"),
+                (int(map_x), int(map_y)),
+            )
 
-        p = pygame.Vector2(self.sch_int_pos)
-        speed2 = float(self.sch_int_vel.length_squared())
-        face = pygame.Vector2(self.sch_int_facing)
-        if face.length_squared() <= 0.001:
-            face = pygame.Vector2(0, 1)
-        if abs(face.y) >= abs(face.x):
-            d = "down" if face.y >= 0 else "up"
-        else:
-            d = "right" if face.x >= 0 else "left"
+            for y in range(int(self._SCH_INT_H)):
+                for x in range(int(self._SCH_INT_W)):
+                    ch = self._sch_int_char_at(x, y)
+                    r = pygame.Rect(map_x + x * tile, map_y + y * tile, tile, tile)
+                    if ch == "W":
+                        pygame.draw.rect(surface, wall, r)
+                        pygame.draw.rect(surface, edge, r, 1)
+                        pygame.draw.line(surface, wall_hi, (r.left + 1, r.top + 1), (r.right - 2, r.top + 1), 1)
+                    elif ch == "V":
+                        view = self._window_view_surface(tile - 6, tile - 6)
+                        surface.blit(view, (r.x + 3, r.y + 3))
+                        pygame.draw.rect(surface, (20, 20, 26), pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), 1)
+                        pygame.draw.rect(surface, (70, 70, 86), pygame.Rect(r.x + 1, r.y + 1, tile - 2, tile - 2), 1)
+                    elif ch == "L":
+                        pygame.draw.rect(surface, locker, pygame.Rect(r.x + 3, r.y + 2, tile - 6, tile - 4), border_radius=2)
+                        pygame.draw.rect(surface, edge, pygame.Rect(r.x + 3, r.y + 2, tile - 6, tile - 4), 1, border_radius=2)
+                        pygame.draw.rect(surface, locker_hi, pygame.Rect(r.x + 4, r.y + 4, tile - 8, 3))
+                        pygame.draw.line(surface, edge, (r.x + tile // 2, r.y + 3), (r.x + tile // 2, r.y + tile - 3), 1)
+                    elif ch == "T":
+                        pygame.draw.rect(surface, desk, pygame.Rect(r.x + 2, r.y + 5, tile - 4, tile - 8), border_radius=2)
+                        pygame.draw.rect(surface, edge, pygame.Rect(r.x + 2, r.y + 5, tile - 4, tile - 8), 1, border_radius=2)
+                        pygame.draw.rect(surface, desk_hi, pygame.Rect(r.x + 3, r.y + 6, tile - 6, 3))
+                    elif ch == "E":
+                        pygame.draw.rect(surface, elev, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), border_radius=2)
+                        pygame.draw.rect(surface, edge, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), 1, border_radius=2)
+                        pygame.draw.rect(surface, elev_hi, pygame.Rect(r.x + 3, r.y + 4, tile - 6, 3))
+                        pygame.draw.line(surface, edge, (r.x + tile // 2, r.y + 4), (r.x + tile // 2, r.y + tile - 4), 1)
+                    elif ch in ("^", "v"):
+                        pygame.draw.rect(surface, stairs, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), border_radius=2)
+                        pygame.draw.rect(surface, edge, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), 1, border_radius=2)
+                        pygame.draw.rect(surface, stairs_hi, pygame.Rect(r.x + 3, r.y + 4, tile - 6, 3))
+                        cx = r.centerx
+                        cy = r.centery + (1 if ch == "v" else -1)
+                        if ch == "^":
+                            pygame.draw.polygon(surface, (230, 230, 240), [(cx, cy - 4), (cx - 4, cy + 3), (cx + 4, cy + 3)])
+                        else:
+                            pygame.draw.polygon(surface, (230, 230, 240), [(cx, cy + 4), (cx - 4, cy - 3), (cx + 4, cy - 3)])
+                    elif ch == "D":
+                        pygame.draw.rect(surface, door, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), border_radius=2)
+                        pygame.draw.rect(surface, edge, pygame.Rect(r.x + 2, r.y + 2, tile - 4, tile - 4), 1, border_radius=2)
+                        pygame.draw.rect(surface, door_hi, pygame.Rect(r.x + 3, r.y + 4, tile - 6, 3))
+                        pygame.draw.circle(surface, (30, 30, 34), (r.right - 6, r.centery), 1)
 
-        pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
-        frames = pf_walk.get(d, pf_walk["down"])
-        if speed2 <= 0.2 or len(frames) <= 1:
-            base = frames[0]
-        else:
-            walk = frames[1:]
-            phase = (float(self.sch_int_walk_phase) % math.tau) / math.tau
-            idx = int(phase * len(walk)) % len(walk)
-            base = walk[idx]
+            p = pygame.Vector2(self.sch_int_pos)
+            speed2 = float(self.sch_int_vel.length_squared())
+            face = pygame.Vector2(self.sch_int_facing)
+            if face.length_squared() <= 0.001:
+                face = pygame.Vector2(0, 1)
+            if abs(face.y) >= abs(face.x):
+                d = "down" if face.y >= 0 else "up"
+            else:
+                d = "right" if face.x >= 0 else "left"
 
-        scale = int(max(1, int(self._SCH_INT_SPRITE_SCALE)))
-        spr = pygame.transform.scale(base, (int(base.get_width()) * scale, int(base.get_height()) * scale))
-        sx = int(round(map_x + p.x))
-        sy = int(round(map_y + p.y))
-        shadow = pygame.Rect(0, 0, 14, 6)
-        shadow.center = (sx, sy + 8)
-        pygame.draw.ellipse(surface, (0, 0, 0), shadow)
-        rect = spr.get_rect()
-        rect.midbottom = (sx, sy + 12)
-        surface.blit(spr, rect)
+            pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
+            frames = pf_walk.get(d, pf_walk["down"])
+            if speed2 <= 0.2 or len(frames) <= 1:
+                base = frames[0]
+            else:
+                walk = frames[1:]
+                phase = (float(self.sch_int_walk_phase) % math.tau) / math.tau
+                idx = int(phase * len(walk)) % len(walk)
+                base = walk[idx]
+
+            scale = int(max(1, int(self._SCH_INT_SPRITE_SCALE)))
+            spr = pygame.transform.scale(base, (int(base.get_width()) * scale, int(base.get_height()) * scale))
+            sx = int(round(map_x + p.x))
+            sy = int(round(map_y + p.y))
+            shadow = pygame.Rect(0, 0, 14, 6)
+            shadow.center = (sx, sy + 8)
+            pygame.draw.ellipse(surface, (0, 0, 0), shadow)
+            rect = spr.get_rect()
+            rect.midbottom = (sx, sy + 12)
+            surface.blit(spr, rect)
+        finally:
+            surface.set_clip(prev_clip)
 
     def _carve_hr_lamps_from_dim_overlay(
         self,
@@ -21627,7 +21713,7 @@ class HardcoreSurvivalState(State):
 
             if can_sprint: 
                 # Sprint speed multiplier (diagonal sprint is normalized below). 
-                speed *= 1.45 
+                speed *= 1.25 
                 self.player.stamina = float(clamp(stamina - dt * 28.0, 0.0, 100.0)) 
             else: 
                 regen_mod = 0.50 + 0.50 * (min(self.player.hunger, self.player.thirst) / 100.0) 
@@ -21697,32 +21783,21 @@ class HardcoreSurvivalState(State):
         self._update_world_door_open_anim(float(dt))
         self._maybe_show_home_highrise_dialog()
 
-        focus = pygame.Vector2(self.player.pos)
-        target_cam_x = float(focus.x - INTERNAL_W / 2)
-        target_cam_y = float(focus.y - INTERNAL_H / 2)
-
-        # Camera: reduce diagonal jitter by smoothing only when moving diagonally.
-        cur_fx = float(getattr(self, "cam_fx", target_cam_x))
-        cur_fy = float(getattr(self, "cam_fy", target_cam_y))
+        # Pixel-locked camera follow: track the player's integer world position.
+        # This removes the visible camera "shake" that can happen when diagonal
+        # movement produces fractional positions that get rounded differently per axis.
         try:
-            vx = float(getattr(self.player.vel, "x", 0.0))
-            vy = float(getattr(self.player.vel, "y", 0.0))
+            fx = int(math.floor(float(self.player.pos.x)))
+            fy = int(math.floor(float(self.player.pos.y)))
         except Exception:
-            vx = 0.0
-            vy = 0.0
-        moving_diag = abs(float(vx)) > 1e-6 and abs(float(vy)) > 1e-6
-        if moving_diag:
-            follow = 14.0 if bool(getattr(self, "player_sprinting", False)) else 18.0
-            a = float(clamp(float(dt) * float(follow), 0.0, 1.0))
-            self.cam_fx = float(cur_fx + (float(target_cam_x) - float(cur_fx)) * float(a))
-            self.cam_fy = float(cur_fy + (float(target_cam_y) - float(cur_fy)) * float(a))
-        else:
-            self.cam_fx = float(target_cam_x)
-            self.cam_fy = float(target_cam_y)
-        # Pixel-perfect camera: snap to int pixels. Use iround() (instead of
-        # floor) to avoid diagonal "flicker" from asymmetric rounding.
-        self.cam_x = int(iround(float(self.cam_fx)))
-        self.cam_y = int(iround(float(self.cam_fy)))
+            fx = int(iround(float(self.player.pos.x)))
+            fy = int(iround(float(self.player.pos.y)))
+        target_cam_x = int(fx - int(INTERNAL_W // 2))
+        target_cam_y = int(fy - int(INTERNAL_H // 2))
+        self.cam_x = int(target_cam_x)
+        self.cam_y = int(target_cam_y)
+        self.cam_fx = float(self.cam_x)
+        self.cam_fy = float(self.cam_y)
 
         self._stream_world_chunks()
 
@@ -26042,10 +26117,8 @@ class HardcoreSurvivalState(State):
             return
         idef = self._ITEMS.get(stack.item_id)
         name = idef.name if idef is not None else stack.item_id
-        tx, ty = self._player_tile()
-        chunk = self.world.get_chunk(tx // self.CHUNK_SIZE, ty // self.CHUNK_SIZE)
         offset = pygame.Vector2(random.randint(-6, 6), random.randint(-6, 6))
-        chunk.items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(self.player.pos) + offset, item_id=stack.item_id, qty=int(stack.qty)))
+        self._drop_world_item(pygame.Vector2(self.player.pos) + offset, stack.item_id, int(stack.qty))
         self._set_hint(f"丢弃 {name} x{stack.qty}")
 
     def _use_consumable(self, item_id: str) -> bool:
@@ -26645,46 +26718,13 @@ class HardcoreSurvivalState(State):
         if float(getattr(self, "punch_cooldown_left", 0.0)) > 0.0:
             return
 
-        # Punch direction follows movement/facing (NOT mouse aim), so left
-        # punch always extends to the left when facing left.
-        keys = pygame.key.get_pressed()
-        move = pygame.Vector2(0, 0)
-        if keys[pygame.K_w] or keys[pygame.K_UP]:
-            move.y -= 1
-        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-            move.y += 1
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            move.x -= 1
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            move.x += 1
-
-        dname: str | None = None
-        if move.length_squared() > 0.001:
-            if abs(float(move.x)) >= abs(float(move.y)):
-                dname = "right" if float(move.x) >= 0.0 else "left"
-            else:
-                dname = "down" if float(move.y) >= 0.0 else "up"
-        else:
-            dname = str(getattr(self.player, "dir", "down"))
-            if dname not in ("left", "right", "up", "down"):
-                dname = None
-
-        if dname is None:
-            f = pygame.Vector2(self.player.facing)
-            if f.length_squared() <= 0.001:
-                f = pygame.Vector2(1, 0)
-            if abs(float(f.x)) >= abs(float(f.y)):
-                dname = "right" if float(f.x) >= 0.0 else "left"
-            else:
-                dname = "down" if float(f.y) >= 0.0 else "up"
-
-        dir_map = {
-            "right": pygame.Vector2(1, 0),
-            "left": pygame.Vector2(-1, 0),
-            "down": pygame.Vector2(0, 1),
-            "up": pygame.Vector2(0, -1),
-        }
-        self.punch_dir = pygame.Vector2(dir_map.get(dname, pygame.Vector2(1, 0)))
+        # Melee swing direction follows mouse aim (same as gun direction).
+        aim = pygame.Vector2(getattr(self, "aim_dir", pygame.Vector2(0, 0)))
+        if aim.length_squared() <= 0.001:
+            aim = pygame.Vector2(getattr(self.player, "facing", pygame.Vector2(1, 0)))
+        if aim.length_squared() <= 0.001:
+            aim = pygame.Vector2(1, 0)
+        self.punch_dir = aim.normalize()
         self.punch_hand = 1 - int(getattr(self, "punch_hand", 0))
         mdef = self._MELEE_DEFS.get(str(getattr(self, "melee_weapon_id", "")) or "") or self._MELEE_DEFS.get("fist")
         if mdef is None:
@@ -27116,7 +27156,12 @@ class HardcoreSurvivalState(State):
             d = pygame.Vector2(self.player.facing)
             return d.normalize() if d.length_squared() > 0.001 else pygame.Vector2(1, 0)
         mw = pygame.Vector2(m) + pygame.Vector2(float(self.cam_x), float(self.cam_y))
-        v = mw - self.player.pos
+        # Stabilize aim against sub-pixel player movement by computing the aim
+        # vector from the rounded player position (prevents tiny aim jitter that
+        # can flip 4-dir sprites while sprinting diagonally).
+        px = float(iround(float(self.player.pos.x)))
+        py = float(iround(float(self.player.pos.y)))
+        v = mw - pygame.Vector2(px, py)
         if v.length_squared() <= 0.001:
             d = pygame.Vector2(self.player.facing)
             return d.normalize() if d.length_squared() > 0.001 else pygame.Vector2(1, 0)
@@ -27656,9 +27701,21 @@ class HardcoreSurvivalState(State):
             tx0 = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
             ty0 = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
             tid0 = int(self.world.get_tile(int(tx0), int(ty0)))
-            if bool(self._tile_solid(int(tid0))):
+            avoid_tids = {
+                int(self.T_DOOR),
+                int(self.T_DOOR_HOME),
+                int(self.T_DOOR_LOCKED),
+                int(self.T_DOOR_HOME_LOCKED),
+                int(self.T_DOOR_BROKEN),
+                int(self.T_STAIRS_UP),
+                int(self.T_STAIRS_DOWN),
+                int(self.T_ELEVATOR),
+            }
+            if bool(self._tile_solid(int(tid0))) or int(tid0) in avoid_tids:
                 best: pygame.Vector2 | None = None
                 best_d2 = 1e30
+                best_any: pygame.Vector2 | None = None
+                best_any_d2 = 1e30
                 max_r = 3  # tiles
                 for r in range(1, int(max_r) + 1):
                     for oy in range(-r, r + 1):
@@ -27674,11 +27731,18 @@ class HardcoreSurvivalState(State):
                             cy = (float(ty) + 0.5) * float(self.TILE_SIZE)
                             cand = pygame.Vector2(cx, cy)
                             d2 = float((cand - pos).length_squared())
+                            if int(tid) in avoid_tids:
+                                if d2 < best_any_d2:
+                                    best_any_d2 = d2
+                                    best_any = cand
+                                continue
                             if d2 < best_d2:
                                 best_d2 = d2
                                 best = cand
                     if best is not None:
                         break
+                if best is None and best_any is not None:
+                    best = best_any
                 if best is not None:
                     pos = best
         except Exception:
@@ -29210,32 +29274,10 @@ class HardcoreSurvivalState(State):
                 except Exception:
                     pass
 
-            # Cutaway-roof buildings: don't reveal interiors unless the player is inside that building.
-            if tile_id in (
-                int(self.T_FLOOR),
-                int(self.T_DOOR),
-                int(self.T_DOOR_HOME),
-                int(self.T_DOOR_LOCKED),
-                int(self.T_DOOR_HOME_LOCKED),
-                int(self.T_DOOR_BROKEN),
-                int(self.T_ELEVATOR),
-                int(self.T_STAIRS_UP),
-                int(self.T_STAIRS_DOWN),
-                int(self.T_TABLE),
-                int(self.T_SHELF),
-                int(self.T_CABINET),
-                int(self.T_BED),
-                int(self.T_SOFA),
-                int(self.T_FRIDGE),
-                int(self.T_TV),
-                int(self.T_CHAIR),
-                int(self.T_PC),
-                int(self.T_LAMP),
-                int(self.T_SWITCH),
-                int(self.T_STEER),
-                int(self.T_TOILET),
-                int(self.T_SINK),
-            ):
+            # Cutaway-roof buildings: don't reveal interiors unless the player is
+            # inside that building. Use a non-solid test so alternative floor
+            # variants still work (prevents "walk in and disappear" bugs).
+            if not bool(self._tile_solid(int(tile_id))):
                 inside_key = getattr(self, "_inside_building_key", None)
                 try:
                     hit = self._peek_building_at_tile(int(tx), int(ty))
@@ -29260,35 +29302,10 @@ class HardcoreSurvivalState(State):
             if isinstance(inside_key, tuple) and len(inside_key) == 4 and isinstance(visible, set) and visible:
                 tx0, ty0, w, h = (int(inside_key[0]), int(inside_key[1]), int(inside_key[2]), int(inside_key[3]))
                 if int(tx0) <= int(tx) < int(tx0) + int(w) and int(ty0) <= int(ty) < int(ty0) + int(h):
-                    if (int(tx), int(ty)) not in visible:
-                        if tile_id in (
-                            int(self.T_FLOOR),
-                            int(self.T_DOOR),
-                            int(self.T_DOOR_HOME),
-                            int(self.T_DOOR_LOCKED),
-                            int(self.T_DOOR_HOME_LOCKED),
-                            int(self.T_DOOR_BROKEN),
-                            int(self.T_ELEVATOR),
-                            int(self.T_STAIRS_UP),
-                            int(self.T_STAIRS_DOWN),
-                            int(self.T_TABLE),
-                            int(self.T_SHELF),
-                            int(self.T_CABINET),
-                            int(self.T_BED),
-                            int(self.T_SOFA),
-                            int(self.T_FRIDGE),
-                            int(self.T_TV),
-                            int(self.T_CHAIR),
-                            int(self.T_PC),
-                            int(self.T_LAMP),
-                            int(self.T_SWITCH),
-                            int(self.T_STEER),
-                            int(self.T_TOILET),
-                            int(self.T_SINK),
-                        ):
-                            # Never mask the outer border so doors/walls read correctly.
-                            if int(tx) not in (int(tx0), int(tx0) + int(w) - 1) and int(ty) not in (int(ty0), int(ty0) + int(h) - 1):
-                                tile_id = int(self.T_WALL)
+                    if (int(tx), int(ty)) not in visible and not bool(self._tile_solid(int(tile_id))):
+                        # Never mask the outer border so doors/walls read correctly.
+                        if int(tx) not in (int(tx0), int(tx0) + int(w) - 1) and int(ty) not in (int(ty0), int(ty0) + int(h) - 1):
+                            tile_id = int(self.T_WALL)
         except Exception:
             pass
 
@@ -31090,16 +31107,11 @@ class HardcoreSurvivalState(State):
                                 and (int(inside_key[0]), int(inside_key[1]), int(inside_key[2]), int(inside_key[3]))
                                 == (int(btx0), int(bty0), int(bw), int(bh))
                             )
-                            on_border = bool(
-                                int(itx) in (int(btx0), int(btx0) + int(bw) - 1)
-                                or int(ity) in (int(bty0), int(bty0) + int(bh) - 1)
-                            )
-                            if not same_building and not on_border:
+                            if not same_building:
                                 continue
-                            if same_building and not on_border:
-                                visible = getattr(self, "_inside_building_visible", None)
-                                if isinstance(visible, set) and visible and (int(itx), int(ity)) not in visible:
-                                    continue
+                            visible = getattr(self, "_inside_building_visible", None)
+                            if isinstance(visible, set) and (int(itx), int(ity)) not in visible:
+                                continue
                     except Exception:
                         pass
                     sx = iround(float(it.pos.x) - float(cam_x))
@@ -33418,27 +33430,10 @@ class HardcoreSurvivalState(State):
             pty = int(math.floor(self.player.pos.y / self.TILE_SIZE))
             self._draw_player_tile_xy = (int(ptx), int(pty))
             p_tile = int(self.world.peek_tile(int(ptx), int(pty)))
-            can_be_inside = p_tile in (
-                int(self.T_FLOOR),
-                int(self.T_DOOR),
-                int(self.T_DOOR_HOME),
-                int(self.T_DOOR_LOCKED),
-                int(self.T_DOOR_HOME_LOCKED),
-                int(self.T_DOOR_BROKEN),
-                int(self.T_ELEVATOR),
-                int(self.T_STAIRS_UP),
-                int(self.T_STAIRS_DOWN),
-                int(self.T_TABLE),
-                int(self.T_SHELF),
-                int(self.T_BED),
-                int(self.T_SOFA),
-                int(self.T_FRIDGE),
-                int(self.T_TV),
-                int(self.T_CHAIR),
-                int(self.T_PC),
-                int(self.T_LAMP),
-                int(self.T_SWITCH),
-            )
+            # Robust "inside building" detection: any non-solid tile can be an
+            # interior floor variant (prevents the player from disappearing under
+            # roofs when a stamp uses a different floor tile id).
+            can_be_inside = not bool(self._tile_solid(int(p_tile)))
             if can_be_inside:
                 pchunk = self.world.peek_chunk(int(ptx) // int(self.CHUNK_SIZE), int(pty) // int(self.CHUNK_SIZE))
                 if pchunk is None:
@@ -33858,6 +33853,11 @@ class HardcoreSurvivalState(State):
                     is_melee = True
         if not item_id:
             return
+        # Melee weapons are drawn on the scaled surface (draw_scaled_overlay) so
+        # rotation stays stable after upscaling. Skip the internal draw to avoid
+        # double-rendering.
+        if bool(is_melee):
+            return
 
         self._ensure_item_visuals(item_id)
         spr = self._ITEM_SPRITES_WORLD.get(item_id) or self._ITEM_SPRITES.get(item_id)
@@ -34029,9 +34029,17 @@ class HardcoreSurvivalState(State):
         surface.blit(spr, r) 
  
     def _draw_player(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None: 
-        p = self.player.pos - pygame.Vector2(cam_x, cam_y) 
-        px = iround(float(p.x)) 
-        py = iround(float(p.y))
+        # Draw the player at integer world coords (pixel-lock) so diagonal motion
+        # doesn't produce 1px jitter from float -> int rounding differences.
+        try:
+            pwx = int(math.floor(float(self.player.pos.x)))
+            pwy = int(math.floor(float(self.player.pos.y)))
+        except Exception:
+            pwx = int(iround(float(self.player.pos.x)))
+            pwy = int(iround(float(self.player.pos.y)))
+        px = int(pwx - int(cam_x))
+        py = int(pwy - int(cam_y))
+        p = pygame.Vector2(float(px), float(py))
 
         pose = str(getattr(self, "player_pose", "")).strip()
         pose_space = str(getattr(self, "player_pose_space", "")).strip()
@@ -34079,7 +34087,7 @@ class HardcoreSurvivalState(State):
         prev_d = str(getattr(self.player, "dir", "down"))
         ax = abs(float(face.x))
         ay = abs(float(face.y))
-        bias = 1.12
+        bias = 1.25
         if ax <= 1e-6 and ay <= 1e-6:
             d = prev_d
         elif prev_d in ("up", "down"):
@@ -34140,7 +34148,9 @@ class HardcoreSurvivalState(State):
             height_delta=int(height_delta),
         )
 
-        if self.gun is not None:
+        # Guns are drawn on the scaled surface (draw_scaled_overlay) for stable
+        # pixel rotation. Keep the internal path only as an opt-in debug mode.
+        if self.gun is not None and bool(getattr(self, "_draw_gun_internal", False)):
             aim = pygame.Vector2(self.aim_dir)
             if aim.length_squared() <= 0.001:
                 aim = pygame.Vector2(1, 0)
@@ -34295,6 +34305,10 @@ class HardcoreSurvivalState(State):
                     surface.set_at((hlx, hly), (255, 220, 160)) 
             else: 
                 # Weapon swing: rotate the equipped melee sprite (甩动棍子/钢管) instead of drawing a punch fist. 
+                # Draw on the scaled surface (draw_scaled_overlay) for stable pixel rotation.
+                # Keep the internal swing draw only as an opt-in debug mode.
+                if not bool(getattr(self, "_draw_melee_internal", False)):
+                    return
                 weapon_len = float(getattr(mdef, "visual_len", 10.0)) if mdef is not None else 10.0
                 weapon_reach = 2.0 + float(ext) * float(max(6.0, float(weapon_len) * 0.85))
 
@@ -34345,6 +34359,224 @@ class HardcoreSurvivalState(State):
                 hr = pygame.Rect(int(hx2 - 1), int(hy2 - 1), 3, 3)
                 surface.fill(skin, hr)
                 pygame.draw.rect(surface, outline, hr, 1)
+
+    def draw_scaled_overlay(self, surface: pygame.Surface) -> None:
+        # Post-scale overlay hook (called from App.blit_scaled). We draw weapons
+        # here so rotation happens at screen pixel resolution (xiaotou-style),
+        # keeping diagonal angles stable and non-jaggy after upscaling.
+        if bool(getattr(self, "house_interior", False)) or bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "sch_interior", False)):
+            return
+        if getattr(self, "mount", None) is not None:
+            return
+        if bool(getattr(self, "world_map_open", False)) or bool(getattr(self, "inv_open", False)) or bool(getattr(self, "pause_open", False)):
+            return
+
+        player_rect = getattr(self, "_last_player_screen_rect", None)
+        if not isinstance(player_rect, pygame.Rect):
+            return
+        app = getattr(self, "app", None)
+        if app is None:
+            return
+
+        sx = float(getattr(app, "view_scale_x", 1.0))
+        sy = float(getattr(app, "view_scale_y", 1.0))
+        if sx <= 1e-6 or sy <= 1e-6:
+            return
+        s = float(min(sx, sy))
+
+        def scale_sprite(img: pygame.Surface) -> pygame.Surface:
+            if abs(float(sx) - 1.0) < 1e-6 and abs(float(sy) - 1.0) < 1e-6:
+                return img
+            tw = int(max(1, int(round(float(img.get_width()) * float(sx)))))
+            th = int(max(1, int(round(float(img.get_height()) * float(sy)))))
+            # Upscaling: keep crisp edges. Downscaling: smooth a bit.
+            if float(sx) >= 1.0 and float(sy) >= 1.0:
+                return _scale_cached(img, (tw, th))
+            return _smoothscale_cached(img, (tw, th))
+
+        # Aim direction.
+        aim = pygame.Vector2(getattr(self, "aim_dir", pygame.Vector2(1, 0)))
+        if aim.length_squared() <= 0.001:
+            aim = pygame.Vector2(getattr(getattr(self, "player", None), "facing", pygame.Vector2(1, 0)))
+        if aim.length_squared() <= 0.001:
+            aim = pygame.Vector2(1, 0)
+        aim = aim.normalize()
+
+        # Compute hand position (INTERNAL pixels) from the same skeleton nodes used by _draw_player().
+        d = str(getattr(getattr(self, "player", None), "dir", "down") or "down")
+        height_delta = 0
+        av = getattr(self, "avatar", None)
+        if av is not None:
+            try:
+                hidx = int(getattr(av, "height", 1))
+                height_delta = 1 if hidx == 0 else -1 if hidx == 2 else 0
+            except Exception:
+                height_delta = 0
+
+        pf_walk = getattr(self, "player_frames", getattr(self, "_PLAYER_FRAMES", {}))
+        pf_run = getattr(self, "player_frames_run", None)
+        is_run = bool(getattr(self, "player_sprinting", False))
+        pf = pf_run if (is_run and isinstance(pf_run, dict)) else pf_walk
+        frames = (pf.get(d) if isinstance(pf, dict) else None) or (pf_walk.get("down") if isinstance(pf_walk, dict) else None) or ()
+        moving = bool(getattr(getattr(self, "player", None), "vel", pygame.Vector2(0, 0)).length_squared() > 1.0)
+        walk_idx = 0
+        idle_anim = True
+        if moving and len(frames) > 1:
+            idle_anim = False
+            walk = frames[1:]
+            if walk:
+                phase = (float(getattr(getattr(self, "player", None), "walk_phase", 0.0)) % math.tau) / math.tau
+                walk_idx = int(phase * len(walk)) % len(walk)
+
+        sk = self._survivor_skeleton_nodes(
+            d,
+            int(walk_idx),
+            idle=bool(idle_anim),
+            height_delta=int(height_delta),
+            run=bool(is_run),
+        )
+        hand_node = sk.get("r_hand")
+        if hand_node is not None:
+            hx, hy = int(hand_node[0]), int(hand_node[1])
+            base_hand = pygame.Vector2(int(player_rect.left + hx), int(player_rect.top + hy))
+        else:
+            base_hand = pygame.Vector2(int(player_rect.centerx), int(player_rect.centery + 3))
+
+        def blit_rotated_weapon(
+            *,
+            sprite: pygame.Surface,
+            grip_internal: pygame.Vector2,
+            deg: float,
+            step_deg: float,
+            baseline_deg: float = 0.0,
+            outline_diagonal: bool = True,
+            flip_x: bool = False,
+        ) -> None:
+            # Match the pre-overlay (internal-surface) weapon behavior:
+            # - If aiming left, flip the sprite and rotate relative to that flip so
+            #   guns/melee don't end up upside-down.
+            src = sprite
+            if bool(flip_x):
+                try:
+                    src = flip_x_pixel_sprite(sprite)
+                except Exception:
+                    src = sprite
+                deg = float(deg) - 180.0
+
+            step_deg_f = float(step_deg) if step_deg else 2.0
+            step_deg_f = float(clamp(step_deg_f, 0.5, 45.0))
+            rot_deg = float(deg) - float(baseline_deg)
+            qdeg = int(round(round(float(rot_deg) / float(step_deg_f)) * float(step_deg_f))) % 360
+
+            src_s = scale_sprite(src)
+            rot = rotate_weapon_texture(src_s, float(rot_deg), step_deg=float(step_deg_f), outline_diagonal=bool(outline_diagonal))
+            if rot is None:
+                return
+
+            grip_px = pygame.Vector2(float(grip_internal.x) * sx, float(grip_internal.y) * sy)
+
+            # Keep the grip/pivot stable by computing it on the *unscaled* source
+            # sprite (same as the old internal draw), then scaling the offset.
+            gx, gy = _sprite_grip_point(src)
+            sw0 = max(1, int(src.get_width()))
+            sh0 = max(1, int(src.get_height()))
+            sx_eff = float(src_s.get_width()) / float(sw0)
+            sy_eff = float(src_s.get_height()) / float(sh0)
+            ox = (float(gx) - float(sw0) * 0.5) * float(sx_eff)
+            oy = (float(gy) - float(sh0) * 0.5) * float(sy_eff)
+            offset_rot = _rotate_vec_screen_ccw(pygame.Vector2(float(ox), float(oy)), float(qdeg))
+            draw_center = pygame.Vector2(float(grip_px.x), float(grip_px.y)) - offset_rot
+            rr = rot.get_rect(center=(int(round(draw_center.x)), int(round(draw_center.y))))
+            surface.blit(rot, rr)
+
+        # Gun held.
+        gun = getattr(self, "gun", None)
+        if gun is not None:
+            gun_id = str(getattr(gun, "gun_id", "pistol") or "pistol")
+            try:
+                self._ensure_item_visuals(gun_id)
+            except Exception:
+                pass
+            # Keep the exact same sprite choice order as the old internal draw so
+            # the perceived gun size doesn't change.
+            base = (getattr(self, "_ITEM_SPRITES", {}) or {}).get(gun_id) or (getattr(self, "_ITEM_SPRITES_WORLD", {}) or {}).get(gun_id) or (getattr(self, "_GUN_HAND_SPRITES", {}) or {}).get(gun_id)
+            if base is None:
+                return
+
+            hand = pygame.Vector2(base_hand) + aim * 4.0
+            deg = -math.degrees(math.atan2(float(aim.y), float(aim.x)))
+            flip = float(aim.x) < 0.0
+            if float(getattr(gun, "reload_left", 0.0)) > 0.0 and float(getattr(gun, "reload_total", 0.0)) > 0.0:
+                p = 1.0 - float(getattr(gun, "reload_left", 0.0)) / max(1e-6, float(getattr(gun, "reload_total", 0.0)))
+                deg += float(p) * 360.0
+            blit_rotated_weapon(sprite=base, grip_internal=hand, deg=float(deg), step_deg=2.0, baseline_deg=0.0, outline_diagonal=False, flip_x=bool(flip))
+
+            # Muzzle flash (scaled).
+            if float(getattr(self, "muzzle_flash_left", 0.0)) > 0.0 and float(getattr(gun, "reload_left", 0.0)) <= 0.0:
+                muzzle = hand + aim * 13.0
+                mx = int(round(float(muzzle.x) * sx))
+                my = int(round(float(muzzle.y) * sy))
+                r = 3 if float(getattr(self, "muzzle_flash_left", 0.0)) > 0.03 else 2
+                r = max(1, int(round(float(r) * s)))
+                pygame.draw.circle(surface, (255, 240, 190), (mx, my), int(r))
+                pygame.draw.circle(surface, (255, 200, 120), (mx, my), max(1, int(r) - 1))
+            return
+
+        # Melee swing (only when not holding a gun).
+        punch_left = float(getattr(self, "punch_left", 0.0))
+        swing_id = str(getattr(self, "_melee_swing_id", "fist") or "fist")
+        if punch_left > 0.0 and swing_id and swing_id != "fist":
+            try:
+                self._ensure_item_visuals(str(swing_id))
+            except Exception:
+                pass
+            spr = (getattr(self, "_ITEM_SPRITES", {}) or {}).get(str(swing_id)) or (getattr(self, "_ITEM_SPRITES_WORLD", {}) or {}).get(str(swing_id))
+            if spr is None:
+                return
+
+            mdef = (getattr(self, "_MELEE_DEFS", {}) or {}).get(str(swing_id)) or (getattr(self, "_MELEE_DEFS", {}) or {}).get("fist")
+            total = float(getattr(mdef, "total_s", getattr(self, "_PUNCH_TOTAL_S", 0.26))) if mdef is not None else float(getattr(self, "_PUNCH_TOTAL_S", 0.26))
+            t = 1.0 - float(punch_left) / max(1e-6, float(total))
+            swing_phase = float(clamp(float(t), 0.0, 1.0))
+            ext = math.sin(swing_phase * math.pi)
+
+            pdir = pygame.Vector2(getattr(self, "punch_dir", aim))
+            if pdir.length_squared() <= 0.001:
+                pdir = pygame.Vector2(aim)
+            if pdir.length_squared() <= 0.001:
+                pdir = pygame.Vector2(1, 0)
+            pdir = pdir.normalize()
+
+            # Forward chop: from "pulled back" to "through" the aim direction.
+            aim_deg = -math.degrees(math.atan2(float(pdir.y), float(pdir.x)))
+            side = -1.0 if bool(getattr(self, "punch_hand", 0)) else 1.0
+            start = float(aim_deg) - 78.0 + side * 6.0
+            end = float(aim_deg) + 18.0 + side * 2.0
+            u = 0.5 - 0.5 * math.cos(swing_phase * math.pi)
+            rot_deg = float(start + (end - start) * u)
+
+            grip = pygame.Vector2(base_hand) + pdir * float(2.0 + ext * 4.0)
+            blit_rotated_weapon(sprite=spr, grip_internal=grip, deg=float(rot_deg), step_deg=3.0, baseline_deg=31.0, outline_diagonal=True, flip_x=bool(float(pdir.x) < 0.0))
+            return
+
+        # Idle melee held (rotate with aim, like guns).
+        mid = str(getattr(self, "melee_weapon_id", "") or "")
+        if not mid:
+            return
+        idef = (getattr(self, "_ITEMS", {}) or {}).get(str(mid))
+        if idef is None or str(getattr(idef, "kind", "")) != "melee":
+            return
+        try:
+            self._ensure_item_visuals(str(mid))
+        except Exception:
+            pass
+        spr = (getattr(self, "_ITEM_SPRITES", {}) or {}).get(str(mid)) or (getattr(self, "_ITEM_SPRITES_WORLD", {}) or {}).get(str(mid))
+        if spr is None:
+            return
+
+        hand = pygame.Vector2(base_hand) + aim * 3.0
+        deg = -math.degrees(math.atan2(float(aim.y), float(aim.x)))
+        blit_rotated_weapon(sprite=spr, grip_internal=hand, deg=float(deg), step_deg=3.0, baseline_deg=31.0, outline_diagonal=True, flip_x=bool(float(aim.x) < 0.0))
 
     def _draw_sun_moon_widget(self, surface: pygame.Surface, *, tday: float) -> None:
         rect = pygame.Rect(0, 0, 116, 22)
