@@ -27370,11 +27370,12 @@ class HardcoreSurvivalState(State):
             return d.normalize() if d.length_squared() > 0.001 else pygame.Vector2(1, 0)
         mw = pygame.Vector2(m) + pygame.Vector2(float(self.cam_x), float(self.cam_y))
         # Stabilize aim against sub-pixel player movement by computing the aim
-        # vector from the rounded player position (prevents tiny aim jitter that
-        # can flip 4-dir sprites while sprinting diagonally).
-        px = float(iround(float(self.player.pos.x)))
-        py = float(iround(float(self.player.pos.y)))
-        v = mw - pygame.Vector2(px, py)
+        # vector from the *same pixel-locked anchor* used by the camera/render.
+        # This prevents tiny aim jitter (and 4-dir sprite flicker) while walking
+        # diagonally with the mouse held steady.
+        px = float(math.floor(float(self.player.pos.x)))
+        py = float(math.floor(float(self.player.pos.y)))
+        v = mw - pygame.Vector2(float(px), float(py))
         if v.length_squared() <= 0.001:
             d = pygame.Vector2(self.player.facing)
             return d.normalize() if d.length_squared() > 0.001 else pygame.Vector2(1, 0)
