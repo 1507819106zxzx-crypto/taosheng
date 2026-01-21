@@ -93,7 +93,7 @@ if errorlevel 1 (
 
 echo [INFO] Launching game...
 echo [INFO] Launching game...>> "%LOG%"
-"%PY_EXE%" game.py >> "%LOG%" 2>&1
+"%PY_EXE%" launch_game.py >> "%LOG%" 2>&1
 set "EXITCODE=%ERRORLEVEL%"
 if not "%EXITCODE%"=="0" (
   echo [ERROR] Game crashed. Exit code %EXITCODE%.>> "%LOG%"
