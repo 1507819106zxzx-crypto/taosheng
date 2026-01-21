@@ -34497,9 +34497,10 @@ class HardcoreSurvivalState(State):
                 self._ensure_item_visuals(gun_id)
             except Exception:
                 pass
-            # Keep the exact same sprite choice order as the old internal draw so
-            # the perceived gun size doesn't change.
-            base = (getattr(self, "_ITEM_SPRITES", {}) or {}).get(gun_id) or (getattr(self, "_ITEM_SPRITES_WORLD", {}) or {}).get(gun_id) or (getattr(self, "_GUN_HAND_SPRITES", {}) or {}).get(gun_id)
+            # In-hand weapons should not be larger than the player sprite.
+            # Use the pre-scaled "world" sprite for hand display (matches the
+            # original small-pixel look and keeps guns from looking oversized).
+            base = (getattr(self, "_ITEM_SPRITES_WORLD", {}) or {}).get(gun_id) or (getattr(self, "_ITEM_SPRITES", {}) or {}).get(gun_id)
             if base is None:
                 return
 
@@ -34530,7 +34531,7 @@ class HardcoreSurvivalState(State):
                 self._ensure_item_visuals(str(swing_id))
             except Exception:
                 pass
-            spr = (getattr(self, "_ITEM_SPRITES", {}) or {}).get(str(swing_id)) or (getattr(self, "_ITEM_SPRITES_WORLD", {}) or {}).get(str(swing_id))
+            spr = (getattr(self, "_ITEM_SPRITES_WORLD", {}) or {}).get(str(swing_id)) or (getattr(self, "_ITEM_SPRITES", {}) or {}).get(str(swing_id))
             if spr is None:
                 return
 
@@ -34570,7 +34571,7 @@ class HardcoreSurvivalState(State):
             self._ensure_item_visuals(str(mid))
         except Exception:
             pass
-        spr = (getattr(self, "_ITEM_SPRITES", {}) or {}).get(str(mid)) or (getattr(self, "_ITEM_SPRITES_WORLD", {}) or {}).get(str(mid))
+        spr = (getattr(self, "_ITEM_SPRITES_WORLD", {}) or {}).get(str(mid)) or (getattr(self, "_ITEM_SPRITES", {}) or {}).get(str(mid))
         if spr is None:
             return
 
