@@ -11908,6 +11908,19 @@ class HardcoreSurvivalState(State):
         self.inventory = HardcoreSurvivalState._Inventory(slots=[None] * 16)
         self.inv_open = False
         self.inv_index = 0
+        # Inventory UI state (hover / drag / context actions).
+        self._inv_hover_idx: int | None = None
+        self._inv_mouse_down: bool = False
+        self._inv_mouse_down_idx: int = -1
+        self._inv_mouse_down_pos: tuple[int, int] | None = None
+        self._inv_dragging: bool = False
+        self._inv_drag_from_idx: int = -1
+        self._inv_drag_pos: tuple[int, int] | None = None
+        self._inv_drag_over_idx: int | None = None
+        self._inv_ctx_open: bool = False
+        self._inv_ctx_idx: int = -1
+        self._inv_ctx_rect: pygame.Rect | None = None
+        self._inv_ctx_buttons: list[tuple[pygame.Rect, str]] = []
         self.pause_open = False
         self.pause_rects: list[tuple[pygame.Rect, str]] = []
         self.rv_storage = HardcoreSurvivalState._Inventory(slots=[None] * 24, cols=6)
@@ -12367,7 +12380,7 @@ class HardcoreSurvivalState(State):
                 return
 
         if self.inv_open:
-            if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
                 self._handle_inventory_mouse(event)
                 return
 
@@ -12455,11 +12468,15 @@ class HardcoreSurvivalState(State):
             if event.key in (pygame.K_ESCAPE,):
                 if self.inv_open:
                     self.inv_open = False
+                    self._inv_clear_ui_state()
                 else:
                     self._pause_open_menu()
                 return
             if event.key in (pygame.K_TAB,):
                 self.inv_open = not self.inv_open
+                # Reset transient inventory UI state (hover/drag/context) on both
+                # open and close so stale popups can't leak across sessions.
+                self._inv_clear_ui_state()
                 return
             if not self.inv_open and event.key in (pygame.K_g,):
                 self._toggle_home_move_mode()
@@ -12526,22 +12543,21 @@ class HardcoreSurvivalState(State):
                 self._debug = not self._debug
                 return
 
-    def _handle_inventory_mouse(self, event: pygame.event.Event) -> None:
-        if not self.inv_open:
-            return
-        if event.type != pygame.MOUSEBUTTONDOWN:
-            return
-        if not hasattr(event, "pos"):
-            return
-        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
-        if internal is None:
-            return
-        mx, my = int(internal[0]), int(internal[1])
-        btn = int(getattr(event, "button", 0))
-        if btn not in (1, 3):
-            return
+    def _inv_clear_ui_state(self) -> None:
+        self._inv_hover_idx = None
+        self._inv_mouse_down = False
+        self._inv_mouse_down_idx = -1
+        self._inv_mouse_down_pos = None
+        self._inv_dragging = False
+        self._inv_drag_from_idx = -1
+        self._inv_drag_pos = None
+        self._inv_drag_over_idx = None
+        self._inv_ctx_open = False
+        self._inv_ctx_idx = -1
+        self._inv_ctx_rect = None
+        self._inv_ctx_buttons = []
 
-        # Mirror the layout math in _draw_inventory_ui() so hit-testing matches.
+    def _inv_layout(self) -> tuple[pygame.Rect, pygame.Rect, pygame.Rect, int, int, int, int, int, int]:
         cols = max(1, int(self.inventory.cols))
         rows = int(math.ceil(len(self.inventory.slots) / cols))
         slot = 30
@@ -12551,41 +12567,234 @@ class HardcoreSurvivalState(State):
         x0 = (INTERNAL_W - grid_w) // 2
         y0 = (INTERNAL_H - grid_h) // 2 - 10
         grid = pygame.Rect(int(x0), int(y0), int(grid_w), int(grid_h))
-        if not grid.collidepoint(mx, my):
-            return
+        panel = pygame.Rect(int(x0 - 10), int(y0 - 26), int(grid_w + 20), int(grid_h + 58))
+        footer_h = 52
+        footer = pygame.Rect(int(panel.x + 8), int(panel.bottom - footer_h), int(panel.w - 16), int(footer_h - 6))
+        return grid, panel, footer, int(x0), int(y0), int(cols), int(rows), int(slot), int(gap)
 
+    def _inv_hit_test(self, mx: int, my: int) -> int | None:
+        grid, _panel, _footer, x0, y0, cols, _rows, slot, gap = self._inv_layout()
+        if not grid.collidepoint(int(mx), int(my)):
+            return None
         cell = int(slot + gap)
         if cell <= 0:
-            return
+            return None
         lx = int(mx - int(x0))
         ly = int(my - int(y0))
         cx = int(lx // cell)
         cy = int(ly // cell)
         if cx < 0 or cy < 0 or cx >= int(cols):
-            return
+            return None
         # Ignore clicks on the gap area.
         if int(lx % cell) >= int(slot) or int(ly % cell) >= int(slot):
-            return
+            return None
         idx = int(cy * int(cols) + cx)
         if not (0 <= idx < len(self.inventory.slots)):
-            return
+            return None
+        return int(idx)
 
-        # Left-click selects; double-click uses/equips. Right-click uses/equips.
-        if btn == 1:
-            now_ms = int(pygame.time.get_ticks())
-            last_ms = int(getattr(self, "_inv_last_click_ms", -999999))
-            last_idx = int(getattr(self, "_inv_last_click_idx", -1))
-            self.inv_index = int(idx)
-            if int(idx) == int(last_idx) and (now_ms - last_ms) <= 320:
-                self._equip_selected()
-            self._inv_last_click_ms = int(now_ms)
-            self._inv_last_click_idx = int(idx)
-            return
+    def _inv_primary_label(self, idef: "HardcoreSurvivalState._ItemDef") -> str | None:
+        kind = str(getattr(idef, "kind", ""))
+        if kind == "food":
+            return "吃"
+        if kind == "drink":
+            return "喝"
+        if kind == "med":
+            return "使用"
+        if kind == "fuel":
+            return "加油" if str(getattr(idef, "id", "")) == "gas_can" else "使用"
+        if kind == "clothes":
+            return "穿上"
+        if kind == "gun":
+            return "装备"
+        if kind == "melee":
+            return "装备"
+        if kind == "gun_mod":
+            return "安装"
+        if kind == "tool":
+            held = getattr(self, "held_item", None)
+            if isinstance(held, HardcoreSurvivalState._ItemStack) and str(getattr(held, "item_id", "")) == str(getattr(idef, "id", "")):
+                return "放回"
+            return "拿在手上"
+        return None
 
-        if btn == 3:
+    def _inv_open_ctx(self, idx: int) -> None:
+        idx = int(idx)
+        if not (0 <= idx < len(self.inventory.slots)):
+            self._inv_ctx_open = False
+            self._inv_ctx_idx = -1
+            return
+        if self.inventory.slots[idx] is None:
+            self._inv_ctx_open = False
+            self._inv_ctx_idx = -1
+            return
+        self._inv_ctx_open = True
+        self._inv_ctx_idx = int(idx)
+
+    def _inv_perform_action(self, action: str, *, idx: int | None = None) -> None:
+        action = str(action)
+        if idx is not None:
             self.inv_index = int(idx)
+        if action == "primary":
             self._equip_selected()
             return
+        if action == "drop":
+            self._drop_selected()
+            return
+
+    def _handle_inventory_mouse(self, event: pygame.event.Event) -> None:
+        if not self.inv_open:
+            return
+        if not hasattr(event, "pos"):
+            return
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return
+        mx, my = int(internal[0]), int(internal[1])
+
+        # Keep hover responsive even without a redraw (drag threshold logic).
+        try:
+            self._inv_hover_idx = self._inv_hit_test(int(mx), int(my))
+        except Exception:
+            self._inv_hover_idx = None
+
+        if event.type == pygame.MOUSEMOTION:
+            if bool(getattr(self, "_inv_dragging", False)):
+                self._inv_drag_pos = (int(mx), int(my))
+                self._inv_drag_over_idx = self._inv_hit_test(int(mx), int(my))
+                return
+            if bool(getattr(self, "_inv_mouse_down", False)) and self._inv_mouse_down_pos is not None:
+                down_idx = int(getattr(self, "_inv_mouse_down_idx", -1))
+                if 0 <= down_idx < len(self.inventory.slots) and self.inventory.slots[down_idx] is not None:
+                    dx = int(mx) - int(self._inv_mouse_down_pos[0])
+                    dy = int(my) - int(self._inv_mouse_down_pos[1])
+                    if (dx * dx + dy * dy) >= (5 * 5):
+                        # Start drag.
+                        self._inv_dragging = True
+                        self._inv_drag_from_idx = int(down_idx)
+                        self._inv_drag_pos = (int(mx), int(my))
+                        self._inv_drag_over_idx = self._inv_hit_test(int(mx), int(my))
+                        self._inv_ctx_open = False
+                        self._inv_ctx_idx = -1
+                        self._inv_ctx_rect = None
+                        self._inv_ctx_buttons = []
+                return
+            return
+
+        if event.type == pygame.MOUSEBUTTONUP:
+            btn = int(getattr(event, "button", 0))
+            if btn != 1:
+                return
+            if not bool(getattr(self, "_inv_mouse_down", False)):
+                return
+
+            hit_idx = self._inv_hit_test(int(mx), int(my))
+            down_idx = int(getattr(self, "_inv_mouse_down_idx", -1))
+
+            if bool(getattr(self, "_inv_dragging", False)):
+                from_idx = int(getattr(self, "_inv_drag_from_idx", -1))
+                to_idx = int(hit_idx) if hit_idx is not None else int(from_idx)
+                if 0 <= from_idx < len(self.inventory.slots) and 0 <= to_idx < len(self.inventory.slots):
+                    if to_idx != from_idx:
+                        self.inventory.slots[from_idx], self.inventory.slots[to_idx] = (
+                            self.inventory.slots[to_idx],
+                            self.inventory.slots[from_idx],
+                        )
+                    self.inv_index = int(to_idx)
+                # End drag.
+                self._inv_mouse_down = False
+                self._inv_mouse_down_idx = -1
+                self._inv_mouse_down_pos = None
+                self._inv_dragging = False
+                self._inv_drag_from_idx = -1
+                self._inv_drag_pos = None
+                self._inv_drag_over_idx = None
+                return
+
+            # Click release: open the action menu (double-click still triggers primary).
+            if hit_idx is not None and int(hit_idx) == int(down_idx):
+                self.inv_index = int(hit_idx)
+                st = self.inventory.slots[int(hit_idx)]
+                if st is not None:
+                    now_ms = int(pygame.time.get_ticks())
+                    last_ms = int(getattr(self, "_inv_last_click_ms", -999999))
+                    last_idx = int(getattr(self, "_inv_last_click_idx", -1))
+                    is_double = int(hit_idx) == int(last_idx) and (now_ms - last_ms) <= 320
+                    self._inv_last_click_ms = int(now_ms)
+                    self._inv_last_click_idx = int(hit_idx)
+                    if is_double:
+                        self._inv_perform_action("primary", idx=int(hit_idx))
+                        self._inv_ctx_open = False
+                        self._inv_ctx_idx = -1
+                        self._inv_ctx_rect = None
+                        self._inv_ctx_buttons = []
+                    else:
+                        if bool(getattr(self, "_inv_ctx_open", False)) and int(getattr(self, "_inv_ctx_idx", -1)) == int(hit_idx):
+                            self._inv_ctx_open = False
+                            self._inv_ctx_idx = -1
+                            self._inv_ctx_rect = None
+                            self._inv_ctx_buttons = []
+                        else:
+                            self._inv_open_ctx(int(hit_idx))
+                else:
+                    self._inv_ctx_open = False
+                    self._inv_ctx_idx = -1
+                    self._inv_ctx_rect = None
+                    self._inv_ctx_buttons = []
+
+            self._inv_mouse_down = False
+            self._inv_mouse_down_idx = -1
+            self._inv_mouse_down_pos = None
+            return
+
+        if event.type != pygame.MOUSEBUTTONDOWN:
+            return
+
+        btn = int(getattr(event, "button", 0))
+        if btn not in (1, 3):
+            return
+
+        # If an inventory context menu is open, let its buttons consume the click.
+        if bool(getattr(self, "_inv_ctx_open", False)):
+            for r, action in list(getattr(self, "_inv_ctx_buttons", [])):
+                if r.collidepoint(int(mx), int(my)):
+                    self._inv_perform_action(str(action), idx=int(getattr(self, "_inv_ctx_idx", self.inv_index)))
+                    self._inv_ctx_open = False
+                    self._inv_ctx_idx = -1
+                    self._inv_ctx_rect = None
+                    self._inv_ctx_buttons = []
+                    return
+            menu_r = getattr(self, "_inv_ctx_rect", None)
+            if isinstance(menu_r, pygame.Rect) and not menu_r.collidepoint(int(mx), int(my)):
+                self._inv_ctx_open = False
+                self._inv_ctx_idx = -1
+                self._inv_ctx_rect = None
+                self._inv_ctx_buttons = []
+
+        idx = self._inv_hit_test(int(mx), int(my))
+        if idx is None:
+            if btn == 1:
+                self._inv_mouse_down = False
+                self._inv_mouse_down_idx = -1
+                self._inv_mouse_down_pos = None
+            return
+
+        self.inv_index = int(idx)
+
+        if btn == 3:
+            # Right-click: open actions immediately (no drag).
+            self._inv_open_ctx(int(idx))
+            return
+
+        # Left button down: start a click/drag gesture.
+        self._inv_mouse_down = True
+        self._inv_mouse_down_idx = int(idx)
+        self._inv_mouse_down_pos = (int(mx), int(my))
+        self._inv_dragging = False
+        self._inv_drag_from_idx = -1
+        self._inv_drag_pos = (int(mx), int(my))
+        self._inv_drag_over_idx = int(idx)
+        return
 
     def _apply_rv_model(self) -> None:
         mid = getattr(self.rv, "model_id", "schoolbus")
@@ -21827,6 +22036,7 @@ class HardcoreSurvivalState(State):
         self.pause_open = True
         self.pause_rects = []
         self.inv_open = False
+        self._inv_clear_ui_state()
         self.world_map_open = False
         self.rv_ui_open = False
         self.home_ui_open = False
@@ -32907,40 +33117,51 @@ class HardcoreSurvivalState(State):
         overlay.fill((0, 0, 0, 170)) 
         surface.blit(overlay, (0, 0))
 
-        cols = max(1, int(self.inventory.cols))
-        rows = int(math.ceil(len(self.inventory.slots) / cols))
-        slot = 30
-        gap = 4
-        grid_w = cols * slot + (cols - 1) * gap
-        grid_h = rows * slot + (rows - 1) * gap
-        x0 = (INTERNAL_W - grid_w) // 2
-        y0 = (INTERNAL_H - grid_h) // 2 - 10
+        _grid, panel, footer, x0, y0, cols, _rows, slot, gap = self._inv_layout()
 
-        panel = pygame.Rect(x0 - 10, y0 - 26, grid_w + 20, grid_h + 58)
         pygame.draw.rect(surface, (18, 18, 22), panel, border_radius=10)
         pygame.draw.rect(surface, (80, 80, 96), panel, 2, border_radius=10)
         draw_text(surface, self.app.font_m, "背包", (panel.centerx, panel.top + 14), pygame.Color(240, 240, 240), anchor="center")
+
+        dragging = bool(getattr(self, "_inv_dragging", False))
+        drag_from = int(getattr(self, "_inv_drag_from_idx", -1))
+        drag_over = getattr(self, "_inv_drag_over_idx", None)
+        hover_idx = getattr(self, "_inv_hover_idx", None)
 
         for i, st in enumerate(self.inventory.slots):
             cx = i % cols
             cy = i // cols
             r = pygame.Rect(x0 + cx * (slot + gap), y0 + cy * (slot + gap), slot, slot)
             selected = i == int(self.inv_index)
+            hovered = hover_idx is not None and int(hover_idx) == int(i)
+            drop_target = dragging and drag_over is not None and int(drag_over) == int(i) and int(i) != int(drag_from)
+
             bg = (44, 44, 52) if selected else (26, 26, 32)
             border = (220, 220, 240) if selected else (90, 90, 110)
             pygame.draw.rect(surface, bg, r, border_radius=6)
             pygame.draw.rect(surface, border, r, 2, border_radius=6)
+            if drop_target:
+                pygame.draw.rect(surface, (90, 210, 140), r, 3, border_radius=6)
+            elif hovered and not selected:
+                pygame.draw.rect(surface, (235, 210, 90), r, 2, border_radius=6)
+
             if st is None:
                 continue
+            if dragging and int(i) == int(drag_from):
+                continue
+
             self._ensure_item_visuals(st.item_id)
             img: pygame.Surface | None = None
             spr = self._ITEM_SPRITES.get(st.item_id)
             if spr is not None:
-                factor = 2 if (spr.get_width() * 2 <= r.w - 2 and spr.get_height() * 2 <= r.h - 2) else 1
-                if factor != 1:
-                    img = pygame.transform.scale(spr, (spr.get_width() * factor, spr.get_height() * factor))
-                else:
-                    img = spr
+                img = spr
+                max_w = r.w - 4
+                max_h = r.h - 4
+                if img.get_width() > max_w or img.get_height() > max_h:
+                    scale = min(max_w / max(1, img.get_width()), max_h / max(1, img.get_height()))
+                    iw = max(1, int(round(img.get_width() * scale)))
+                    ih = max(1, int(round(img.get_height() * scale)))
+                    img = pygame.transform.scale(img, (iw, ih))
             else:
                 icon = self._ITEM_ICONS.get(st.item_id)
                 if icon is None:
@@ -32957,21 +33178,142 @@ class HardcoreSurvivalState(State):
                 surface.blit(img, img.get_rect(center=r.center))
             draw_text(surface, self.app.font_s, str(int(st.qty)), (r.right - 2, r.bottom - 2), pygame.Color(240, 240, 240), anchor="topright")
 
+        # Drag ghost.
+        if dragging and 0 <= int(drag_from) < len(self.inventory.slots):
+            st = self.inventory.slots[int(drag_from)]
+            if st is not None:
+                self._ensure_item_visuals(st.item_id)
+                img: pygame.Surface | None = None
+                spr = self._ITEM_SPRITES.get(st.item_id)
+                if spr is not None:
+                    img = spr
+                else:
+                    img = self._ITEM_ICONS.get(st.item_id)
+                if img is not None:
+                    pos = getattr(self, "_inv_drag_pos", None)
+                    if pos is None:
+                        pos = self.app.screen_to_internal(pygame.mouse.get_pos()) or (panel.centerx, panel.centery)
+                    ghost = img
+                    if ghost.get_width() < 18:
+                        ghost = pygame.transform.scale(ghost, (ghost.get_width() * 2, ghost.get_height() * 2))
+                    ghost = ghost.copy()
+                    ghost.set_alpha(190)
+                    surface.blit(ghost, ghost.get_rect(center=(int(pos[0]), int(pos[1]))))
+
+        # Footer (name / desc / help) with clipping + ellipsis to avoid overlap.
+        def ellipsize(text: str, font: pygame.font.Font, max_w: int) -> str:
+            text = str(text)
+            if max_w <= 0 or font.size(text)[0] <= max_w:
+                return text
+            suffix = "…"
+            lo = 0
+            hi = len(text)
+            while lo < hi:
+                mid = (lo + hi) // 2
+                cand = text[:mid].rstrip() + suffix
+                if font.size(cand)[0] <= max_w:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            return text[: max(0, lo - 1)].rstrip() + suffix
+
         sel = self.inventory.slots[int(self.inv_index)]
-        line1 = "空"
-        line2 = ""
+        name_line = "空"
+        desc_line = ""
         if sel is not None:
             idef = self._ITEMS.get(sel.item_id)
             name = idef.name if idef is not None else sel.item_id
-            line1 = f"{name} x{int(sel.qty)}"
-            if idef is not None and str(getattr(idef, "desc", "")).strip():
-                line2 = str(getattr(idef, "desc", "")).strip()
-                if len(line2) > 42:
-                    line2 = line2[:42] + "…"
-        draw_text(surface, self.app.font_s, line1, (panel.centerx, panel.bottom - 36), pygame.Color(210, 210, 220), anchor="center")
-        if line2:
-            draw_text(surface, self.app.font_s, line2, (panel.centerx, panel.bottom - 22), pygame.Color(200, 200, 210), anchor="center")
-        draw_text(surface, self.app.font_s, "鼠标左键选择/双击使用  右键使用/装备  Q丢弃  Tab关闭", (panel.centerx, panel.bottom - 8), pygame.Color(160, 160, 175), anchor="center")
+            name_line = f"{name} x{int(sel.qty)}"
+            desc_line = str(getattr(idef, "desc", "")).strip() if idef is not None else ""
+
+        help_line = "左键拖拽移动 | 单击操作 | 右键菜单 | 双击快速使用 | Q 丢弃 | Tab 关闭"
+
+        pygame.draw.rect(surface, (14, 14, 18), footer, border_radius=8)
+        pygame.draw.rect(surface, (70, 70, 86), footer, 1, border_radius=8)
+        prev_clip = surface.get_clip()
+        surface.set_clip(footer)
+        try:
+            pad = 6
+            max_w = int(footer.w - pad * 2)
+            x = int(footer.left + pad)
+            y = int(footer.top + 4)
+            draw_text(surface, self.app.font_s, ellipsize(name_line, self.app.font_s, max_w), (x, y), pygame.Color(210, 210, 220), anchor="topleft")
+            y += int(self.app.font_s.get_height() + 1)
+            if desc_line:
+                draw_text(surface, self.app.font_s, ellipsize(desc_line, self.app.font_s, max_w), (x, y), pygame.Color(200, 200, 210), anchor="topleft")
+            draw_text(
+                surface,
+                self.app.font_s,
+                ellipsize(help_line, self.app.font_s, max_w),
+                (x, footer.bottom - self.app.font_s.get_height() - 2),
+                pygame.Color(160, 160, 175),
+                anchor="topleft",
+            )
+        finally:
+            surface.set_clip(prev_clip)
+
+        # Context menu.
+        if bool(getattr(self, "_inv_ctx_open", False)) and 0 <= int(getattr(self, "_inv_ctx_idx", -1)) < len(self.inventory.slots):
+            idx = int(getattr(self, "_inv_ctx_idx", -1))
+            st = self.inventory.slots[idx]
+            if st is None:
+                self._inv_ctx_open = False
+                self._inv_ctx_idx = -1
+                self._inv_ctx_rect = None
+                self._inv_ctx_buttons = []
+                return
+
+            idef = self._ITEMS.get(st.item_id)
+            primary_label = self._inv_primary_label(idef) if idef is not None else "使用"
+            buttons: list[tuple[str, str]] = []
+            if primary_label:
+                buttons.append((str(primary_label), "primary"))
+            buttons.append(("丢弃", "drop"))
+
+            mouse_int = self.app.screen_to_internal(pygame.mouse.get_pos())
+            mx, my = (int(mouse_int[0]), int(mouse_int[1])) if mouse_int is not None else (0, 0)
+
+            cx = idx % cols
+            cy = idx // cols
+            slot_r = pygame.Rect(x0 + cx * (slot + gap), y0 + cy * (slot + gap), slot, slot)
+
+            pad = 6
+            btn_h = int(self.app.font_s.get_height() + 8)
+            menu_w = 0
+            for label, _act in buttons:
+                menu_w = max(menu_w, int(self.app.font_s.size(label)[0]))
+            menu_w = int(clamp(menu_w + pad * 2, 76, 150))
+            menu_h = int(len(buttons) * btn_h + pad * 2)
+
+            menu_x = int(slot_r.right + 8)
+            if menu_x + menu_w > int(panel.right - 6):
+                menu_x = int(slot_r.left - 8 - menu_w)
+            menu_y = int(slot_r.top)
+            menu_r = pygame.Rect(int(menu_x), int(menu_y), int(menu_w), int(menu_h))
+
+            # Clamp inside the panel and keep it above the footer.
+            menu_r.left = int(clamp(menu_r.left, int(panel.left + 6), int(panel.right - 6 - menu_r.w)))
+            menu_r.top = int(clamp(menu_r.top, int(panel.top + 24), int(footer.top - 6 - menu_r.h)))
+
+            pygame.draw.rect(surface, (24, 24, 30), menu_r, border_radius=8)
+            pygame.draw.rect(surface, (120, 120, 140), menu_r, 2, border_radius=8)
+
+            btn_rects: list[tuple[pygame.Rect, str]] = []
+            y = int(menu_r.top + pad)
+            for label, act in buttons:
+                br = pygame.Rect(int(menu_r.left + pad), int(y), int(menu_r.w - pad * 2), int(btn_h))
+                hot = br.collidepoint(int(mx), int(my))
+                pygame.draw.rect(surface, (55, 55, 70) if hot else (35, 35, 46), br, border_radius=6)
+                pygame.draw.rect(surface, (180, 180, 200) if hot else (90, 90, 110), br, 1, border_radius=6)
+                draw_text(surface, self.app.font_s, str(label), (br.centerx, br.centery), pygame.Color(240, 240, 240), anchor="center")
+                btn_rects.append((br, str(act)))
+                y += int(btn_h)
+
+            self._inv_ctx_rect = menu_r
+            self._inv_ctx_buttons = btn_rects
+        else:
+            self._inv_ctx_rect = None
+            self._inv_ctx_buttons = []
 
     def _draw_sprite_gallery_ui(self, surface: pygame.Surface) -> None:
         overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
