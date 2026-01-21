@@ -36484,8 +36484,27 @@ class CharacterSelectState(State):
 
         tx = spr_pos[0] + spr.get_width() + 10
         ty = panel.top + 8
+
+        def ellipsize(text: str, font: pygame.font.Font, max_w: int) -> str:
+            text = str(text)
+            if max_w <= 0 or font.size(text)[0] <= max_w:
+                return text
+            suffix = "..."
+            lo = 0
+            hi = len(text)
+            while lo < hi:
+                mid = (lo + hi) // 2
+                cand = text[:mid].rstrip() + suffix
+                if font.size(cand)[0] <= max_w:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            return text[: max(0, lo - 1)].rstrip() + suffix
+
         draw_text(surface, self.app.font_m, f"{char_def.name}", (tx, ty), pygame.Color(240, 240, 240))
-        draw_text(surface, self.app.font_s, char_def.desc, (tx, ty + 18), pygame.Color(180, 180, 190))
+        max_desc_w = int(panel.right - 10 - int(tx))
+        desc = ellipsize(char_def.desc, self.app.font_s, int(max_desc_w))
+        draw_text(surface, self.app.font_s, desc, (tx, ty + 18), pygame.Color(180, 180, 190))
 
         stats = [
             f"生命: {char_def.base_hp}",
