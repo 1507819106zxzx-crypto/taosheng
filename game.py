@@ -2595,6 +2595,28 @@ class SurvivalCreateState(State):
         cur = int(getattr(self.avatar, attr, 0))
         nxt = (cur + int(delta)) % max(1, len(options))
         setattr(self.avatar, attr, int(nxt))
+        if str(attr) == "gender":
+            try:
+                g = int(getattr(self.avatar, "gender", 0)) % len(SURVIVAL_GENDER_OPTIONS)
+                # Make "女" immediately read differently by nudging a few defaults.
+                if g != 0:
+                    if int(getattr(self.avatar, "hair", 0)) in (0, 1):
+                        self.avatar.hair = 4  # 马尾
+                    if int(getattr(self.avatar, "mouth", 0)) == 0:
+                        self.avatar.mouth = 1  # 微笑
+                    if int(getattr(self.avatar, "makeup", 0)) == 0:
+                        self.avatar.makeup = 1  # 淡妆
+                    if int(getattr(self.avatar, "accessory", 0)) == 0:
+                        self.avatar.accessory = 3  # 耳饰
+                    if int(getattr(self.avatar, "outfit", 0)) == 0:
+                        self.avatar.outfit = 6  # 街头卫衣粉
+                else:
+                    # Male defaults: keep it clean.
+                    self.avatar.makeup = 0
+                    if int(getattr(self.avatar, "accessory", 0)) == 3:
+                        self.avatar.accessory = 0
+            except Exception:
+                pass
         self._dirty = True
 
     def handle_event(self, event: pygame.event.Event) -> None:
@@ -23048,8 +23070,41 @@ class HardcoreSurvivalState(State):
 
         pad_x = 12
         pad_y = 10
-        panel_h = 120
-        panel = pygame.Rect(pad_x, INTERNAL_H - panel_h - pad_y, INTERNAL_W - pad_x * 2, panel_h)
+        panel_w = int(INTERNAL_W - pad_x * 2)
+        font_t = self.app.font_m
+        font = self.app.font_s
+
+        def ellipsize(text: str, font: pygame.font.Font, max_w: int) -> str:
+            text = str(text)
+            max_w = int(max_w)
+            if max_w <= 0 or font.size(text)[0] <= max_w:
+                return text
+            suffix = "…"
+            lo = 0
+            hi = len(text)
+            while lo < hi:
+                mid = (lo + hi) // 2
+                cand = text[:mid].rstrip() + suffix
+                if font.size(cand)[0] <= max_w:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            return text[: max(0, lo - 1)].rstrip() + suffix
+
+        # Wrap first so we can size the panel to avoid overflow.
+        max_w = int(max(1, panel_w - 20))
+        lines = self._wrap_text_lines(shown, font, max_w)
+        lines = lines[:4]
+
+        # Dynamic height: keep everything inside the panel.
+        btn_h = int(font.get_height() + 8)
+        gap = 4
+        max_opts = int(min(6, len(options)))
+        opts_h = int(max_opts * btn_h + max(0, max_opts - 1) * gap) if max_opts > 0 else 0
+        text_h = int(len(lines) * (int(font.get_height()) + 2))
+        need_h = int(30 + text_h + (opts_h + 18 if max_opts > 0 else 18))
+        panel_h = int(clamp(int(need_h), 96, 170))
+        panel = pygame.Rect(pad_x, INTERNAL_H - int(panel_h) - pad_y, int(panel_w), int(panel_h))
         if panel.y < 6:
             panel.y = 6
 
@@ -23059,15 +23114,13 @@ class HardcoreSurvivalState(State):
         pygame.draw.rect(ui, (220, 220, 235, 160), ui.get_rect(), 2, border_radius=10)
         surface.blit(ui, panel.topleft)
 
-        font_t = self.app.font_m
-        font = self.app.font_s
-        surface.blit(font_t.render(speaker, False, pygame.Color(240, 240, 240)), (panel.x + 10, panel.y + 8))
-
-        max_w = int(panel.w - 20)
-        lines = self._wrap_text_lines(shown, font, max_w)
-        lines = lines[:4]
+        surface.blit(
+            font_t.render(ellipsize(speaker, font_t, int(panel.w - 20)), False, pygame.Color(240, 240, 240)),
+            (panel.x + 10, panel.y + 8),
+        )
         tx = panel.x + 10
         ty = panel.y + 30
+        text_bottom = int(ty + len(lines) * (int(font.get_height()) + 2))
         for ln in lines:
             surface.blit(font.render(str(ln), False, pygame.Color(230, 230, 240)), (tx, ty))
             ty += int(font.get_height() + 2)
@@ -23082,17 +23135,20 @@ class HardcoreSurvivalState(State):
         # Options (buttons).
         self.conv_option_rects = []
         if options:
-            btn_h = int(font.get_height() + 8)
-            gap = 4
-            total_h = int(len(options) * btn_h + max(0, len(options) - 1) * gap)
+            avail_h = int(panel.bottom - 8 - (text_bottom + 6))
+            max_fit = int((int(avail_h) + int(gap)) // int(btn_h + gap)) if int(btn_h + gap) > 0 else 0
+            show_n = int(min(6, len(options), max(1, max_fit)))
+
+            total_h = int(show_n * btn_h + max(0, show_n - 1) * gap)
             by = int(panel.bottom - 8 - total_h)
+            by = int(max(by, int(text_bottom + 6)))
             bx = int(panel.x + 10)
             bw = int(panel.w - 20)
 
             mouse = self.app.screen_to_internal(pygame.mouse.get_pos())
             mx, my = (int(mouse[0]), int(mouse[1])) if mouse is not None else (-999, -999)
 
-            for i, opt in enumerate(options[:6]):
+            for i, opt in enumerate(options[: int(show_n)]):
                 label = str(opt.get("label", f"选项{i+1}")) if isinstance(opt, dict) else f"选项{i+1}"
                 r = pygame.Rect(int(bx), int(by + i * (btn_h + gap)), int(bw), int(btn_h))
                 hot = r.collidepoint(mx, my)
@@ -23102,7 +23158,13 @@ class HardcoreSurvivalState(State):
                 pygame.draw.rect(surface, bg, r, border_radius=6)
                 pygame.draw.rect(surface, border, r, 2 if selected else 1, border_radius=6)
                 tip = f"{i+1}. {label}" if len(options) <= 9 else str(label)
-                draw_text(surface, font, tip, (r.left + 8, r.centery - 1), pygame.Color(240, 240, 240), anchor="topleft")
+                tip = ellipsize(tip, font, int(r.w - 16))
+                prev_clip = surface.get_clip()
+                surface.set_clip(r.inflate(-6, 0))
+                try:
+                    draw_text(surface, font, tip, (r.left + 8, r.centery - 1), pygame.Color(240, 240, 240), anchor="topleft")
+                finally:
+                    surface.set_clip(prev_clip)
                 self.conv_option_rects.append((r, int(i)))
 
     def _story_world_day(self) -> int:
@@ -23187,6 +23249,12 @@ class HardcoreSurvivalState(State):
                     for dx in range(-r, r + 1):
                         nx = int(tx + dx)
                         ny = int(ty + dy)
+                        # Keep story NPCs/POIs outdoors (avoid being "on the facade").
+                        try:
+                            if self._peek_building_at_tile(int(nx), int(ny)) is not None:
+                                continue
+                        except Exception:
+                            pass
                         tid = int(self.world.peek_tile(int(nx), int(ny)))
                         if not bool(self._tile_solid(int(tid))):
                             return int(nx), int(ny)
@@ -23278,7 +23346,7 @@ class HardcoreSurvivalState(State):
                     "name": str(name),
                     "pos": npc_pos_from_tile(int(tx), int(ty)),
                     "dir": "down",
-                    "walk": random.random() * 2.0,
+                    "walk_phase": float(random.random() * math.tau),
                     "vel": pygame.Vector2(0, 0),
                     "goal": npc_pos_from_tile(int(tx), int(ty)),
                     "goal_left": 0.0,
@@ -23472,6 +23540,11 @@ class HardcoreSurvivalState(State):
                     for dx in range(-r, r + 1):
                         nx = int(tx + dx)
                         ny = int(ty + dy)
+                        try:
+                            if self._peek_building_at_tile(int(nx), int(ny)) is not None:
+                                continue
+                        except Exception:
+                            pass
                         tid = int(self.world.peek_tile(int(nx), int(ny)))
                         if not bool(self._tile_solid(int(tid))):
                             return int(nx), int(ny)
@@ -23479,6 +23552,7 @@ class HardcoreSurvivalState(State):
 
         npc_w = 8
         npc_h = int(clamp(int(getattr(self.player, "collider_h", 10)), 8, 14))
+        base_speed = 60.0
 
         for npc in npcs:
             if not isinstance(npc, dict):
@@ -23491,7 +23565,7 @@ class HardcoreSurvivalState(State):
             speed = float(npc.get("speed", 28.0))
             if speed <= 0.1:
                 npc["vel"] = pygame.Vector2(0, 0)
-                npc["walk"] = float(npc.get("walk", 0.0)) * 0.85
+                npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) * 0.92
                 continue
 
             stuck_t = float(npc.get("stuck", 0.0))
@@ -23555,6 +23629,11 @@ class HardcoreSurvivalState(State):
                         continue
                     if abs(int(tx) - int(ax)) > int(radius) or abs(int(ty) - int(ay)) > int(radius):
                         continue
+                    try:
+                        if self._peek_building_at_tile(int(tx), int(ty)) is not None:
+                            continue
+                    except Exception:
+                        pass
                     tid = int(self.world.peek_tile(int(tx), int(ty)))
                     if bool(self._tile_solid(int(tid))):
                         continue
@@ -23578,7 +23657,15 @@ class HardcoreSurvivalState(State):
             vel = pygame.Vector2(0, 0)
             if d.length_squared() > 1.0:
                 try:
-                    vel = d.normalize() * float(speed)
+                    # Match player: speed is affected by terrain + weather.
+                    try:
+                        tx_u = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                        ty_u = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                        tile_under = self.world.get_tile(int(tx_u), int(ty_u))
+                        sp = float(speed) * float(self._tile_slow(tile_under)) * float(self._weather_move_mult())
+                    except Exception:
+                        sp = float(speed)
+                    vel = d.normalize() * float(sp)
                 except Exception:
                     vel = pygame.Vector2(0, 0)
 
@@ -23604,7 +23691,7 @@ class HardcoreSurvivalState(State):
 
             moving = npc_vel.length_squared() > 1.0
             if moving:
-                npc["walk"] = float(npc.get("walk", 0.0)) + float(dt_time) * 6.0
+                npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) + float(dt_time) * 10.0 * (float(npc_vel.length()) / float(base_speed))
                 axis = int(npc.get("axis", 0))
                 vx = float(npc_vel.x)
                 vy = float(npc_vel.y)
@@ -23621,7 +23708,7 @@ class HardcoreSurvivalState(State):
                 else:
                     npc["dir"] = "right" if vx >= 0.0 else "left"
             else:
-                npc["walk"] = float(npc.get("walk", 0.0)) * 0.85
+                npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) * 0.92
 
     def _story_nearest_npc(self, *, radius_px: float = 18.0) -> dict[str, object] | None:
         if not bool(getattr(self, "story_enabled", False)):
@@ -23672,6 +23759,12 @@ class HardcoreSurvivalState(State):
             return
         if not bool(self._story_is_pre_apocalypse()):
             return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return
         npcs = getattr(self, "npcs", None)
         if not isinstance(npcs, list) or not npcs:
             return
@@ -23699,6 +23792,29 @@ class HardcoreSurvivalState(State):
             except Exception:
                 continue
 
+            # If the NPC is inside a cutaway building, hide it unless the player
+            # is also inside the same building (prevents "standing on facades").
+            try:
+                ntx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                nty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                hit = self._peek_building_at_tile(int(ntx), int(nty))
+                if hit is not None:
+                    btx0, bty0, bw, bh = int(hit[0]), int(hit[1]), int(hit[2]), int(hit[3])
+                    inside_key = getattr(self, "_inside_building_key", None)
+                    same_building = (
+                        isinstance(inside_key, tuple)
+                        and len(inside_key) == 4
+                        and (int(inside_key[0]), int(inside_key[1]), int(inside_key[2]), int(inside_key[3]))
+                        == (int(btx0), int(bty0), int(bw), int(bh))
+                    )
+                    if not same_building:
+                        continue
+                    visible = getattr(self, "_inside_building_visible", None)
+                    if isinstance(visible, set) and (int(ntx), int(nty)) not in visible:
+                        continue
+            except Exception:
+                pass
+
             p = pygame.Vector2(pos) - pygame.Vector2(cam_x, cam_y)
             sx = iround(float(p.x))
             sy = iround(float(p.y))
@@ -23710,8 +23826,9 @@ class HardcoreSurvivalState(State):
                 moving = False
             if moving and len(fr) > 1:
                 walk = fr[1:]
-                phase = float(npc.get("walk", 0.0))
-                idx = int(phase) % len(walk) if walk else 0
+                phase = float(npc.get("walk_phase", 0.0))
+                phase = (float(phase) % math.tau) / math.tau
+                idx = int(phase * len(walk)) % len(walk) if walk else 0
                 spr = walk[idx] if walk else fr[0]
             else:
                 spr = fr[0]
