@@ -2083,6 +2083,9 @@ class App:
         self.font_m = pygame.font.Font(font_path, 16) if font_path else pygame.font.Font(None, 16)
         self.font_l = pygame.font.Font(font_path, 28) if font_path else pygame.font.Font(None, 28)
 
+        # Player name (set by NameInputState for hardcore survival).
+        self.player_name: str = ""
+
         self.state: State = StartScreenState(self)
         self.state.on_enter()
 
@@ -2305,8 +2308,9 @@ class App:
                 ly = max(0, y - 2 - img.get_height())
             surface.blit(img, (lx, ly))
 
-    def run(self) -> None:
+    def run(self, *, max_frames: int | None = None) -> None:
         running = True
+        frames = 0
         while running:
             # Fixed-step timing: keeps pixel motion consistent and avoids the
             # subtle "lurch" you get from variable dt + pixel snapping.
@@ -2332,6 +2336,10 @@ class App:
             self.state.draw(self.render)
             self.blit_scaled()
             pygame.display.flip()
+
+            frames += 1
+            if max_frames is not None and int(frames) >= int(max_frames):
+                running = False
 
         pygame.quit()
 
@@ -2569,7 +2577,7 @@ class SurvivalCreateState(State):
                 return
             if key in (pygame.K_RETURN, pygame.K_SPACE):
                 self.avatar.clamp_all()
-                self.app.set_state(HardcoreSurvivalState(self.app, avatar=self.avatar))
+                self.app.set_state(NameInputState(self.app, avatar=self.avatar))
                 return
             return
 
@@ -2660,6 +2668,102 @@ class SurvivalCreateState(State):
             img = pygame.transform.scale(spr_right, (spr_right.get_width() * scale, spr_right.get_height() * scale))
             surface.blit(img, img.get_rect(center=(panel.centerx + 48, panel.centery + 10)))
         draw_text(surface, self.app.font_s, "预览: 下 / 右", (panel.centerx, panel.top + 10), pygame.Color(200, 200, 210), anchor="center")
+
+
+class NameInputState(State):
+    def __init__(self, app: "App", *, avatar: SurvivalAvatar) -> None:
+        super().__init__(app)
+        self.avatar = avatar
+
+    def on_enter(self) -> None:
+        self.name = str(getattr(self.app, "player_name", "") or "").strip()
+        if not self.name:
+            # Keep it simple: a few "town-friendly" defaults.
+            self.name = random.choice(("小周", "阿城", "小林", "小李", "小陈", "小许", "小白", "阿北"))
+        self.msg = ""
+        self.blink_t = 0.0
+        try:
+            pygame.key.start_text_input()
+        except Exception:
+            pass
+
+    def _stop_text_input(self) -> None:
+        try:
+            pygame.key.stop_text_input()
+        except Exception:
+            pass
+
+    def _sanitize_name(self, text: str) -> str:
+        text = str(text).strip()
+        # Remove control chars.
+        text = "".join(ch for ch in text if (ord(ch) >= 32 and ch not in ("\u007f",)))
+        # Clamp length (unicode chars count).
+        text = text[:10]
+        return text
+
+    def _confirm(self) -> None:
+        name = self._sanitize_name(getattr(self, "name", ""))
+        if len(name) < 2:
+            self.msg = "名字太短啦（至少 2 个字）"
+            return
+        self._stop_text_input()
+        self.app.player_name = name
+        self.app.set_state(HardcoreSurvivalState(self.app, avatar=self.avatar, player_name=name))
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.KEYDOWN:
+            key = int(getattr(event, "key", 0))
+            if key in (pygame.K_ESCAPE,):
+                self._stop_text_input()
+                self.app.set_state(SurvivalCreateState(self.app))
+                return
+            if key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self._confirm()
+                return
+            if key in (pygame.K_BACKSPACE,):
+                try:
+                    self.name = str(getattr(self, "name", ""))[:-1]
+                except Exception:
+                    self.name = ""
+                return
+            return
+
+        if event.type == getattr(pygame, "TEXTINPUT", None):
+            text = str(getattr(event, "text", "") or "")
+            if not text:
+                return
+            cur = str(getattr(self, "name", "") or "")
+            cur = cur + text
+            self.name = self._sanitize_name(cur)
+
+    def update(self, dt: float) -> None:
+        self.blink_t = float(getattr(self, "blink_t", 0.0)) + float(dt)
+
+    def draw(self, surface: pygame.Surface) -> None:
+        surface.fill((14, 14, 18))
+        draw_text(surface, self.app.font_l, "请输入姓名", (INTERNAL_W // 2, 34), pygame.Color(240, 240, 240), anchor="center")
+        draw_text(
+            surface,
+            self.app.font_s,
+            "Enter 确认 | Esc 返回 | Backspace 删除",
+            (INTERNAL_W // 2, 56),
+            pygame.Color(180, 180, 190),
+            anchor="center",
+        )
+
+        box = pygame.Rect(0, 0, 300, 34)
+        box.center = (INTERNAL_W // 2, 110)
+        pygame.draw.rect(surface, (22, 22, 28), box, border_radius=8)
+        pygame.draw.rect(surface, (90, 90, 110), box, 2, border_radius=8)
+
+        name = self._sanitize_name(getattr(self, "name", ""))
+        cursor = "|" if int(float(getattr(self, "blink_t", 0.0)) * 2.0) % 2 == 0 else " "
+        shown = (name if name else "（输入你的名字）") + cursor
+        col = pygame.Color(240, 240, 240) if name else pygame.Color(150, 150, 165)
+        draw_text(surface, self.app.font_m, shown, (box.centerx, box.centery - 1), col, anchor="center")
+
+        if str(getattr(self, "msg", "")).strip():
+            draw_text(surface, self.app.font_s, str(self.msg), (INTERNAL_W // 2, 148), pygame.Color(255, 220, 140), anchor="center")
 
 
 class HardcoreSurvivalState(State):
@@ -2765,10 +2869,13 @@ class HardcoreSurvivalState(State):
         "snow": "雪",
     }
 
-    def __init__(self, app: "App", *, avatar: SurvivalAvatar | None = None) -> None:
+    def __init__(self, app: "App", *, avatar: SurvivalAvatar | None = None, player_name: str | None = None) -> None:
         super().__init__(app)
         self.avatar = avatar if avatar is not None else SurvivalAvatar()
         self.avatar.clamp_all()
+        self.player_name = str(player_name or getattr(app, "player_name", "") or "").strip()[:10]
+        if len(self.player_name) < 2:
+            self.player_name = "玩家"
 
     @dataclass(frozen=True)
     class _TileDef:
@@ -12213,6 +12320,20 @@ class HardcoreSurvivalState(State):
         self.dialog_reveal = 0.0  # float char cursor
         self.dialog_speed = 42.0  # chars/sec
         self.dialog_blink = 0.0
+        # Conversation/dialog with choices (NPC/story). Separate from the simple
+        # dialog so existing prompts keep working.
+        self.conv_open = False
+        self.conv_script = ""
+        self.conv_node = ""
+        self.conv_ctx: dict[str, object] = {}
+        self.conv_speaker = ""
+        self.conv_text_full = ""
+        self.conv_options: list[dict[str, object]] = []
+        self.conv_reveal = 0.0
+        self.conv_speed = 60.0
+        self.conv_blink = 0.0
+        self.conv_choice = 0
+        self.conv_option_rects: list[tuple[pygame.Rect, int]] = []
         # Non-blocking speech bubble (doesn't swallow input).
         self.speech_text = ""
         self.speech_left = 0.0
@@ -12271,6 +12392,9 @@ class HardcoreSurvivalState(State):
         self.world_map_drag_start: tuple[int, int] = (0, 0)
         self.world_map_drag_center: tuple[int, int] = (0, 0)
 
+        # Story mode (disaster prelude) bootstrap.
+        self._story_init()
+
     def handle_event(self, event: pygame.event.Event) -> None:
         if bool(getattr(self, "pause_open", False)):
             if event.type == pygame.KEYDOWN and int(event.key) in (pygame.K_ESCAPE,):
@@ -12302,6 +12426,15 @@ class HardcoreSurvivalState(State):
 
         # High-rise travel (elevator/stairs) blocks input while the timer runs.
         if bool(getattr(self, "hr_interior", False)) and bool(getattr(self, "hr_travel_active", False)):
+            return
+
+        if getattr(self, "conv_open", False):
+            if event.type == pygame.KEYDOWN:
+                self._conv_handle_key(int(getattr(event, "key", 0)))
+                return
+            if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
+                self._conv_handle_mouse(event)
+                return
             return
 
         if getattr(self, "dialog_open", False):
@@ -21322,6 +21455,7 @@ class HardcoreSurvivalState(State):
                 self.hint_text = ""
 
         self._dialog_update(float(dt))
+        self._conv_update(float(dt))
         if float(getattr(self, "speech_left", 0.0)) > 0.0:
             self.speech_left = max(0.0, float(getattr(self, "speech_left", 0.0)) - dt)
             if float(self.speech_left) <= 0.0:
@@ -21381,7 +21515,7 @@ class HardcoreSurvivalState(State):
                     self.app.set_state(MainMenuState(self.app))
             return
 
-        if self.inv_open or getattr(self, "rv_ui_open", False) or getattr(self, "home_ui_open", False) or getattr(self, "hr_elevator_ui_open", False) or getattr(self, "world_elevator_ui_open", False) or getattr(self, "sch_elevator_ui_open", False) or getattr(self, "_gallery_open", False) or getattr(self, "world_map_open", False):
+        if self.inv_open or getattr(self, "rv_ui_open", False) or getattr(self, "home_ui_open", False) or getattr(self, "hr_elevator_ui_open", False) or getattr(self, "world_elevator_ui_open", False) or getattr(self, "sch_elevator_ui_open", False) or getattr(self, "_gallery_open", False) or getattr(self, "world_map_open", False) or getattr(self, "conv_open", False):
             self.player.vel.update(0, 0)
             self.player.walk_phase *= 0.85
             self.rv.vel.update(0, 0)
@@ -21401,6 +21535,7 @@ class HardcoreSurvivalState(State):
 
         self.world_time_s += dt_time
         self._update_weather(dt_time)
+        self._story_update(dt_time)
 
         if getattr(self, "noise_left", 0.0) > 0.0:
             self.noise_left = max(0.0, float(self.noise_left) - dt_time)
@@ -22383,6 +22518,653 @@ class HardcoreSurvivalState(State):
             return
         speed = float(getattr(self, "dialog_speed", 42.0))
         self.dialog_reveal = float(min(float(len(full)), float(getattr(self, "dialog_reveal", 0.0)) + speed * float(dt)))
+
+    def _wrap_text_lines(self, text: str, font: pygame.font.Font, max_w: int) -> list[str]:
+        max_w = int(max(1, max_w))
+        out: list[str] = []
+        for para in str(text).split("\n"):
+            cur = ""
+            for ch in str(para):
+                test = cur + ch
+                if cur and font.size(test)[0] > max_w:
+                    out.append(cur)
+                    cur = ch
+                else:
+                    cur = test
+            out.append(cur)
+        while len(out) > 1 and not str(out[-1]).strip():
+            out.pop()
+        return out
+
+    def _conv_close(self) -> None:
+        self.conv_open = False
+        self.conv_script = ""
+        self.conv_node = ""
+        self.conv_ctx = {}
+        self.conv_speaker = ""
+        self.conv_text_full = ""
+        self.conv_options = []
+        self.conv_reveal = 0.0
+        self.conv_blink = 0.0
+        self.conv_choice = 0
+        self.conv_option_rects = []
+
+    def _conv_finished(self) -> bool:
+        full = str(getattr(self, "conv_text_full", ""))
+        return int(max(0.0, float(getattr(self, "conv_reveal", 0.0)))) >= len(full)
+
+    def _conv_finish(self) -> None:
+        full = str(getattr(self, "conv_text_full", ""))
+        self.conv_reveal = float(len(full))
+
+    def _conv_update(self, dt: float) -> None:
+        if not bool(getattr(self, "conv_open", False)):
+            return
+        full = str(getattr(self, "conv_text_full", ""))
+        if not full:
+            self.conv_reveal = 0.0
+            return
+        self.conv_blink = float(getattr(self, "conv_blink", 0.0)) + float(dt)
+        if self._conv_finished():
+            return
+        speed = float(getattr(self, "conv_speed", 60.0))
+        self.conv_reveal = float(min(float(len(full)), float(getattr(self, "conv_reveal", 0.0)) + speed * float(dt)))
+
+    def _conv_format(self, text: str) -> str:
+        text = str(text)
+        try:
+            text = text.replace("{PLAYER_NAME}", str(getattr(self, "player_name", "玩家")))
+        except Exception:
+            pass
+        return text
+
+    def _conv_open_node(
+        self,
+        *,
+        speaker: str,
+        text: str,
+        options: list[dict[str, object]] | None = None,
+        script: str = "",
+        node: str = "",
+        ctx: dict[str, object] | None = None,
+        speed: float = 60.0,
+    ) -> None:
+        self.conv_open = True
+        self.conv_script = str(script)
+        self.conv_node = str(node)
+        self.conv_ctx = dict(ctx) if isinstance(ctx, dict) else {}
+        self.conv_speaker = str(speaker)
+        self.conv_text_full = self._conv_format(str(text))
+        self.conv_options = list(options) if isinstance(options, list) else []
+        self.conv_reveal = 0.0
+        self.conv_speed = float(clamp(float(speed), 10.0, 180.0))
+        self.conv_blink = 0.0
+        self.conv_choice = 0
+        self.conv_option_rects = []
+
+    def _conv_open_script(self, script_id: str, *, node: str = "start", ctx: dict[str, object] | None = None) -> None:
+        scripts = getattr(self, "_CONV_SCRIPTS", None)
+        if not isinstance(scripts, dict):
+            self._conv_open_node(speaker="系统", text="（对话脚本丢失）", options=[{"label": "关闭", "action": "close"}])
+            return
+        script = scripts.get(str(script_id))
+        if not isinstance(script, dict):
+            self._conv_open_node(speaker="系统", text="（对话脚本不存在）", options=[{"label": "关闭", "action": "close"}])
+            return
+        nd = script.get(str(node))
+        if not isinstance(nd, dict):
+            self._conv_open_node(speaker="系统", text="（对话节点不存在）", options=[{"label": "关闭", "action": "close"}])
+            return
+        speaker = str(nd.get("speaker", "") or script.get("speaker", "") or "???")
+        text = str(nd.get("text", "") or "")
+        options = nd.get("options", [])
+        self._conv_open_node(
+            speaker=speaker,
+            text=text,
+            options=[dict(o) for o in options] if isinstance(options, list) else [],
+            script=str(script_id),
+            node=str(node),
+            ctx=ctx,
+            speed=float(nd.get("speed", 60.0) if isinstance(nd.get("speed", 60.0), (int, float)) else 60.0),
+        )
+
+    def _conv_dispatch_action(self, action: str, opt: dict[str, object]) -> bool:
+        action = str(action).strip()
+        if not action or action == "close":
+            self._conv_close()
+            return True
+        if action.startswith("hint:"):
+            msg = action.split(":", 1)[1].strip()
+            if msg:
+                self._set_hint(msg, seconds=1.4)
+            return True
+        if action.startswith("set_flag:"):
+            flag = action.split(":", 1)[1].strip()
+            flags = getattr(self, "story_flags", None)
+            if not isinstance(flags, set):
+                flags = set()
+                self.story_flags = flags
+            if flag:
+                flags.add(flag)
+            return True
+        if action.startswith("clear_flag:"):
+            flag = action.split(":", 1)[1].strip()
+            flags = getattr(self, "story_flags", None)
+            if isinstance(flags, set) and flag:
+                flags.discard(flag)
+            return True
+        if action.startswith("trust:"):
+            # trust:<npc_id>:<delta>
+            parts = action.split(":")
+            if len(parts) >= 3:
+                npc_id = str(parts[1]).strip()
+                try:
+                    delta = float(parts[2])
+                except Exception:
+                    delta = 0.0
+                if npc_id:
+                    trust = getattr(self, "npc_trust", None)
+                    if not isinstance(trust, dict):
+                        trust = {}
+                        self.npc_trust = trust
+                    trust[npc_id] = float(trust.get(npc_id, 50.0)) + float(delta)
+            return True
+        if action.startswith("give_item:"):
+            # give_item:<item_id>:<qty>
+            parts = action.split(":")
+            if len(parts) >= 3:
+                item_id = str(parts[1]).strip()
+                try:
+                    qty = int(float(parts[2]))
+                except Exception:
+                    qty = 1
+                if item_id and qty > 0 and isinstance(getattr(self, "inventory", None), HardcoreSurvivalState._Inventory):
+                    self.inventory.add(item_id, int(qty), self._ITEMS)
+            return True
+        if action == "knock_open":
+            # A brutal "you opened the door" story fail.
+            try:
+                self.player.hp = 0
+            except Exception:
+                pass
+            self._set_hint("你开门了……他们冲了进来。", seconds=2.0)
+            self._conv_close()
+            return True
+        return False
+
+    def _conv_choose(self, idx: int) -> None:
+        if not bool(getattr(self, "conv_open", False)):
+            return
+        if not self._conv_finished():
+            self._conv_finish()
+            return
+        opts = getattr(self, "conv_options", None)
+        if not isinstance(opts, list) or not opts:
+            self._conv_close()
+            return
+        idx = int(idx)
+        if not (0 <= idx < len(opts)):
+            return
+        opt = opts[idx]
+        if not isinstance(opt, dict):
+            self._conv_close()
+            return
+
+        act = opt.get("action")
+        if isinstance(act, str) and act:
+            self._conv_dispatch_action(str(act), opt)
+            if not bool(getattr(self, "conv_open", False)):
+                return
+
+        nxt = opt.get("next")
+        if isinstance(nxt, str) and nxt:
+            self._conv_open_script(str(getattr(self, "conv_script", "")), node=str(nxt), ctx=dict(getattr(self, "conv_ctx", {}) or {}))
+            return
+
+        if not bool(opt.get("stay", False)):
+            self._conv_close()
+
+    def _conv_handle_key(self, key: int) -> None:
+        key = int(key)
+        if key in (pygame.K_ESCAPE,):
+            self._conv_close()
+            return
+        if key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_e):
+            self._conv_choose(int(getattr(self, "conv_choice", 0)))
+            return
+        opts = getattr(self, "conv_options", None)
+        n = len(opts) if isinstance(opts, list) else 0
+        if n <= 0:
+            return
+        if key in (pygame.K_UP, pygame.K_w):
+            self.conv_choice = (int(getattr(self, "conv_choice", 0)) - 1) % n
+            return
+        if key in (pygame.K_DOWN, pygame.K_s):
+            self.conv_choice = (int(getattr(self, "conv_choice", 0)) + 1) % n
+            return
+        if pygame.K_1 <= key <= pygame.K_9:
+            i = int(key - pygame.K_1)
+            if 0 <= i < n:
+                self.conv_choice = int(i)
+                self._conv_choose(int(i))
+            return
+
+    def _conv_handle_mouse(self, event: pygame.event.Event) -> None:
+        if not hasattr(event, "pos"):
+            return
+        internal = self.app.screen_to_internal(getattr(event, "pos", (0, 0)))
+        if internal is None:
+            return
+        mx, my = int(internal[0]), int(internal[1])
+        rects = getattr(self, "conv_option_rects", None)
+        if not isinstance(rects, list):
+            return
+        for r, idx in rects:
+            if not isinstance(r, pygame.Rect):
+                continue
+            if r.collidepoint(mx, my):
+                self.conv_choice = int(idx)
+                if event.type == pygame.MOUSEBUTTONDOWN and int(getattr(event, "button", 0)) == 1:
+                    self._conv_choose(int(idx))
+                return
+
+    def _draw_conversation(self, surface: pygame.Surface) -> None:
+        if not bool(getattr(self, "conv_open", False)):
+            return
+        speaker = str(getattr(self, "conv_speaker", "")).strip() or "???"
+        full = str(getattr(self, "conv_text_full", ""))
+        shown = full[: int(max(0.0, float(getattr(self, "conv_reveal", 0.0))))]
+        opts = getattr(self, "conv_options", None)
+        options = opts if isinstance(opts, list) else []
+
+        pad_x = 12
+        pad_y = 10
+        panel_h = 120
+        panel = pygame.Rect(pad_x, INTERNAL_H - panel_h - pad_y, INTERNAL_W - pad_x * 2, panel_h)
+        if panel.y < 6:
+            panel.y = 6
+
+        ui = pygame.Surface((panel.w, panel.h), pygame.SRCALPHA)
+        ui.fill((0, 0, 0, 190))
+        pygame.draw.rect(ui, (240, 220, 140, 26), ui.get_rect(), border_radius=10)
+        pygame.draw.rect(ui, (220, 220, 235, 160), ui.get_rect(), 2, border_radius=10)
+        surface.blit(ui, panel.topleft)
+
+        font_t = self.app.font_m
+        font = self.app.font_s
+        surface.blit(font_t.render(speaker, False, pygame.Color(240, 240, 240)), (panel.x + 10, panel.y + 8))
+
+        max_w = int(panel.w - 20)
+        lines = self._wrap_text_lines(shown, font, max_w)
+        lines = lines[:4]
+        tx = panel.x + 10
+        ty = panel.y + 30
+        for ln in lines:
+            surface.blit(font.render(str(ln), False, pygame.Color(230, 230, 240)), (tx, ty))
+            ty += int(font.get_height() + 2)
+
+        # Cursor while typing.
+        if not self._conv_finished() and (int(float(getattr(self, "conv_blink", 0.0)) * 3.0) % 2 == 0):
+            last_ln = str(lines[-1]) if lines else ""
+            cx = tx + max(0, int(font.size(last_ln)[0]))
+            cy = ty - int(font.get_height() + 2)
+            surface.blit(font.render("|", False, pygame.Color(240, 220, 140)), (cx, cy))
+
+        # Options (buttons).
+        self.conv_option_rects = []
+        if options:
+            btn_h = int(font.get_height() + 8)
+            gap = 4
+            total_h = int(len(options) * btn_h + max(0, len(options) - 1) * gap)
+            by = int(panel.bottom - 8 - total_h)
+            bx = int(panel.x + 10)
+            bw = int(panel.w - 20)
+
+            mouse = self.app.screen_to_internal(pygame.mouse.get_pos())
+            mx, my = (int(mouse[0]), int(mouse[1])) if mouse is not None else (-999, -999)
+
+            for i, opt in enumerate(options[:6]):
+                label = str(opt.get("label", f"选项{i+1}")) if isinstance(opt, dict) else f"选项{i+1}"
+                r = pygame.Rect(int(bx), int(by + i * (btn_h + gap)), int(bw), int(btn_h))
+                hot = r.collidepoint(mx, my)
+                selected = int(getattr(self, "conv_choice", 0)) == int(i)
+                bg = (55, 55, 70) if hot or selected else (30, 30, 38)
+                border = (235, 210, 90) if selected else (140, 140, 160)
+                pygame.draw.rect(surface, bg, r, border_radius=6)
+                pygame.draw.rect(surface, border, r, 2 if selected else 1, border_radius=6)
+                tip = f"{i+1}. {label}" if len(options) <= 9 else str(label)
+                draw_text(surface, font, tip, (r.left + 8, r.centery - 1), pygame.Color(240, 240, 240), anchor="topleft")
+                self.conv_option_rects.append((r, int(i)))
+
+    def _story_world_day(self) -> int:
+        return int(self.world_time_s / max(1e-6, float(self.DAY_LENGTH_S))) + 1
+
+    def _story_day_offset(self) -> int:
+        # World day 1 == D-3, world day 4 == D0.
+        day0 = int(getattr(self, "story_day0_world_day", 4))
+        return int(self._story_world_day()) - int(day0)
+
+    def _story_is_pre_apocalypse(self) -> bool:
+        day = int(self._story_world_day())
+        day0 = int(getattr(self, "story_day0_world_day", 4))
+        t = float(self._time_of_day())
+        outbreak_t = float(getattr(self, "story_outbreak_time", 6.0 / 24.0))
+        if day < day0:
+            return True
+        if day == day0 and t < outbreak_t:
+            return True
+        return False
+
+    def _story_add_marker(self, tx: int, ty: int, label: str, *, color: tuple[int, int, int] = (255, 220, 140)) -> None:
+        markers = getattr(self, "world_map_markers", None)
+        if not isinstance(markers, list):
+            self.world_map_markers = []
+            markers = self.world_map_markers
+        tx = int(tx)
+        ty = int(ty)
+        label = str(label)
+        color = (int(color[0]), int(color[1]), int(color[2]))
+        # De-dupe by label.
+        self.world_map_markers = [m for m in markers if str(getattr(m, "label", "")) != label]
+        self.world_map_markers.append(HardcoreSurvivalState._MapMarker(tx=tx, ty=ty, label=label, color=color))
+
+    def _story_init(self) -> None:
+        # Enables the "灾难前三天" prelude. This is a content system: it can be
+        # extended without changing core combat/survival.
+        self.story_enabled = True
+        self.story_day0_world_day = 4
+        self.story_outbreak_time = 6.0 / 24.0  # ~06:00
+        self.story_flags: set[str] = set()
+        self.story_events_done: set[str] = set()
+        self.npc_trust: dict[str, float] = {}
+
+        # Ensure story items exist (kept here to avoid touching the bulk-item generator).
+        try:
+            if "home_peephole_kit" not in self._ITEMS:
+                self._ITEMS["home_peephole_kit"] = HardcoreSurvivalState._ItemDef(
+                    id="home_peephole_kit",
+                    name="猫眼套件",
+                    stack=1,
+                    color=(170, 170, 190),
+                    kind="home_upgrade",
+                    desc="装上它，你终于能‘先看再开门’。",
+                )
+            if "home_door_chain" not in self._ITEMS:
+                self._ITEMS["home_door_chain"] = HardcoreSurvivalState._ItemDef(
+                    id="home_door_chain",
+                    name="门链",
+                    stack=1,
+                    color=(170, 150, 120),
+                    kind="home_upgrade",
+                    desc="半开门神器：交易可以，冲门不行。",
+                )
+        except Exception:
+            pass
+
+        # Home upgrades (door vision / partial open).
+        self.home_has_peephole = False
+        self.home_has_chain = False
+
+        # Key POIs for the prelude (simple, deterministic positions near spawn).
+        stx, sty = self._player_tile()
+        self.story_work_tile = (int(stx), int(sty + 6))
+        self.story_hardware_tile = (int(stx + 8), int(sty + 2))
+        self.story_cafe_tile = (int(stx - 6), int(sty + 2))
+
+        try:
+            gate_x0 = int(getattr(self.world, "compound_gate_x0", 0))
+            gate_x1 = int(getattr(self.world, "compound_gate_x1", 0))
+            gate_y = int(getattr(self.world, "compound_ty1", 0))
+            self.story_gate_tile = (int((gate_x0 + gate_x1) // 2), int(gate_y))
+        except Exception:
+            self.story_gate_tile = (int(stx), int(sty))
+
+        self._story_add_marker(int(self.story_gate_tile[0]), int(self.story_gate_tile[1]), "小区门口", color=(255, 220, 140))
+        self._story_add_marker(int(self.story_work_tile[0]), int(self.story_work_tile[1]), "上班地点", color=(160, 220, 255))
+        self._story_add_marker(int(self.story_hardware_tile[0]), int(self.story_hardware_tile[1]), "五金店", color=(200, 200, 210))
+        self._story_add_marker(int(self.story_cafe_tile[0]), int(self.story_cafe_tile[1]), "咖啡店", color=(240, 200, 140))
+
+        # Story NPCs (lightweight pedestrians for the prelude).
+        self.npcs: list[dict[str, object]] = []
+
+        def npc_pos_from_tile(tx: int, ty: int) -> pygame.Vector2:
+            return pygame.Vector2((float(tx) + 0.5) * float(self.TILE_SIZE), (float(ty) + 0.5) * float(self.TILE_SIZE))
+
+        def make_avatar(*, gender: int, outfit: int) -> SurvivalAvatar:
+            av = SurvivalAvatar(
+                gender=int(gender),
+                height=random.choice([0, 1, 1, 2]),
+                face=random.randrange(0, 3),
+                eyes=random.randrange(0, 4),
+                hair=random.randrange(0, 4),
+                nose=random.randrange(0, 3),
+                outfit=int(outfit),
+            )
+            av.clamp_all()
+            return av
+
+        def add_npc(
+            npc_id: str,
+            name: str,
+            *,
+            tile: tuple[int, int],
+            home: tuple[int, int] | None = None,
+            work: tuple[int, int] | None = None,
+            gender: int = 0,
+            outfit: int = 0,
+            speed: float = 28.0,
+            script: str = "",
+        ) -> None:
+            av = make_avatar(gender=int(gender), outfit=int(outfit))
+            frames = HardcoreSurvivalState.build_avatar_player_frames(av, run=False)
+            tx, ty = int(tile[0]), int(tile[1])
+            self.npcs.append(
+                {
+                    "id": str(npc_id),
+                    "name": str(name),
+                    "pos": npc_pos_from_tile(int(tx), int(ty)),
+                    "dir": "down",
+                    "walk": random.random() * 2.0,
+                    "speed": float(speed),
+                    "home": tuple(home) if isinstance(home, tuple) and len(home) == 2 else (int(tx), int(ty)),
+                    "work": tuple(work) if isinstance(work, tuple) and len(work) == 2 else (int(tx), int(ty)),
+                    "frames": frames,
+                    "script": str(script),
+                    "avatar": av,
+                }
+            )
+
+        # Key NPCs around the core POIs.
+        gate_tx, gate_ty = tuple(getattr(self, "story_gate_tile", (stx, sty)))
+        work_tx, work_ty = tuple(getattr(self, "story_work_tile", (stx, sty)))
+        cafe_tx, cafe_ty = tuple(getattr(self, "story_cafe_tile", (stx, sty)))
+        home_door = getattr(self, "home_highrise_door", None)
+        home_tx, home_ty = (int(home_door[0]), int(home_door[1])) if isinstance(home_door, tuple) and len(home_door) == 2 else (int(stx), int(sty))
+
+        add_npc("zhou_guard", "老周", tile=(int(gate_tx), int(gate_ty) - 1), home=(int(gate_tx), int(gate_ty) - 1), work=(int(gate_tx), int(gate_ty) - 1), gender=0, outfit=1, speed=0.0, script="npc_guard_zhou")
+        add_npc("lin_coworker", "小林", tile=(int(work_tx), int(work_ty)), home=(int(home_tx), int(home_ty) - 2), work=(int(work_tx), int(work_ty)), gender=0, outfit=1, script="npc_coworker_lin")
+        add_npc("qiao_white", "阿乔", tile=(int(cafe_tx), int(cafe_ty)), home=(int(home_tx) + 2, int(home_ty) - 2), work=(int(cafe_tx), int(cafe_ty)), gender=1, outfit=0, script="npc_aqiao")
+        add_npc("nana_influencer", "娜娜", tile=(int(cafe_tx) + 2, int(cafe_ty) + 1), home=(int(home_tx) - 2, int(home_ty) - 2), work=(int(cafe_tx) + 2, int(cafe_ty) + 1), gender=1, outfit=6, script="npc_nana")
+        add_npc("green_tea", "绿茶姐", tile=(int(home_tx) - 1, int(home_ty) - 1), home=(int(home_tx) - 1, int(home_ty) - 1), work=(int(cafe_tx) - 2, int(cafe_ty) + 2), gender=1, outfit=6, script="npc_green_tea")
+        add_npc("muscle_guy", "肌肉男", tile=(int(home_tx) - 2, int(home_ty) - 1), home=(int(home_tx) - 2, int(home_ty) - 1), work=(int(cafe_tx) - 3, int(cafe_ty) + 2), gender=0, outfit=2, script="npc_muscle_guy")
+
+        # Conversation scripts for story NPCs.
+        self._CONV_SCRIPTS = {
+            "npc_guard_zhou": {
+                "start": {
+                    "speaker": "老周（保安）",
+                    "text": "哎 {PLAYER_NAME}，你这两天怎么老往外跑？外面不太平，门关严点。",
+                    "options": [
+                        {"label": "最近是不是不太对劲？", "action": "hint:医院那边救护车变多了……", "next": "news"},
+                        {"label": "我想加固家门（猫眼/门链）", "action": "hint:地图上标了五金店，去看看。", "next": "fortify"},
+                        {"label": "先走了", "action": "close"},
+                    ],
+                },
+                "news": {
+                    "speaker": "老周（保安）",
+                    "text": "你也感觉到了？反正记住——别乱开门。真要买东西就趁早。",
+                    "options": [{"label": "明白了", "action": "set_flag:ZHOU_WARNED", "next": "start"}],
+                },
+                "fortify": {
+                    "speaker": "老周（保安）",
+                    "text": "门链、猫眼、木板钉子……这些都是救命的。你别嫌麻烦。",
+                    "options": [{"label": "谢谢", "action": "set_flag:KNOWS_FORTIFY", "action2": "", "next": "start"}],
+                },
+            },
+            "npc_coworker_lin": {
+                "start": {
+                    "speaker": "小林（同事）",
+                    "text": "{PLAYER_NAME}，你也来了？今天群里都在说医院出事，但官方还在辟谣。",
+                    "options": [
+                        {"label": "医院到底怎么了？", "action": "set_flag:RUMOR_BITE", "next": "rumor"},
+                        {"label": "我先打卡上班", "action": "set_flag:WORK_CLOCKED", "next": "clocked"},
+                        {"label": "先不聊了", "action": "close"},
+                    ],
+                },
+                "rumor": {
+                    "speaker": "小林（同事）",
+                    "text": "听说有人咬人……你别笑，我也不信，但我心里发毛。",
+                    "options": [{"label": "我会小心", "action": "close"}],
+                },
+                "clocked": {
+                    "speaker": "小林（同事）",
+                    "text": "行，晚上早点回去。对了，五金店那边好像还有木板钉子。",
+                    "options": [{"label": "收到", "action": "hint:记得趁灾难前把门弄结实。", "action2": "", "stay": False}],
+                },
+            },
+            "npc_aqiao": {
+                "start": {
+                    "speaker": "阿乔（咖啡店）",
+                    "text": "你也来买咖啡？今天街上有点怪……别太晚回家。",
+                    "options": [
+                        {"label": "你也感觉到了？", "action": "hint:她压低声音：‘别开陌生人的门。’", "next": "warn"},
+                        {"label": "我能帮你什么吗？", "action": "set_flag:AQIAO_BOND", "next": "task"},
+                        {"label": "先走啦", "action": "close"},
+                    ],
+                },
+                "warn": {
+                    "speaker": "阿乔（咖啡店）",
+                    "text": "我朋友在医院，她说这两天千万别去凑热闹。",
+                    "options": [{"label": "谢谢提醒", "action": "close"}],
+                },
+                "task": {
+                    "speaker": "阿乔（咖啡店）",
+                    "text": "如果后面真乱了……我可能需要一点绷带。你有的话，记得留一点。",
+                    "options": [{"label": "我会的", "action": "close"}],
+                },
+            },
+            "npc_nana": {
+                "start": {
+                    "speaker": "娜娜（网红）",
+                    "text": "我刚直播完，超市都被抢空了！你说大家是不是太夸张？",
+                    "options": [
+                        {"label": "别直播了，会惹麻烦", "action": "set_flag:NANA_WARNED", "next": "stop"},
+                        {"label": "你听到什么消息？", "action": "hint:谣言满天飞：‘有人咬人’。", "next": "rumor"},
+                        {"label": "随你", "action": "close"},
+                    ],
+                },
+                "stop": {"speaker": "娜娜（网红）", "text": "哎？你这么认真……行吧行吧，我先收一收。", "options": [{"label": "这才乖", "action": "close"}]},
+                "rumor": {"speaker": "娜娜（网红）", "text": "我刷到好多短视频……真假我也不知道。", "options": [{"label": "懂了", "action": "close"}]},
+            },
+            "npc_green_tea": {
+                "start": {
+                    "speaker": "绿茶姐（邻居）",
+                    "text": "哎呀～{PLAYER_NAME}，你家是不是囤了点东西？借我个充电宝嘛。",
+                    "options": [
+                        {"label": "你怎么知道我名字？", "action": "set_flag:GREEN_TEA_KNOWS_NAME", "next": "name"},
+                        {"label": "不给", "action": "hint:她撇嘴：‘小气。’", "next": "start"},
+                        {"label": "先走了", "action": "close"},
+                    ],
+                },
+                "name": {
+                    "speaker": "绿茶姐（邻居）",
+                    "text": "楼道里谁不认识谁呀～以后互相照应嘛。",
+                    "options": [{"label": "……", "action": "close"}],
+                },
+            },
+            "npc_muscle_guy": {
+                "start": {
+                    "speaker": "肌肉男",
+                    "text": "你看什么？有事？",
+                    "options": [
+                        {"label": "没事", "action": "close"},
+                        {"label": "最近外面不对劲", "action": "hint:他冷笑一声：‘怕就躲家里。’", "next": "start"},
+                    ],
+                }
+            },
+        }
+
+        # Prelude starts with no zombies; outbreak will enable them.
+        self.zombie_cap = 0
+
+        # One-time intro.
+        try:
+            if "PRELUDE_INTRO" not in self.story_events_done:
+                self.story_events_done.add("PRELUDE_INTRO")
+                self._dialog_start(
+                    "序章",
+                    [
+                        f"{str(getattr(self, 'player_name', '玩家'))}：今天一切看起来都很正常。",
+                        "但你隐隐觉得：这座小镇要出事了。",
+                        "（你有 3 天时间：加固家门、囤物资、结识关键 NPC。）",
+                    ],
+                    speed=52.0,
+                )
+        except Exception:
+            pass
+
+    def _story_update(self, dt_time: float) -> None:
+        if not bool(getattr(self, "story_enabled", False)):
+            return
+        dt_time = float(max(0.0, dt_time))
+
+        pre = bool(self._story_is_pre_apocalypse())
+        day = int(self._story_world_day())
+        t = float(self._time_of_day())
+        offset = int(self._story_day_offset())
+
+        # Toggle zombies at outbreak.
+        if pre:
+            self.zombie_cap = 0
+        else:
+            if int(getattr(self, "zombie_cap", 0)) <= 0:
+                self.zombie_cap = 8
+
+        # Outbreak announcement (once).
+        if (not pre) and "OUTBREAK" not in self.story_events_done:
+            self.story_events_done.add("OUTBREAK")
+            self._dialog_start(
+                "警报",
+                [
+                    "手机信号断断续续。",
+                    "广播里只有一句话：不要开门。",
+                    "——然后，远处传来第一声尖叫。",
+                ],
+                speed=58.0,
+            )
+
+        # D-2: hardware store preps (spawn kits on the ground once).
+        if offset == -2 and "HW_KITS" not in self.story_events_done and t >= 0.40:
+            self.story_events_done.add("HW_KITS")
+            tx, ty = tuple(getattr(self, "story_hardware_tile", (0, 0)))
+            pos = pygame.Vector2((float(tx) + 0.5) * float(self.TILE_SIZE), (float(ty) + 0.5) * float(self.TILE_SIZE))
+            for iid, qty in (
+                ("home_peephole_kit", 1),
+                ("home_door_chain", 1),
+                ("plank", 2),
+                ("nails", 10),
+            ):
+                if iid in self._ITEMS:
+                    self._drop_world_item(pos + pygame.Vector2(random.uniform(-6, 6), random.uniform(-6, 6)), iid, int(qty))
+            self._set_hint("五金店到了：可以拿猫眼/门链/木板/钉子", seconds=2.0)
+
+        # Morning reminder: go to work (one ping per day during prelude).
+        if pre and 0.34 <= t <= 0.42:
+            last = int(getattr(self, "story_last_work_ping_day", 0))
+            if int(day) != int(last):
+                self.story_last_work_ping_day = int(day)
+                if offset in (-3, -2, -1):
+                    self._set_hint("去上班打卡（看地图：上班地点）", seconds=1.6)
 
     def _speech_say(self, text: str, *, seconds: float = 1.2) -> None:
         self.speech_text = str(text)
@@ -27505,9 +28287,10 @@ class HardcoreSurvivalState(State):
 
     def _compute_player_pixel_lock_world_xy(self) -> tuple[int, int]:
         # Integer world coords used for pixel-locked camera/render/aim.
-        # NOTE: Pure floor/floor can produce a visible "stutter" on same-sign
-        # diagonals (up-left/down-right) when per-axis motion is < 1px/frame. Mixing rounding on
-        # one axis avoids frames where *both* axes don't advance.
+        # NOTE: Pure floor/floor keeps the camera stable (no axis "wobble") at the
+        # cost of occasional 1-frame stalls on slow diagonals. This is preferable
+        # for the current pixel-locked renderer because it avoids the more
+        # noticeable up-left/down-right shake reported by players.
         try:
             px = float(self.player.pos.x)
             py = float(self.player.pos.y)
@@ -27515,21 +28298,8 @@ class HardcoreSurvivalState(State):
             px = float(getattr(getattr(self.player, "pos", None), "x", 0.0))
             py = float(getattr(getattr(self.player, "pos", None), "y", 0.0))
 
-        try:
-            vx = float(self.player.vel.x)
-            vy = float(self.player.vel.y)
-        except Exception:
-            vx = float(getattr(getattr(self.player, "vel", None), "x", 0.0))
-            vy = float(getattr(getattr(self.player, "vel", None), "y", 0.0))
-
-        eps = 1e-6
-        diag = abs(vx) > eps and abs(vy) > eps
-        if diag and (vx * vy) > 0.0:
-            ix = int(math.floor(px))
-            iy = int(iround(py))
-        else:
-            ix = int(math.floor(px))
-            iy = int(math.floor(py))
+        ix = int(math.floor(px))
+        iy = int(math.floor(py))
         return int(ix), int(iy)
 
     def _compute_aim_dir(self) -> pygame.Vector2:
@@ -34022,6 +34792,7 @@ class HardcoreSurvivalState(State):
                 self._draw_sprite_gallery_ui(surface)
             self._draw_speech_bubble(surface)
             self._draw_dialog(surface)
+            self._draw_conversation(surface)
             return
         if getattr(self, "sch_interior", False):
             self._hover_tooltip = None
@@ -34041,6 +34812,7 @@ class HardcoreSurvivalState(State):
                 self._draw_sprite_gallery_ui(surface)
             self._draw_speech_bubble(surface)
             self._draw_dialog(surface)
+            self._draw_conversation(surface)
             return
         if getattr(self, "hr_interior", False):
             self._hover_tooltip = None
@@ -34066,6 +34838,7 @@ class HardcoreSurvivalState(State):
                 self._draw_sprite_gallery_ui(surface)
             self._draw_speech_bubble(surface)
             self._draw_dialog(surface)
+            self._draw_conversation(surface)
             return
         cam_x = int(getattr(self, "cam_x", 0))
         cam_y = int(getattr(self, "cam_y", 0))
@@ -34405,6 +35178,7 @@ class HardcoreSurvivalState(State):
         self._draw_hover_tooltip(surface)
         self._draw_speech_bubble(surface)
         self._draw_dialog(surface)
+        self._draw_conversation(surface)
 
         if self._debug:
             self._draw_debug(surface, cam_x, cam_y_draw)
@@ -37381,7 +38155,12 @@ class GameOverState(State):
 
 def main() -> int:
     try:
-        App().run()
+        smoke = "--smoke-test" in sys.argv
+        if smoke:
+            # Headless(ish) smoke test: render a few frames then exit.
+            os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+            os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+        App().run(max_frames=10 if smoke else None)
         return 0
     except Exception as exc:
         try:
