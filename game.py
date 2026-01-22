@@ -25030,14 +25030,6 @@ class HardcoreSurvivalState(State):
             else:
                 pos.x = (float(lane_line) + 0.5) * float(self.TILE_SIZE) + float(lane_offset)
 
-            # Animate.
-            a["anim"] = float(a.get("anim", 0.0)) + float(dt_time) * (4.0 if kind == "car" else 6.0)
-            a["frame"] = int(a.get("frame", 0))
-            if kind in ("bike", "moto"):
-                a["frame"] = int(a.get("anim", 0.0)) % 2
-            else:
-                a["frame"] = int(a.get("frame", 0)) % 2
-
             # Intersection turning (adds life; keeps it "orderly" by staying on roads).
             turn_cd = float(max(0.0, float(turn_cd) - float(dt_time)))
             if turn_cd <= 0.0:
@@ -25341,16 +25333,28 @@ class HardcoreSurvivalState(State):
                     except Exception:
                         pass
 
+            # Stop-and-yield when blocked; only reverse after being stuck for a bit.
+            try:
+                block_t = float(a.get("block_t", 0.0))
+            except Exception:
+                block_t = 0.0
+
             if blocked:
-                # Bounce back along the previous lane direction to keep motion stable.
+                block_t = float(block_t) + float(dt_time)
+                # Restore the previous lane position; keep direction stable to prevent flicker.
                 pos = pygame.Vector2(prev_pos)
                 lane_axis = int(prev_lane_axis)
                 lane_line = int(prev_lane_line)
                 d = str(prev_dir)
-                if lane_axis == 0:
-                    d = "left" if d == "right" else "right"
-                else:
-                    d = "up" if d == "down" else "down"
+
+                # If we've been blocked for a while (head-on traffic jam), turn around.
+                if float(block_t) >= 1.25:
+                    block_t = 0.0
+                    if lane_axis == 0:
+                        d = "left" if d == "right" else "right"
+                    else:
+                        d = "up" if d == "down" else "down"
+
                 a["dir"] = str(d)
                 a["lane_axis"] = int(lane_axis)
                 a["lane_line"] = int(lane_line)
@@ -25369,6 +25373,27 @@ class HardcoreSurvivalState(State):
                     pos.y = (float(lane_line) + 0.5) * float(self.TILE_SIZE) + float(lane_offset)
                 else:
                     pos.x = (float(lane_line) + 0.5) * float(self.TILE_SIZE) + float(lane_offset)
+            else:
+                block_t = float(max(0.0, float(block_t) - float(dt_time) * 2.5))
+
+            a["block_t"] = float(block_t)
+
+            # Animate based on actual movement (prevents wheel/pedal flicker while blocked).
+            try:
+                moved_dist = float((pygame.Vector2(pos) - pygame.Vector2(prev_pos)).length())
+            except Exception:
+                moved_dist = 0.0
+            try:
+                anim = float(a.get("anim", 0.0))
+            except Exception:
+                anim = 0.0
+            if float(moved_dist) > 0.05:
+                anim = float(anim) + float(dt_time) * (4.0 if kind == "car" else 6.0)
+            a["anim"] = float(anim)
+            if kind in ("car", "bike", "moto"):
+                a["frame"] = int(anim) % 2
+            else:
+                a["frame"] = int(a.get("frame", 0)) % 2
 
             a["turn_cd"] = float(turn_cd)
             a["pos"] = pygame.Vector2(pos)
