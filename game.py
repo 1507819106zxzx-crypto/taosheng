@@ -40601,14 +40601,43 @@ class HardcoreSurvivalState(State):
                     d2 = float(dx_t * dx_t + dy_t * dy_t)
                     outside.append((dx_t, dy_t, d2, col, lab))
 
-            for dx_t, dy_t, col, _lab in inside[:24]:
+            def is_work_marker(label: str) -> bool:
+                label = str(label or "")
+                return label in ("上班地点", "上班") or label.startswith("上班")
+
+            work_inside = [t for t in inside if is_work_marker(str(t[3]))]
+            other_inside = [t for t in inside if not is_work_marker(str(t[3]))]
+
+            # Always show the work marker more clearly (so the guidance doesn't "disappear").
+            for dx_t, dy_t, col, _lab in work_inside[:1]:
+                mx = int(map_x0 + (int(dx_t) + int(radius)) * int(scale) + int(scale) // 2)
+                my = int(map_y0 + (int(dy_t) + int(radius)) * int(scale) + int(scale) // 2)
+                pygame.draw.circle(surface, (255, 220, 140), (mx, my), 4)
+                pygame.draw.circle(surface, (0, 0, 0), (mx, my), 4, 1)
+                pygame.draw.circle(surface, tuple(col), (mx, my), 3)
+                surface.fill((255, 245, 190), pygame.Rect(int(mx - 1), int(my - 1), 2, 2))
+                draw_text(surface, self.app.font_s, "上班", (mx + 10, my - 8), pygame.Color(240, 240, 240), anchor="topleft")
+
+            for dx_t, dy_t, col, _lab in other_inside[:23]:
                 mx = int(map_x0 + (int(dx_t) + int(radius)) * int(scale) + int(scale) // 2)
                 my = int(map_y0 + (int(dy_t) + int(radius)) * int(scale) + int(scale) // 2)
                 pygame.draw.circle(surface, tuple(col), (mx, my), 2)
                 pygame.draw.circle(surface, (0, 0, 0), (mx, my), 2, 1)
 
-            outside.sort(key=lambda t: t[2])
-            for dx_t, dy_t, _d2, col, lab in outside[:3]:
+            work_outside = [t for t in outside if is_work_marker(str(t[4]))]
+            other_outside = [t for t in outside if not is_work_marker(str(t[4]))]
+
+            work_outside.sort(key=lambda t: t[2])
+            other_outside.sort(key=lambda t: t[2])
+
+            # Reserve one arrow slot for the work marker if it's off-screen.
+            if work_outside:
+                dx_t, dy_t, _d2, col, _lab = work_outside[0]
+                draw_edge_arrow(dx_t=int(dx_t), dy_t=int(dy_t), color=tuple(col), label="上班")
+                remaining = 2
+            else:
+                remaining = 3
+            for dx_t, dy_t, _d2, col, lab in other_outside[: int(remaining)]:
                 draw_edge_arrow(dx_t=int(dx_t), dy_t=int(dy_t), color=tuple(col), label=str(lab) if lab else None)
 
         return panel
