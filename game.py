@@ -23509,20 +23509,23 @@ class HardcoreSurvivalState(State):
             tx = int(tx)
             ty = int(ty)
             max_r = int(max(0, max_r))
-            for r in range(0, max_r + 1):
-                for dy in range(-r, r + 1):
-                    for dx in range(-r, r + 1):
-                        nx = int(tx + dx)
-                        ny = int(ty + dy)
-                        # Keep story NPCs/POIs outdoors (avoid being "on the facade").
-                        try:
-                            if self._peek_building_at_tile(int(nx), int(ny)) is not None:
+            for avoid_roads in (True, False):
+                for r in range(0, max_r + 1):
+                    for dy in range(-r, r + 1):
+                        for dx in range(-r, r + 1):
+                            nx = int(tx + dx)
+                            ny = int(ty + dy)
+                            # Keep story NPCs/POIs outdoors (avoid being "on the facade").
+                            try:
+                                if self._peek_building_at_tile(int(nx), int(ny)) is not None:
+                                    continue
+                            except Exception:
+                                pass
+                            tid = int(self.world.peek_tile(int(nx), int(ny)))
+                            if bool(avoid_roads) and int(tid) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
                                 continue
-                        except Exception:
-                            pass
-                        tid = int(self.world.peek_tile(int(nx), int(ny)))
-                        if not bool(self._tile_solid(int(tid))):
-                            return int(nx), int(ny)
+                            if not bool(self._tile_solid(int(tid))):
+                                return int(nx), int(ny)
             return int(tx), int(ty)
 
         # Keep these close so players will immediately see story NPCs on a fresh start.
@@ -23850,7 +23853,16 @@ class HardcoreSurvivalState(State):
                 (float(ty) + 0.5) * float(self.TILE_SIZE),
             )
 
-        def find_open_tile_near(tx: int, ty: int, *, max_r: int = 6) -> tuple[int, int]:
+        def is_road_tid(tid: int) -> bool:
+            return int(tid) in (int(self.T_ROAD), int(self.T_HIGHWAY))
+
+        def find_open_tile_near(
+            tx: int,
+            ty: int,
+            *,
+            max_r: int = 6,
+            avoid_roads: bool = False,
+        ) -> tuple[int, int]:
             tx = int(tx)
             ty = int(ty)
             max_r = int(max(0, max_r))
@@ -23865,8 +23877,12 @@ class HardcoreSurvivalState(State):
                         except Exception:
                             pass
                         tid = int(self.world.peek_tile(int(nx), int(ny)))
+                        if bool(avoid_roads) and bool(is_road_tid(int(tid))):
+                            continue
                         if not bool(self._tile_solid(int(tid))):
                             return int(nx), int(ny)
+            if bool(avoid_roads):
+                return find_open_tile_near(int(tx), int(ty), max_r=int(max_r), avoid_roads=False)
             return int(tx), int(ty)
 
         def is_open_outdoor_tile(tx: int, ty: int) -> bool:
@@ -23921,6 +23937,55 @@ class HardcoreSurvivalState(State):
             # Fallback: at least keep it walkable.
             return find_open_tile_near(int(tx), int(ty), max_r=8)
 
+        def nudge_off_road_tile(tx: int, ty: int) -> tuple[int, int]:
+            tx = int(tx)
+            ty = int(ty)
+            try:
+                tid = int(self.world.peek_tile(int(tx), int(ty)))
+            except Exception:
+                return int(tx), int(ty)
+            if not bool(is_road_tid(int(tid))):
+                return int(tx), int(ty)
+
+            on_x = False
+            on_y = False
+            try:
+                on_x = bool(road_x(int(tx))) if callable(road_x) else False
+            except Exception:
+                on_x = False
+            try:
+                on_y = bool(road_y(int(ty))) if callable(road_y) else False
+            except Exception:
+                on_y = False
+
+            # Prefer stepping onto sidewalk/pavement beside the road axis.
+            if on_y and not on_x:
+                candidates = [(tx, ty - 1), (tx, ty + 1)]
+            elif on_x and not on_y:
+                candidates = [(tx - 1, ty), (tx + 1, ty)]
+            else:
+                candidates = [(tx, ty - 1), (tx, ty + 1), (tx - 1, ty), (tx + 1, ty)]
+
+            for nx, ny in candidates:
+                nx = int(nx)
+                ny = int(ny)
+                try:
+                    if self._peek_building_at_tile(int(nx), int(ny)) is not None:
+                        continue
+                except Exception:
+                    pass
+                try:
+                    tid2 = int(self.world.peek_tile(int(nx), int(ny)))
+                    if bool(self._tile_solid(int(tid2))):
+                        continue
+                    if bool(is_road_tid(int(tid2))):
+                        continue
+                except Exception:
+                    continue
+                return int(nx), int(ny)
+
+            return find_open_tile_near(int(tx), int(ty), max_r=3, avoid_roads=True)
+
         def plan_commute_points(
             start_tile: tuple[int, int],
             dest_tile: tuple[int, int],
@@ -23945,7 +24010,8 @@ class HardcoreSurvivalState(State):
                 for tx, ty in points:
                     tx, ty = int(tx), int(ty)
                     if not is_open_outdoor_tile(int(tx), int(ty)):
-                        tx, ty = find_open_tile_near(int(tx), int(ty), max_r=8)
+                        tx, ty = find_open_tile_near(int(tx), int(ty), max_r=8, avoid_roads=True)
+                    tx, ty = nudge_off_road_tile(int(tx), int(ty))
                     cur = (int(tx), int(ty))
                     if last is None or cur != last:
                         out_tiles.append(cur)
@@ -24097,8 +24163,8 @@ class HardcoreSurvivalState(State):
             if not (isinstance(work, tuple) and len(work) == 2):
                 work = (0, 0)
             # Ensure anchors are on walkable tiles.
-            hx, hy = find_open_tile_near(int(home[0]), int(home[1]), max_r=8)
-            wx, wy = find_open_tile_near(int(work[0]), int(work[1]), max_r=8)
+            hx, hy = find_open_tile_near(int(home[0]), int(home[1]), max_r=8, avoid_roads=True)
+            wx, wy = find_open_tile_near(int(work[0]), int(work[1]), max_r=8, avoid_roads=True)
             home = (int(hx), int(hy))
             work = (int(wx), int(wy))
             npc["home"] = home
@@ -24224,7 +24290,7 @@ class HardcoreSurvivalState(State):
                     ntx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
                     nty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
                     if self._peek_building_at_tile(int(ntx), int(nty)) is not None:
-                        sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18)
+                        sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
                         pos = tile_center(int(sx), int(sy))
                         npc["pos"] = pygame.Vector2(pos)
                 except Exception:
@@ -24297,7 +24363,14 @@ class HardcoreSurvivalState(State):
                     # If we're near the anchor, sometimes pause and do an "action" instead
                     # of immediately picking a new wander target.
                     if action_target and bool(near_anchor) and float(stay_max) > 0.01:
-                        if float(rng.random()) < float(stay_chance):
+                        on_road = False
+                        try:
+                            ntx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                            nty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                            on_road = bool(is_road_tid(int(self.world.peek_tile(int(ntx), int(nty)))))
+                        except Exception:
+                            on_road = False
+                        if (not bool(on_road)) and float(rng.random()) < float(stay_chance):
                             hold = float(rng.uniform(float(stay_min), float(stay_max)))
                             npc["stay_left"] = float(hold)
                             npc["vel"] = pygame.Vector2(0, 0)
@@ -24342,7 +24415,9 @@ class HardcoreSurvivalState(State):
                         if bool(self._tile_solid(int(tid))):
                             continue
                         seen.add((tx, ty))
-                        cands.append((tx, ty))
+                        # Don't let NPCs choose road/highway tiles as "idle" goals.
+                        if not bool(is_road_tid(int(tid))):
+                            cands.append((tx, ty))
                         stack.extend([(tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)])
 
                     best_tile = (int(ax), int(ay))
@@ -24416,7 +24491,7 @@ class HardcoreSurvivalState(State):
                 ntx = int(math.floor(float(new_pos.x) / float(self.TILE_SIZE)))
                 nty = int(math.floor(float(new_pos.y) / float(self.TILE_SIZE)))
                 if self._peek_building_at_tile(int(ntx), int(nty)) is not None:
-                    sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18)
+                    sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
                     new_pos = tile_center(int(sx), int(sy))
                     moved = pygame.Vector2(0, 0)
                     npc_vel = pygame.Vector2(0, 0)
@@ -24433,9 +24508,25 @@ class HardcoreSurvivalState(State):
                 stuck_t = float(stuck_t) + float(dt_time)
             else:
                 stuck_t = max(0.0, float(stuck_t) - float(dt_time) * 1.8)
+            # Don't let NPCs remain stuck on road tiles (looks like "standing in traffic").
+            if float(stuck_t) > 0.45:
+                try:
+                    ntx = int(math.floor(float(new_pos.x) / float(self.TILE_SIZE)))
+                    nty = int(math.floor(float(new_pos.y) / float(self.TILE_SIZE)))
+                    tid = int(self.world.peek_tile(int(ntx), int(nty)))
+                    if bool(is_road_tid(int(tid))):
+                        sx, sy = find_open_tile_near(int(ntx), int(nty), max_r=10, avoid_roads=True)
+                        new_pos = tile_center(int(sx), int(sy))
+                        moved = pygame.Vector2(0, 0)
+                        npc_vel = pygame.Vector2(0, 0)
+                        goal = pygame.Vector2(new_pos)
+                        goal_left = 0.0
+                        stuck_t = 0.0
+                except Exception:
+                    pass
             if float(stuck_t) > 2.40:
                 # Hard recovery: if an NPC gets wedged, snap it back to its anchor area.
-                sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18)
+                sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
                 new_pos = tile_center(int(sx), int(sy))
                 moved = pygame.Vector2(0, 0)
                 npc_vel = pygame.Vector2(0, 0)
@@ -24464,6 +24555,9 @@ class HardcoreSurvivalState(State):
                 if npc_id == "street_thug":
                     npc["action"] = "bruce_punch" if float(atk_anim) > 0.0 else "bruce_guard"
                     npc["pose_phase"] = float(npc.get("pose_phase", 0.0)) + float(dt_time) * (7.5 if float(atk_anim) > 0.0 else 4.0)
+                elif npc_id == "muscle_guy":
+                    npc["action"] = "muscle_punch" if float(atk_anim) > 0.0 else "muscle_guard"
+                    npc["pose_phase"] = float(npc.get("pose_phase", 0.0)) + float(dt_time) * (6.5 if float(atk_anim) > 0.0 else 3.6)
 
                 try:
                     atk_left = float(npc.get("attack_left", 0.0))
@@ -24494,6 +24588,9 @@ class HardcoreSurvivalState(State):
                         if npc_id == "street_thug":
                             npc["attack_anim_left"] = float(max(float(npc.get("attack_anim_left", 0.0) or 0.0), 0.40))
                             npc["action"] = "bruce_punch"
+                        elif npc_id == "muscle_guy":
+                            npc["attack_anim_left"] = float(max(float(npc.get("attack_anim_left", 0.0) or 0.0), 0.45))
+                            npc["action"] = "muscle_punch"
                         try:
                             self.player.hp = max(0, int(self.player.hp) - int(dmg))
                         except Exception:
@@ -24526,7 +24623,7 @@ class HardcoreSurvivalState(State):
                     npc["dir"] = "down" if vy >= 0.0 else "up"
                 else:
                     npc["dir"] = "right" if vx >= 0.0 else "left"
-                if bool(hostile) and npc_id == "street_thug":
+                if bool(hostile) and npc_id in ("street_thug", "muscle_guy"):
                     npc["dir"] = _face_to_player()
             else:
                 npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) * 0.92
@@ -25643,6 +25740,10 @@ class HardcoreSurvivalState(State):
                 rate = 3.0
             elif action in ("bruce_punch",):
                 rate = 7.0
+            elif action in ("muscle_guard",):
+                rate = 3.0
+            elif action in ("muscle_punch",):
+                rate = 6.0
             frame = int(phase * float(rate)) % 2
             key = (str(action), str(direction), int(frame))
             spr = cache.get(key)
@@ -25795,6 +25896,73 @@ class HardcoreSurvivalState(State):
                         px(10, int(y + 1), outline)
                         px(9, int(y - 1), hi)
                         px(8, int(y - 1), hi)
+            elif action in ("muscle_guard", "muscle_punch"):
+                # Bigger/thicker punch so it's always obvious the arm extends.
+                is_punch = bool(str(action) == "muscle_punch")
+                wind = bool(is_punch and int(frame) == 0)
+                jab = bool(is_punch and int(frame) == 1)
+                hi = phone_hi
+
+                def sx(x: int) -> int:
+                    x = int(x)
+                    return mirror_x(x) if str(direction) == "left" else x
+
+                if str(direction) in ("left", "right"):
+                    # Guard: two chunky fists (face + chest).
+                    for xx in (8, 9):
+                        for yy in (4, 5):
+                            px(sx(xx), int(yy), skin)
+                    px(sx(7), 4, outline)
+                    px(sx(7), 5, outline)
+
+                    for xx in (6, 7):
+                        for yy in (7, 8):
+                            px(sx(xx), int(yy), skin)
+                    px(sx(5), 7, outline)
+                    px(sx(5), 8, outline)
+
+                    if wind:
+                        # Pull lead fist back slightly.
+                        px(sx(9), 6, skin)
+                        px(sx(10), 6, skin)
+                        px(sx(10), 5, outline)
+
+                    if jab:
+                        y = 7
+                        # Thick arm extension (3px tall).
+                        for xx in range(7, 11):
+                            for yy in (y - 1, y, y + 1):
+                                px(sx(xx), int(yy), skin)
+                        # Big fist at the end.
+                        for yy in (y - 1, y, y + 1):
+                            px(sx(11), int(yy), skin)
+                        # Outline + motion.
+                        px(sx(11), int(y - 2), outline)
+                        px(sx(11), int(y + 2), outline)
+                        px(sx(10), int(y - 2), outline)
+                        px(sx(10), int(y + 2), outline)
+                        px(sx(9), int(y - 3), hi)
+                        px(sx(10), int(y - 3), hi)
+                else:
+                    # Up/Down: punch to the side so it stays visible.
+                    y = 6 if str(direction) == "up" else 9
+                    px(6, int(y), skin)
+                    px(6, int(y - 1), outline)
+                    px(5, int(y), outline)
+                    if wind:
+                        px(7, int(y), skin)
+                        px(7, int(y - 1), outline)
+                    if jab:
+                        for xx in range(7, 11):
+                            px(int(xx), int(y), skin)
+                            px(int(xx), int(y - 1), skin)
+                        px(11, int(y), skin)
+                        px(11, int(y - 1), skin)
+                        px(11, int(y - 2), outline)
+                        px(11, int(y + 1), outline)
+                        px(10, int(y - 2), outline)
+                        px(10, int(y + 1), outline)
+                        px(9, int(y - 3), hi)
 
             cache[key] = out
             return out
@@ -25859,7 +26027,7 @@ class HardcoreSurvivalState(State):
             # Some actions (e.g. combat stance) must be visible even while moving.
             try:
                 act = str(npc.get("action", "") or "")
-                if act in ("bruce_guard", "bruce_punch"):
+                if act in ("bruce_guard", "bruce_punch", "muscle_guard", "muscle_punch"):
                     spr = pose_sprite_for_npc(npc, spr, direction=str(d))
             except Exception:
                 pass
