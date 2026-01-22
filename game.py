@@ -12749,6 +12749,9 @@ class HardcoreSurvivalState(State):
         self.speech_left = 0.0
         # Timed "use toilet" action (world-map home).
         self.toilet_task: dict[str, object] | None = None
+        # Timed "office work/clock-in" action (world-map office PC).
+        self.work_task: dict[str, object] | None = None
+        self.story_work_clocked_day = 0
         # Simple "held in hand" item (for carrying tools like cups).
         self.held_item: HardcoreSurvivalState._ItemStack | None = None
         # Flashlight (tool) state.
@@ -22224,6 +22227,7 @@ class HardcoreSurvivalState(State):
 
         # Timed world actions (e.g. toilet) that rely on the sit pose.
         self._update_toilet_task(float(dt))
+        self._update_work_task(float(dt))
 
         move_raw = pygame.Vector2(move)
         if move.length_squared() > 0.001:
@@ -23615,6 +23619,222 @@ class HardcoreSurvivalState(State):
         self.story_cafe_tile = find_open_tile_near(int(stx - 2), int(sty + 1), max_r=12)
         self.story_gym_tile = find_open_tile_near(int(stx - 5), int(sty + 3), max_r=14)
 
+        # Guarantee a real, enterable office building at the work marker.
+        try:
+            office_w = 12
+            office_h = 10
+
+            def rects_overlap(ax0: int, ay0: int, aw: int, ah: int, bx0: int, by0: int, bw: int, bh: int) -> bool:
+                return int(ax0) < int(bx0 + bw) and int(ax0 + aw) > int(bx0) and int(ay0) < int(by0 + bh) and int(ay0 + ah) > int(by0)
+
+            def can_place_office_at_door(door_tx: int, door_ty: int) -> tuple[int, int, int, int] | None:
+                door_tx = int(door_tx)
+                door_ty = int(door_ty)
+                tx0 = int(door_tx - int(office_w // 2))
+                ty0 = int(door_ty - int(office_h - 1))
+                tx1 = int(tx0 + int(office_w) - 1)
+                ty1 = int(ty0 + int(office_h) - 1)
+                cx0 = int(tx0) // int(self.CHUNK_SIZE)
+                cy0 = int(ty0) // int(self.CHUNK_SIZE)
+                if int(tx1) // int(self.CHUNK_SIZE) != int(cx0) or int(ty1) // int(self.CHUNK_SIZE) != int(cy0):
+                    return None
+
+                # Force-generate the chunk so we don't place the office onto "future" buildings.
+                ch = self.world.get_chunk(int(cx0), int(cy0))
+                existing_buildings = getattr(ch, "buildings", None)
+                if isinstance(existing_buildings, list):
+                    for b in existing_buildings:
+                        if not (isinstance(b, tuple) and len(b) >= 4):
+                            continue
+                        bx0, by0, bw, bh = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                        if rects_overlap(int(tx0), int(ty0), int(office_w), int(office_h), int(bx0), int(by0), int(bw), int(bh)):
+                            return None
+                existing_special = getattr(ch, "special_buildings", None)
+                if isinstance(existing_special, list):
+                    for sb in existing_special:
+                        try:
+                            bx0, by0, bw, bh = int(getattr(sb, "tx0", 0)), int(getattr(sb, "ty0", 0)), int(getattr(sb, "w", 0)), int(getattr(sb, "h", 0))
+                        except Exception:
+                            continue
+                        if bw <= 0 or bh <= 0:
+                            continue
+                        if rects_overlap(int(tx0), int(ty0), int(office_w), int(office_h), int(bx0), int(by0), int(bw), int(bh)):
+                            return None
+
+                # Don't block roads/highways/water with the office footprint.
+                for yy in range(int(ty0), int(ty0 + office_h)):
+                    for xx in range(int(tx0), int(tx0 + office_w)):
+                        tid = int(self.world.get_tile(int(xx), int(yy)))
+                        if int(tid) in (int(self.T_ROAD), int(self.T_HIGHWAY), int(self.T_WATER)):
+                            return None
+
+                # Require a walkable tile just outside the door.
+                out_tx = int(door_tx)
+                out_ty = int(door_ty + 1)
+                try:
+                    if self._peek_building_at_tile(int(out_tx), int(out_ty)) is not None:
+                        return None
+                except Exception:
+                    pass
+                tid_out = int(self.world.get_tile(int(out_tx), int(out_ty)))
+                if bool(self._tile_solid(int(tid_out))):
+                    return None
+
+                return (int(tx0), int(ty0), int(office_w), int(office_h))
+
+            # Find a good door tile near the initial work tile.
+            door_tx, door_ty = int(self.story_work_tile[0]), int(self.story_work_tile[1])
+            best = can_place_office_at_door(int(door_tx), int(door_ty))
+            if best is None:
+                found = None
+                max_r = 18
+                for avoid_roads in (True, False):
+                    for r in range(0, int(max_r) + 1):
+                        if found is not None:
+                            break
+                        for dy in range(-r, r + 1):
+                            if found is not None:
+                                break
+                            for dx in range(-r, r + 1):
+                                nx = int(door_tx + dx)
+                                ny = int(door_ty + dy)
+                                try:
+                                    if self._peek_building_at_tile(int(nx), int(ny)) is not None:
+                                        continue
+                                except Exception:
+                                    pass
+                                tid = int(self.world.get_tile(int(nx), int(ny)))
+                                if bool(avoid_roads) and int(tid) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
+                                    continue
+                                if bool(self._tile_solid(int(tid))):
+                                    continue
+                                cand = can_place_office_at_door(int(nx), int(ny))
+                                if cand is not None:
+                                    found = (int(nx), int(ny), cand)
+                                    break
+                    if found is not None:
+                        break
+                if found is not None:
+                    door_tx, door_ty, best = int(found[0]), int(found[1]), found[2]
+
+            if best is not None:
+                tx0, ty0, bw, bh = (int(best[0]), int(best[1]), int(best[2]), int(best[3]))
+                door_tx, door_ty = int(door_tx), int(door_ty)
+                self.story_work_tile = (int(door_tx), int(door_ty))
+                self.story_office_key = (int(tx0), int(ty0), int(bw), int(bh))
+
+                cx = int(tx0) // int(self.CHUNK_SIZE)
+                cy = int(ty0) // int(self.CHUNK_SIZE)
+                ch = self.world.get_chunk(int(cx), int(cy))
+                base_tx = int(cx) * int(self.CHUNK_SIZE)
+                base_ty = int(cy) * int(self.CHUNK_SIZE)
+
+                def set_t(xx: int, yy: int, tid2: int) -> None:
+                    lx = int(xx) - int(base_tx)
+                    ly = int(yy) - int(base_ty)
+                    if 0 <= lx < int(self.CHUNK_SIZE) and 0 <= ly < int(self.CHUNK_SIZE):
+                        ch.tiles[int(ly) * int(self.CHUNK_SIZE) + int(lx)] = int(tid2)
+
+                # Clear items/vehicles inside the office footprint to avoid "floating" clutter.
+                try:
+                    if isinstance(getattr(ch, "items", None), list) and ch.items:
+                        ch.items[:] = [
+                            it
+                            for it in ch.items
+                            if not (
+                                isinstance(it, HardcoreSurvivalState._WorldItem)
+                                and int(tx0) <= int(math.floor(float(it.pos.x) / float(self.TILE_SIZE))) <= int(tx0 + bw - 1)
+                                and int(ty0) <= int(math.floor(float(it.pos.y) / float(self.TILE_SIZE))) <= int(ty0 + bh - 1)
+                            )
+                        ]
+                except Exception:
+                    pass
+                try:
+                    if isinstance(getattr(ch, "cars", None), list) and ch.cars:
+                        ch.cars[:] = [
+                            v
+                            for v in ch.cars
+                            if not (
+                                int(tx0) <= int(math.floor(float(getattr(v, "pos", pygame.Vector2(0, 0)).x) / float(self.TILE_SIZE))) <= int(tx0 + bw - 1)
+                                and int(ty0) <= int(math.floor(float(getattr(v, "pos", pygame.Vector2(0, 0)).y) / float(self.TILE_SIZE))) <= int(ty0 + bh - 1)
+                            )
+                        ]
+                except Exception:
+                    pass
+                try:
+                    if isinstance(getattr(ch, "bikes", None), list) and ch.bikes:
+                        ch.bikes[:] = [
+                            v
+                            for v in ch.bikes
+                            if not (
+                                int(tx0) <= int(math.floor(float(getattr(v, "pos", pygame.Vector2(0, 0)).x) / float(self.TILE_SIZE))) <= int(tx0 + bw - 1)
+                                and int(ty0) <= int(math.floor(float(getattr(v, "pos", pygame.Vector2(0, 0)).y) / float(self.TILE_SIZE))) <= int(ty0 + bh - 1)
+                            )
+                        ]
+                except Exception:
+                    pass
+
+                # Stamp walls/floors.
+                for yy in range(int(ty0), int(ty0 + bh)):
+                    for xx in range(int(tx0), int(tx0 + bw)):
+                        border = (int(xx) == int(tx0) or int(xx) == int(tx0 + bw - 1) or int(yy) == int(ty0) or int(yy) == int(ty0 + bh - 1))
+                        set_t(int(xx), int(yy), int(self.T_WALL) if border else int(self.T_FLOOR))
+
+                # Door on the south wall (walk-in).
+                set_t(int(door_tx), int(door_ty), int(self.T_DOOR))
+                set_t(int(door_tx), int(door_ty - 1), int(self.T_FLOOR))
+                # Clear a small approach outside the door.
+                for oy in range(1, 4):
+                    out_ty = int(door_ty + oy)
+                    if bool(self._tile_solid(int(self.world.get_tile(int(door_tx), int(out_ty))))):
+                        break
+                    set_t(int(door_tx), int(out_ty), int(self.T_SIDEWALK))
+
+                # Simple office furniture layout (desks/chairs are movable & destructible).
+                def place(tid2: int, xx: int, yy: int) -> None:
+                    if int(tx0 + 1) <= int(xx) <= int(tx0 + bw - 2) and int(ty0 + 1) <= int(yy) <= int(ty0 + bh - 2):
+                        set_t(int(xx), int(yy), int(tid2))
+
+                # Boss corner (top-right).
+                place(int(self.T_PC), int(tx0 + bw - 4), int(ty0 + 2))
+                place(int(self.T_PC), int(tx0 + bw - 3), int(ty0 + 2))
+                place(int(self.T_CHAIR), int(tx0 + bw - 4), int(ty0 + 3))
+
+                # Secretary (near the entrance, bottom-left area).
+                place(int(self.T_PC), int(tx0 + 2), int(ty0 + bh - 4))
+                place(int(self.T_PC), int(tx0 + 3), int(ty0 + bh - 4))
+                place(int(self.T_CHAIR), int(tx0 + 2), int(ty0 + bh - 3))
+
+                # Employee desks (bottom row).
+                place(int(self.T_PC), int(tx0 + 5), int(ty0 + bh - 4))
+                place(int(self.T_PC), int(tx0 + 6), int(ty0 + bh - 4))
+                place(int(self.T_CHAIR), int(tx0 + 5), int(ty0 + bh - 3))
+
+                place(int(self.T_PC), int(tx0 + 8), int(ty0 + bh - 4))
+                place(int(self.T_PC), int(tx0 + 9), int(ty0 + bh - 4))
+                place(int(self.T_CHAIR), int(tx0 + 8), int(ty0 + bh - 3))
+
+                # Player workstation (center).
+                place(int(self.T_PC), int(tx0 + 5), int(ty0 + 4))
+                place(int(self.T_PC), int(tx0 + 6), int(ty0 + 4))
+                place(int(self.T_CHAIR), int(tx0 + 5), int(ty0 + 5))
+
+                # Filing shelves.
+                place(int(self.T_SHELF), int(tx0 + 1), int(ty0 + 2))
+                place(int(self.T_SHELF), int(tx0 + 1), int(ty0 + 3))
+
+                # Add the building record so roof/cutaway works.
+                try:
+                    roof_var = int((int(tx0) * 31 + int(ty0) * 17 + int(getattr(self, "seed", 0))) & 0xFF)
+                    roof_kind = (2 << 8) | int(roof_var)
+                    if not isinstance(getattr(ch, "buildings", None), list):
+                        ch.buildings = []
+                    ch.buildings.append((int(tx0), int(ty0), int(bw), int(bh), int(roof_kind), 1))
+                except Exception:
+                    pass
+        except Exception:
+            self.story_office_key = None
+
         try:
             gate_x0 = int(getattr(self.world, "compound_gate_x0", 0))
             gate_x1 = int(getattr(self.world, "compound_gate_x1", 0))
@@ -24143,6 +24363,40 @@ class HardcoreSurvivalState(State):
         npc_w, npc_h = self._story_npc_collider_wh()
         base_speed = 60.0
         npc_beh: dict[str, dict[str, object]] = {
+            # Office staff (spawned dynamically via sign_office).
+            "npc_staff_office_boss": {
+                "work_action": "guard_scan",
+                "home_action": "guard_scan",
+                "pose_rate": 2.0,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "scan",
+            },
+            "npc_staff_office_secretary": {
+                "work_action": "type",
+                "home_action": "type",
+                "pose_rate": 3.0,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "down",
+            },
+            "npc_staff_office_employee": {
+                "work_action": "type",
+                "home_action": "type",
+                "pose_rate": 3.0,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "down",
+            },
             # Each story NPC gets a tiny "slice of life" action so they don't all look identical.
             "npc_guard_zhou": {
                 "work_action": "guard_scan",
@@ -26442,7 +26696,7 @@ class HardcoreSurvivalState(State):
             last = int(getattr(self, "story_last_work_ping_day", 0))
             if int(day) != int(last):
                 self.story_last_work_ping_day = int(day)
-                if offset in (-3, -2, -1):
+                if offset in (-3, -2, -1) and int(getattr(self, "story_work_clocked_day", 0)) != int(day):
                     self._set_hint("去上班打卡（看地图：上班地点）", seconds=1.6)
 
         # Lazy-spawn facility staff (clerks/doctors) near generated buildings.
@@ -26480,6 +26734,30 @@ class HardcoreSurvivalState(State):
 
         # Ensure the staff scripts exist (minimal talking, no shop UI yet).
         staff_scripts: dict[str, dict[str, object]] = {
+            "npc_staff_office_boss": {
+                "start": {
+                    "speaker": "老板",
+                    "text": "{PLAYER_NAME}，今天别磨蹭。先去工位电脑打卡。",
+                    "options": [{"label": "收到", "action": "close"}],
+                },
+            },
+            "npc_staff_office_secretary": {
+                "start": {
+                    "speaker": "女秘书",
+                    "text": "早呀~ 咖啡要不要？老板今天看起来不太好惹。",
+                    "options": [
+                        {"label": "来一杯（谢谢）", "action": "hint:她眨眨眼：别迟到就行。", "next": "start"},
+                        {"label": "先忙", "action": "close"},
+                    ],
+                },
+            },
+            "npc_staff_office_employee": {
+                "start": {
+                    "speaker": "同事",
+                    "text": "你也听说医院那边的传闻了吗？总觉得这两天怪怪的。",
+                    "options": [{"label": "我也觉得", "action": "close"}],
+                },
+            },
             "npc_staff_shop_clerk": {
                 "start": {"speaker": "店员", "text": "欢迎光临～随便看看哈。", "options": [{"label": "随便看看", "action": "close"}]},
             },
@@ -26525,6 +26803,12 @@ class HardcoreSurvivalState(State):
             pass
 
         staff_by_sign: dict[str, list[dict[str, object]]] = {
+            "sign_office": [
+                {"role": "boss", "name": "老板", "script": "npc_staff_office_boss", "gender": 0, "outfit": 11},
+                {"role": "secretary", "name": "女秘书", "script": "npc_staff_office_secretary", "gender": 1, "outfit": 11},
+                {"role": "employee1", "name": "员工", "script": "npc_staff_office_employee", "gender": 0, "outfit": 11},
+                {"role": "employee2", "name": "员工", "script": "npc_staff_office_employee", "gender": 1, "outfit": 11},
+            ],
             "sign_hospital": [
                 {"role": "doctor", "name": "医生", "script": "npc_staff_hospital_doctor", "gender": 0, "outfit": 1},
                 {"role": "nurse", "name": "护士", "script": "npc_staff_hospital_nurse", "gender": 1, "outfit": 1},
@@ -26768,6 +27052,60 @@ class HardcoreSurvivalState(State):
                     if not reachable:
                         reachable = None
 
+                    office_pc_spots: list[tuple[int, int]] | None = None
+                    office_used: set[tuple[int, int]] = set()
+                    office_occupied: set[tuple[int, int]] = set()
+                    if str(pid) == "sign_office":
+                        # Pre-compute distinct "stand spots" next to PCs so boss/secretary/employees
+                        # won't all spawn on the same tile.
+                        try:
+                            tx0, ty0, bw, bh = (int(bkey[0]), int(bkey[1]), int(bkey[2]), int(bkey[3]))
+                            office_pc_spots = []
+                            for yy in range(int(ty0) + 1, int(ty0 + bh) - 1):
+                                for xx in range(int(tx0) + 1, int(tx0 + bw) - 1):
+                                    if int(self.world.get_tile(int(xx), int(yy))) != int(self.T_PC):
+                                        continue
+                                    for ox, oy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                                        nx = int(xx + ox)
+                                        ny = int(yy + oy)
+                                        if not (int(tx0) <= int(nx) < int(tx0 + bw) and int(ty0) <= int(ny) < int(ty0 + bh)):
+                                            continue
+                                        tid2 = int(self.world.get_tile(int(nx), int(ny)))
+                                        if not bool(is_walkable_tid(int(tid2))):
+                                            continue
+                                        if reachable is not None and (int(nx), int(ny)) not in reachable:
+                                            continue
+                                        office_pc_spots.append((int(nx), int(ny)))
+                            # Remove duplicates and sort by distance to the door (secretary near, boss far).
+                            uniq: list[tuple[int, int]] = []
+                            seen: set[tuple[int, int]] = set()
+                            for p in office_pc_spots:
+                                if p in seen:
+                                    continue
+                                seen.add(p)
+                                uniq.append(p)
+                            office_pc_spots = uniq
+                            dx0, dy0 = int(door[0]), int(door[1])
+                            office_pc_spots.sort(key=lambda p: (int(p[0]) - int(dx0)) ** 2 + (int(p[1]) - int(dy0)) ** 2)
+                        except Exception:
+                            office_pc_spots = None
+                        # Existing NPCs in the building should not be overlapped.
+                        try:
+                            tx0, ty0, bw, bh = (int(bkey[0]), int(bkey[1]), int(bkey[2]), int(bkey[3]))
+                            for n in npcs:
+                                if not isinstance(n, dict):
+                                    continue
+                                try:
+                                    p = pygame.Vector2(n.get("pos", pygame.Vector2(0, 0)))
+                                except Exception:
+                                    continue
+                                ntx = int(math.floor(float(p.x) / float(self.TILE_SIZE)))
+                                nty = int(math.floor(float(p.y) / float(self.TILE_SIZE)))
+                                if int(tx0) <= int(ntx) < int(tx0 + bw) and int(ty0) <= int(nty) < int(ty0 + bh):
+                                    office_occupied.add((int(ntx), int(nty)))
+                        except Exception:
+                            office_occupied = set()
+
                     # Choose staff placement by role.
                     for sdef in staff_defs:
                         role = str(sdef.get("role", "staff"))
@@ -26776,12 +27114,24 @@ class HardcoreSurvivalState(State):
                             continue
 
                         spot = None
+                        if office_pc_spots is not None and (
+                            str(role) == "boss" or str(role) == "secretary" or str(role).startswith("employee")
+                        ):
+                            cand_list = list(reversed(office_pc_spots)) if str(role) == "boss" else list(office_pc_spots)
+                            for cand in cand_list:
+                                if cand in office_used or cand in office_occupied:
+                                    continue
+                                spot = (int(cand[0]), int(cand[1]))
+                                office_used.add(cand)
+                                break
                         if role in ("doctor", "cashier", "clerk", "waiter"):
                             spot = find_adjacent_floor_to(bkey, int(self.T_TABLE), reachable=reachable)
                         elif role in ("nurse",):
                             spot = find_adjacent_floor_to(bkey, int(self.T_BED), reachable=reachable)
                         elif role in ("stocker", "chef"):
                             spot = find_adjacent_floor_to(bkey, int(self.T_SHELF), reachable=reachable)
+                        elif role in ("boss", "secretary") or str(role).startswith("employee"):
+                            spot = find_adjacent_floor_to(bkey, int(self.T_PC), reachable=reachable)
                         if spot is None:
                             spot = start_inside
                         if spot is None:
@@ -27340,6 +27690,103 @@ class HardcoreSurvivalState(State):
                 if fill_w > 0:
                     fill_col = (210, 180, 120, 210) if kind == "poop" else (120, 190, 230, 210)
                     bubble_surf.fill(fill_col, pygame.Rect(inner.x, inner.y, fill_w, inner.h))
+                for i in range(1, 10):
+                    x = int(inner.x + (inner.w * i) / 10.0)
+                    if inner.x < x < inner.right:
+                        bubble_surf.fill((0, 0, 0, 60), pygame.Rect(x, inner.y, 1, inner.h))
+
+            pct_spr = font.render(str(pct_text), False, text_col)
+            pct_y = int(bar_rect.bottom + bar_gap - 1)
+            bubble_surf.blit(pct_spr, (int(bubble_w - pad_x - pct_spr.get_width()), pct_y))
+
+            surface.blit(bubble_surf, out.topleft)
+        except Exception:
+            return
+
+    def _draw_work_task_ui(self, surface: pygame.Surface) -> None:
+        task = getattr(self, "work_task", None)
+        if not isinstance(task, dict):
+            return
+        if getattr(self, "mount", None) is not None:
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return
+        if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "world":
+            return
+
+        total = float(task.get("total", 1.0))
+        left = float(task.get("left", 0.0))
+        if total <= 1e-4:
+            return
+        p = float(clamp((total - left) / total, 0.0, 1.0))
+
+        label = "鍔炲叕涓?.."
+        label = "办公中..."
+        pct_text = f"{int(round(p * 100.0)):d}%"
+        lines = [label, pct_text]
+
+        try:
+            font = self.app.font_s
+            pad_x = 8
+            pad_y = 6
+            bar_h = 6
+            bar_gap = 4
+            tail_h = 6
+            tail_w = 10
+            bubble_bg = (0, 0, 0, 160)
+            bubble_border = (220, 220, 235, 110)
+            bubble_hi = (160, 220, 255, 18)
+
+            font_h = int(font.get_height())
+            content_w = max(1, max(int(font.size(str(ln))[0]) for ln in lines))
+            bubble_w = int(clamp(int(max(content_w + pad_x * 2, 84)), 84, INTERNAL_W - 12))
+            bubble_h = int(clamp(int(pad_y * 2 + font_h + bar_gap + bar_h + bar_gap + font_h), 34, 78))
+
+            anchor = getattr(self, "_last_player_screen_rect", None)
+            if not isinstance(anchor, pygame.Rect):
+                anchor = pygame.Rect(INTERNAL_W // 2 - 6, INTERNAL_H // 2 - 10, 12, 20)
+            mouth_x = int(anchor.centerx)
+            mouth_y = int(anchor.top + max(2, int(anchor.h) // 4))
+
+            tip_x = int(mouth_x)
+            tip_y = int(mouth_y - 12)
+
+            bubble_surf = pygame.Surface((bubble_w, bubble_h + tail_h), pygame.SRCALPHA)
+            panel = pygame.Surface((bubble_w, bubble_h), pygame.SRCALPHA)
+            panel.fill(bubble_bg)
+            pygame.draw.rect(panel, bubble_hi, panel.get_rect(), border_radius=10)
+            pygame.draw.rect(panel, bubble_border, panel.get_rect(), 2, border_radius=10)
+            bubble_surf.blit(panel, (0, 0))
+
+            out = bubble_surf.get_rect(centerx=tip_x, bottom=tip_y + 1)
+            out.left = int(clamp(int(out.left), 6, INTERNAL_W - out.w - 6))
+            out.top = int(clamp(int(out.top), 6, INTERNAL_H - out.h - 6))
+
+            tip_x_local = int(clamp(int(tip_x - out.left), 10, bubble_w - 11))
+            base_y = int(bubble_h - 1)
+            tip_y_local = int(bubble_h + tail_h - 1)
+            tail = [(tip_x_local - tail_w // 2, base_y), (tip_x_local + tail_w // 2, base_y), (tip_x_local, tip_y_local)]
+            pygame.draw.polygon(bubble_surf, bubble_bg, tail)
+            pygame.draw.polygon(bubble_surf, bubble_border, tail, 2)
+
+            text_col = pygame.Color(230, 230, 240)
+            bubble_surf.blit(font.render(str(label), False, text_col), (pad_x, pad_y))
+
+            bar_x = int(pad_x)
+            bar_y = int(pad_y + font_h + bar_gap)
+            bar_w = int(bubble_w - pad_x * 2)
+            bar_rect = pygame.Rect(bar_x, bar_y, bar_w, bar_h)
+            pygame.draw.rect(bubble_surf, (0, 0, 0, 130), bar_rect, border_radius=3)
+            pygame.draw.rect(bubble_surf, (220, 220, 235, 120), bar_rect, 1, border_radius=3)
+            inner = bar_rect.inflate(-2, -2)
+            if inner.w > 0 and inner.h > 0:
+                fill_w = int(clamp(int(round(float(inner.w) * p)), 0, inner.w))
+                if fill_w > 0:
+                    bubble_surf.fill((160, 220, 255, 210), pygame.Rect(inner.x, inner.y, fill_w, inner.h))
                 for i in range(1, 10):
                     x = int(inner.x + (inner.w * i) / 10.0)
                     if inner.x < x < inner.right:
@@ -28210,6 +28657,31 @@ class HardcoreSurvivalState(State):
                 self.player.dir = "down"
             elif int(dy) < 0:
                 self.player.dir = "up"
+
+        # Office PC: clock in / work. (Shift+E keeps the original "PC opens map".)
+        try:
+            mods = pygame.key.get_mods()
+            is_shift = bool(int(mods) & int(pygame.KMOD_SHIFT))
+        except Exception:
+            is_shift = False
+        if not bool(is_shift):
+            office_key = getattr(self, "story_office_key", None)
+            if (
+                isinstance(office_key, tuple)
+                and len(office_key) == 4
+                and bool(getattr(self, "story_enabled", False))
+                and bool(self._story_is_pre_apocalypse())
+            ):
+                hit_b = self._peek_building_at_tile(int(hit[0]), int(hit[1]))
+                if hit_b is not None and tuple(int(v) for v in hit_b[:4]) == tuple(int(v) for v in office_key):
+                    if isinstance(getattr(self, "work_task", None), dict):
+                        return True
+                    day = int(self.world_time_s / max(1e-6, self.DAY_LENGTH_S)) + 1
+                    if int(getattr(self, "story_work_clocked_day", 0)) < int(day):
+                        total = 4.2
+                        self.work_task = {"total": float(total), "left": float(total), "day": int(day)}
+                        self._speech_say("打卡中...", seconds=1.0)
+                        return True
 
         self._toggle_world_map(open=True)
         self._set_hint("电脑：地图", seconds=1.0)
@@ -29199,6 +29671,58 @@ class HardcoreSurvivalState(State):
         else:
             self.player.morale = float(clamp(float(self.player.morale) + 0.5, 0.0, 100.0))
             self._speech_say("小便完成", seconds=1.2)
+
+    def _update_work_task(self, dt: float) -> None:
+        task = getattr(self, "work_task", None)
+        if not isinstance(task, dict):
+            return
+        if getattr(self, "mount", None) is not None:
+            self.work_task = None
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            self.work_task = None
+            return
+        if str(getattr(self, "player_pose", "")) != "sit" or str(getattr(self, "player_pose_space", "")) != "world":
+            # Cancelled (player moved / left pose).
+            self.work_task = None
+            return
+
+        left = float(task.get("left", 0.0))
+        left = max(0.0, left - float(dt))
+        task["left"] = float(left)
+        if left > 0.0:
+            return
+
+        # Complete.
+        try:
+            day = int(task.get("day", 0))
+        except Exception:
+            day = 0
+        if day <= 0:
+            day = int(self.world_time_s / max(1e-6, self.DAY_LENGTH_S)) + 1
+
+        self.work_task = None
+        self.story_work_clocked_day = int(max(int(getattr(self, "story_work_clocked_day", 0)), int(day)))
+
+        # Remember in story flags too (used by some dialog options).
+        try:
+            flags = getattr(self, "story_flags", None)
+            if not isinstance(flags, set):
+                flags = set()
+                self.story_flags = flags
+            flags.add("WORK_CLOCKED")
+        except Exception:
+            pass
+
+        try:
+            self.player.morale = float(clamp(float(self.player.morale) + 0.8, 0.0, 100.0))
+        except Exception:
+            pass
+        self._speech_say("打卡完成", seconds=1.2)
 
     def _handle_rv_mode_buttons_mouse(self, event: pygame.event.Event) -> bool:
         rects = getattr(self, "_rv_mode_btn_rects", None)
@@ -32361,7 +32885,7 @@ class HardcoreSurvivalState(State):
                 pass
             self.mount = "bike"
             self.player.pos.update(self.bike.pos)
-            self._crime_add(28.0 if str(mid).startswith("moto") else 18.0, "抢劫两轮")
+            self._crime_add(28.0 if str(mid).startswith("moto") else 22.0, "抢劫两轮")
             self._set_hint(f"抢到 {self._two_wheel_name(self.bike.model_id)}", seconds=1.0)
             return
 
@@ -32460,7 +32984,7 @@ class HardcoreSurvivalState(State):
             self.mount = "bike"
             self.player.pos.update(self.bike.pos)
             if not owned:
-                heat = 26.0 if pb_mid.startswith("moto") else 14.0
+                heat = 26.0 if pb_mid.startswith("moto") else 22.0
                 if pb_mid.startswith("moto") and not has_key:
                     heat = 34.0
                 self._crime_add(float(heat), "偷走两轮")
@@ -39405,6 +39929,7 @@ class HardcoreSurvivalState(State):
         self._draw_world_context_menu(surface, cam_x, cam_y_draw)
         self._draw_lamp_cfg_ui(surface, cam_x, cam_y_draw)
         self._draw_toilet_task_ui(surface)
+        self._draw_work_task_ui(surface)
         self._draw_hover_tooltip(surface)
         self._draw_speech_bubble(surface)
         self._draw_dialog(surface)
@@ -41175,7 +41700,7 @@ class HardcoreSurvivalState(State):
         except Exception:
             wl = 0
         if wl > 0 and bool(getattr(self, "story_enabled", False)) and bool(self._story_is_pre_apocalypse()):
-            draw_text(surface, self.app.font_s, f"通缉 {wl}", (INTERNAL_W - 6, 20), pygame.Color(255, 170, 170), anchor="topright")
+            draw_text(surface, self.app.font_s, f"通缉 {wl}", (INTERNAL_W - 6, 44), pygame.Color(255, 170, 170), anchor="topright")
 
         def stat_line(y: int, label: str, value: float, *, fg: tuple[int, int, int]) -> None:
             value = float(clamp(value, 0.0, 100.0))
