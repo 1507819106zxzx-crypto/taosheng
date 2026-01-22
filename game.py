@@ -23256,7 +23256,9 @@ class HardcoreSurvivalState(State):
                     prev_clip = surface.get_clip()
                     surface.set_clip(r.inflate(-6, 0))
                     try:
-                        draw_text(surface, font, tip, (r.left + 8, r.centery - 1), pygame.Color(240, 240, 240), anchor="topleft")
+                        # Vertically center inside the button bar.
+                        y = int(r.y + (int(r.h) - int(font.get_height())) // 2)
+                        draw_text(surface, font, tip, (int(r.left + 8), int(y)), pygame.Color(240, 240, 240), anchor="topleft")
                     finally:
                         surface.set_clip(prev_clip)
                     self.conv_option_rects.append((r, int(i)))
@@ -23450,12 +23452,16 @@ class HardcoreSurvivalState(State):
                     "rng": rng,
                     "speed": float(speed),
                     "home": tuple(home) if isinstance(home, tuple) and len(home) == 2 else (int(tx), int(ty)),
-                    "work": tuple(work) if isinstance(work, tuple) and len(work) == 2 else (int(tx), int(ty)),
-                    "frames": frames,
-                    "script": str(script),
-                    "avatar": av,
-                }
-            )
+                     "work": tuple(work) if isinstance(work, tuple) and len(work) == 2 else (int(tx), int(ty)),
+                     "frames": frames,
+                     "script": str(script),
+                     "avatar": av,
+                     "action": "",
+                     "pose_phase": float(random.random() * math.tau),
+                     "stay_left": 0.0,
+                     "pose_cache": {},
+                 }
+             )
 
         # Key NPCs around the core POIs.
         gate_tx, gate_ty = tuple(getattr(self, "story_gate_tile", (stx, sty)))
@@ -23648,6 +23654,75 @@ class HardcoreSurvivalState(State):
         npc_w = 8
         npc_h = int(clamp(int(getattr(self.player, "collider_h", 10)), 8, 14))
         base_speed = 60.0
+        npc_beh: dict[str, dict[str, object]] = {
+            # Each story NPC gets a tiny "slice of life" action so they don't all look identical.
+            "npc_guard_zhou": {
+                "work_action": "guard_scan",
+                "home_action": "guard_scan",
+                "pose_rate": 1.6,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "scan",
+            },
+            "npc_coworker_lin": {
+                "work_action": "type",
+                "home_action": "",
+                "pose_rate": 3.2,
+                "stay_work": (2.2, 4.8),
+                "stay_home": (0.0, 0.0),
+                "stay_chance": 0.75,
+                "wander_work": 0,
+                "wander_home": 3,
+                "face": "down",
+            },
+            "npc_aqiao": {
+                "work_action": "coffee",
+                "home_action": "",
+                "pose_rate": 2.0,
+                "stay_work": (1.6, 3.6),
+                "stay_home": (0.0, 0.0),
+                "stay_chance": 0.55,
+                "wander_work": 1,
+                "wander_home": 3,
+                "face": "player",
+            },
+            "npc_nana": {
+                "work_action": "selfie",
+                "home_action": "",
+                "pose_rate": 2.6,
+                "stay_work": (2.0, 4.2),
+                "stay_home": (0.0, 0.0),
+                "stay_chance": 0.7,
+                "wander_work": 1,
+                "wander_home": 3,
+                "face": "right",
+            },
+            "npc_green_tea": {
+                "work_action": "wave",
+                "home_action": "wave",
+                "pose_rate": 2.8,
+                "stay_work": (1.4, 3.0),
+                "stay_home": (1.4, 2.8),
+                "stay_chance": 0.55,
+                "wander_work": 1,
+                "wander_home": 2,
+                "face": "player",
+            },
+            "npc_muscle_guy": {
+                "work_action": "flex",
+                "home_action": "pushup",
+                "pose_rate": 3.0,
+                "stay_work": (1.6, 3.0),
+                "stay_home": (2.8, 5.0),
+                "stay_chance": 0.7,
+                "wander_work": 1,
+                "wander_home": 1,
+                "face": "flex",
+            },
+        }
 
         for npc in npcs:
             if not isinstance(npc, dict):
@@ -23658,12 +23733,34 @@ class HardcoreSurvivalState(State):
                 pos = pygame.Vector2(0, 0)
 
             speed = float(npc.get("speed", 28.0))
-            if speed <= 0.1:
-                npc["vel"] = pygame.Vector2(0, 0)
-                npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) * 0.92
-                continue
-
             stuck_t = float(npc.get("stuck", 0.0))
+
+            # Stable per-NPC RNG.
+            rng = npc.get("rng", None)
+            if not isinstance(rng, random.Random):
+                rng = random.Random(int(self.seed) ^ 0x1234)
+                npc["rng"] = rng
+
+            script_id = str(npc.get("script", "") or "")
+            beh = npc_beh.get(str(script_id), {})
+            work_action = str(beh.get("work_action", "") or "")
+            home_action = str(beh.get("home_action", "") or "")
+            action_target = work_action if bool(at_work) else home_action
+            face_mode = str(beh.get("face", "player") or "player")
+            pose_rate = float(beh.get("pose_rate", 2.2))
+            stay_pair = beh.get("stay_work" if bool(at_work) else "stay_home", (0.0, 0.0))
+            stay_min = 0.0
+            stay_max = 0.0
+            if isinstance(stay_pair, tuple) and len(stay_pair) == 2:
+                try:
+                    stay_min = float(stay_pair[0])
+                    stay_max = float(stay_pair[1])
+                except Exception:
+                    stay_min = 0.0
+                    stay_max = 0.0
+            stay_chance = float(beh.get("stay_chance", 0.55))
+            wander_base = int(beh.get("wander_work" if bool(at_work) else "wander_home", (2 if at_work else 3)))
+
             home = npc.get("home", (0, 0))
             work = npc.get("work", (0, 0))
             if not (isinstance(home, tuple) and len(home) == 2):
@@ -23682,6 +23779,96 @@ class HardcoreSurvivalState(State):
             ax, ay = int(anchor_tile[0]), int(anchor_tile[1])
             anchor = tile_center(int(ax), int(ay))
 
+            def _face_to_player() -> str:
+                try:
+                    v = pygame.Vector2(self.player.pos) - pygame.Vector2(pos)
+                except Exception:
+                    v = pygame.Vector2(0, 1)
+                if v.length_squared() <= 0.001:
+                    return str(npc.get("dir", "down") or "down")
+                ax2 = abs(float(v.x))
+                ay2 = abs(float(v.y))
+                if ay2 >= ax2:
+                    return "down" if float(v.y) >= 0.0 else "up"
+                return "right" if float(v.x) >= 0.0 else "left"
+
+            def _apply_action_facing(action: str, *, phase: float) -> None:
+                action = str(action)
+                phase = float(phase)
+                if action == "guard_scan":
+                    cyc = int(phase * 0.7) % 4
+                    npc["dir"] = ("left", "down", "right", "down")[int(cyc)]
+                    return
+                if action == "flex":
+                    npc["dir"] = "right" if (int(phase * 0.8) % 2 == 0) else "left"
+                    return
+                if action in ("type", "pushup", "coffee"):
+                    npc["dir"] = "down"
+                    return
+                if action == "selfie":
+                    npc["dir"] = "right" if (int(phase * 0.7) % 2 == 0) else "down"
+                    return
+                if action == "wave":
+                    npc["dir"] = _face_to_player()
+                    return
+                # Fallback: use the configured face mode.
+                if str(face_mode) == "down":
+                    npc["dir"] = "down"
+                elif str(face_mode) == "right":
+                    npc["dir"] = "right"
+                elif str(face_mode) == "scan":
+                    cyc = int(phase * 0.7) % 4
+                    npc["dir"] = ("left", "down", "right", "down")[int(cyc)]
+                else:
+                    npc["dir"] = _face_to_player()
+
+            # Stay/pose logic so story NPCs have distinct day-to-day actions.
+            near_anchor = float((pos - anchor).length_squared()) <= float((self.TILE_SIZE * 1.60) ** 2)
+            stay_left = float(npc.get("stay_left", 0.0))
+            if not bool(near_anchor):
+                stay_left = 0.0
+                npc["stay_left"] = 0.0
+
+            # Stationary story NPCs (e.g. guard) still animate their actions.
+            if float(speed) <= 0.1:
+                # Safety: if ever displaced into a facade tile, snap back.
+                try:
+                    ntx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                    nty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                    if self._peek_building_at_tile(int(ntx), int(nty)) is not None:
+                        sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18)
+                        pos = tile_center(int(sx), int(sy))
+                        npc["pos"] = pygame.Vector2(pos)
+                except Exception:
+                    pass
+
+                npc["vel"] = pygame.Vector2(0, 0)
+                npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) * 0.92
+                if action_target:
+                    npc["action"] = str(action_target)
+                    pp = float(npc.get("pose_phase", 0.0)) + float(dt_time) * float(pose_rate)
+                    npc["pose_phase"] = float(pp)
+                    _apply_action_facing(str(action_target), phase=float(pp))
+                else:
+                    npc["action"] = ""
+                continue
+
+            # If currently staying, keep the NPC still and play the action.
+            if float(stay_left) > 0.0 and action_target:
+                stay_left = float(max(0.0, float(stay_left) - float(dt_time)))
+                npc["stay_left"] = float(stay_left)
+                npc["vel"] = pygame.Vector2(0, 0)
+                npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) * 0.92
+                npc["goal"] = pygame.Vector2(pos)
+                npc["goal_left"] = 0.0
+                npc["stuck"] = 0.0
+                npc["action"] = str(action_target)
+                pp = float(npc.get("pose_phase", 0.0)) + float(dt_time) * float(pose_rate)
+                npc["pose_phase"] = float(pp)
+                _apply_action_facing(str(action_target), phase=float(pp))
+                if float(stay_left) > 0.0:
+                    continue
+
             goal_left = float(npc.get("goal_left", 0.0))
             try:
                 goal = pygame.Vector2(npc.get("goal", anchor))
@@ -23698,11 +23885,24 @@ class HardcoreSurvivalState(State):
                 goal_left = 0.0
 
             if goal_left <= 0.0 or float((goal - pos).length_squared()) <= 4.0:
-                rng = npc.get("rng", None)
-                if not isinstance(rng, random.Random):
-                    rng = random.Random(int(self.seed) ^ 0x1234)
-                radius = (2 if bool(at_work) else 3) + (1 if float(stuck_t) > 0.60 else 0)
-                radius = int(clamp(int(radius), 1, 5))
+                # If we're near the anchor, sometimes pause and do an "action" instead
+                # of immediately picking a new wander target.
+                if action_target and bool(near_anchor) and float(stay_max) > 0.01:
+                    if float(rng.random()) < float(stay_chance):
+                        hold = float(rng.uniform(float(stay_min), float(stay_max)))
+                        npc["stay_left"] = float(hold)
+                        npc["vel"] = pygame.Vector2(0, 0)
+                        npc["goal"] = pygame.Vector2(pos)
+                        npc["goal_left"] = 0.0
+                        npc["stuck"] = 0.0
+                        npc["action"] = str(action_target)
+                        pp = float(npc.get("pose_phase", 0.0)) + float(dt_time) * float(pose_rate)
+                        npc["pose_phase"] = float(pp)
+                        _apply_action_facing(str(action_target), phase=float(pp))
+                        continue
+
+                radius = int(wander_base) + (1 if float(stuck_t) > 0.60 else 0)
+                radius = int(clamp(int(radius), 0, 5))
 
                 # Pick a reachable walkable tile near the anchor so NPCs don't
                 # keep pushing into walls/corners.
@@ -23863,6 +24063,23 @@ class HardcoreSurvivalState(State):
             else:
                 npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) * 0.92
 
+            # If idle near the anchor, show the NPC's current story action.
+            if moving or not action_target:
+                npc["action"] = ""
+            else:
+                try:
+                    pos2 = pygame.Vector2(npc.get("pos", pos))
+                    near2 = float((pos2 - anchor).length_squared()) <= float((self.TILE_SIZE * 1.60) ** 2)
+                except Exception:
+                    near2 = False
+                if near2:
+                    npc["action"] = str(action_target)
+                    pp = float(npc.get("pose_phase", 0.0)) + float(dt_time) * float(pose_rate)
+                    npc["pose_phase"] = float(pp)
+                    _apply_action_facing(str(action_target), phase=float(pp))
+                else:
+                    npc["action"] = ""
+
     def _story_nearest_npc(self, *, radius_px: float = 18.0) -> dict[str, object] | None:
         if not bool(getattr(self, "story_enabled", False)):
             return None
@@ -23930,6 +24147,123 @@ class HardcoreSurvivalState(State):
         player_p = pygame.Vector2(self.player.pos)
         hovered: tuple[float, pygame.Surface, pygame.Rect, list[str], tuple[int, int]] | None = None
 
+        def pose_sprite_for_npc(npc: dict[str, object], base: pygame.Surface, *, direction: str) -> pygame.Surface:
+            action = str(npc.get("action", "") or "")
+            if not action:
+                return base
+            cache = npc.get("pose_cache", None)
+            if not isinstance(cache, dict):
+                cache = {}
+                npc["pose_cache"] = cache
+            try:
+                phase = float(npc.get("pose_phase", 0.0))
+            except Exception:
+                phase = 0.0
+
+            rate = 2.0
+            if action in ("type", "pushup"):
+                rate = 3.0
+            elif action in ("coffee",):
+                rate = 1.6
+            elif action in ("guard_scan", "flex"):
+                rate = 2.2
+            frame = int(phase * float(rate)) % 2
+            key = (str(action), str(direction), int(frame))
+            spr = cache.get(key)
+            if isinstance(spr, pygame.Surface):
+                return spr
+
+            w, h = int(base.get_width()), int(base.get_height())
+            outline = (10, 10, 12)
+            phone = (40, 40, 50)
+            phone_hi = (230, 220, 140)
+            sweat = (120, 170, 230)
+            cup = (230, 230, 236)
+            coffee = (160, 90, 44)
+            laptop = (50, 50, 62)
+            laptop_hi = (90, 90, 110)
+            stick = (70, 70, 86)
+
+            avatar = npc.get("avatar", None)
+            if not isinstance(avatar, SurvivalAvatar):
+                avatar = SurvivalAvatar()
+            cols = HardcoreSurvivalState._avatar_colors(avatar)
+            skin = tuple(cols.get("skin", (220, 190, 160)))
+
+            def px(x: int, y: int, c: tuple[int, int, int]) -> None:
+                if 0 <= int(x) < w and 0 <= int(y) < h:
+                    try:
+                        out.set_at((int(x), int(y)), c)
+                    except Exception:
+                        pass
+
+            def mirror_x(x: int) -> int:
+                return int(w - 1 - int(x))
+
+            if action == "pushup":
+                out = pygame.Surface((w, h), pygame.SRCALPHA)
+                off_y = 1 if int(frame) == 1 else 0
+                out.blit(base, (0, int(off_y)))
+                px(6, 1 if int(frame) == 1 else 0, sweat)
+                px(7, 2 if int(frame) == 1 else 1, sweat)
+            else:
+                out = base.copy()
+
+            if action == "guard_scan":
+                x = 10 if str(direction) in ("right", "down") else 1
+                for yy in range(9, 13):
+                    px(int(x), int(yy), stick)
+                px(int(x), 9, phone_hi)
+            elif action == "type":
+                # Tiny laptop/keyboard in front of the NPC.
+                if str(direction) in ("left", "right"):
+                    x0, y0 = (7, 11)
+                    if str(direction) == "left":
+                        x0 = mirror_x(x0 + 4)
+                else:
+                    x0, y0 = (4, 11)
+                out.fill(laptop, pygame.Rect(int(x0), int(y0), 5, 2))
+                px(int(x0), int(y0), laptop_hi)
+                px(int(x0 + 4), int(y0), laptop_hi)
+                if int(frame) == 1:
+                    px(int(x0 + 2), int(y0), (90, 200, 120))
+            elif action == "selfie":
+                # Phone near the face + a tiny flash.
+                x0, y0 = (8, 3)
+                if str(direction) == "left":
+                    x0 = mirror_x(x0 + 1)
+                out.fill(phone, pygame.Rect(int(x0), int(y0), 2, 3))
+                px(int(x0 + 1), int(y0), phone_hi)
+                if int(frame) == 1:
+                    px(int(x0 + 2 if str(direction) != "left" else x0 - 1), int(y0 + 1), phone_hi)
+            elif action == "wave":
+                # Raised hand above the head (wiggles).
+                x = 9
+                if str(direction) == "left":
+                    x = mirror_x(x)
+                y = 1 if int(frame) == 0 else 0
+                px(int(x), int(y), skin)
+                px(int(x), int(y + 1), skin)
+            elif action == "coffee":
+                # A cup near the mouth.
+                x, y = (8, 6)
+                if str(direction) == "left":
+                    x = mirror_x(x)
+                if str(direction) in ("left", "right"):
+                    y = 5
+                out.fill(cup, pygame.Rect(int(x), int(y), 2, 2))
+                px(int(x + 1), int(y + 1), coffee)
+            elif action == "flex":
+                # Quick bicep hint.
+                x = 10 if str(direction) != "left" else mirror_x(10)
+                y = 8 if int(frame) == 0 else 7
+                px(int(x), int(y), skin)
+                px(int(x), int(y + 1), skin)
+                px(int(x - 1 if str(direction) != "left" else x + 1), int(y), outline)
+
+            cache[key] = out
+            return out
+
         for npc in npcs:
             if not isinstance(npc, dict):
                 continue
@@ -23984,7 +24318,8 @@ class HardcoreSurvivalState(State):
                 idx = int(phase * len(walk)) % len(walk) if walk else 0
                 spr = walk[idx] if walk else fr[0]
             else:
-                spr = fr[0]
+                base = fr[0]
+                spr = pose_sprite_for_npc(npc, base, direction=str(d)) if not bool(moving) else base
 
             rect = spr.get_rect()
             rect.midbottom = (int(sx), iround(float(sy) + float(getattr(self.player, "h", 12)) / 2.0))
