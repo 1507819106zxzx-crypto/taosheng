@@ -22920,9 +22920,26 @@ class HardcoreSurvivalState(State):
 
         # Key POIs for the prelude (simple, deterministic positions near spawn).
         stx, sty = self._player_tile()
-        self.story_work_tile = (int(stx), int(sty + 6))
-        self.story_hardware_tile = (int(stx + 8), int(sty + 2))
-        self.story_cafe_tile = (int(stx - 6), int(sty + 2))
+        self.story_origin_tile = (int(stx), int(sty))
+
+        def find_open_tile_near(tx: int, ty: int, *, max_r: int = 8) -> tuple[int, int]:
+            tx = int(tx)
+            ty = int(ty)
+            max_r = int(max(0, max_r))
+            for r in range(0, max_r + 1):
+                for dy in range(-r, r + 1):
+                    for dx in range(-r, r + 1):
+                        nx = int(tx + dx)
+                        ny = int(ty + dy)
+                        tid = int(self.world.peek_tile(int(nx), int(ny)))
+                        if not bool(self._tile_solid(int(tid))):
+                            return int(nx), int(ny)
+            return int(tx), int(ty)
+
+        # Keep these close so players will immediately see story NPCs on a fresh start.
+        self.story_work_tile = find_open_tile_near(int(stx + 2), int(sty + 2), max_r=10)
+        self.story_hardware_tile = find_open_tile_near(int(stx + 4), int(sty + 1), max_r=12)
+        self.story_cafe_tile = find_open_tile_near(int(stx - 2), int(sty + 1), max_r=12)
 
         try:
             gate_x0 = int(getattr(self.world, "compound_gate_x0", 0))
@@ -23130,6 +23147,7 @@ class HardcoreSurvivalState(State):
                         f"{str(getattr(self, 'player_name', '玩家'))}：今天一切看起来都很正常。",
                         "但你隐隐觉得：这座小镇要出事了。",
                         "（你有 3 天时间：加固家门、囤物资、结识关键 NPC。）",
+                        "提示：附近就有 NPC，走几步就能看到。靠近按 E 对话，按 M 打开地图。",
                     ],
                     speed=52.0,
                 )
@@ -23365,7 +23383,13 @@ class HardcoreSurvivalState(State):
             # Name tag when close (avoids clutter).
             try:
                 d2 = float((pos - player_p).length_squared())
-                if d2 <= float((self.TILE_SIZE * 2.4) ** 2):
+                script = str(npc.get("script", "") or "")
+                if script and d2 <= float((self.TILE_SIZE * 7.0) ** 2):
+                    dot = (int(rect.centerx), int(rect.top - 8))
+                    pygame.draw.circle(surface, (255, 220, 140), dot, 3)
+                    pygame.draw.circle(surface, (0, 0, 0), dot, 3, 1)
+
+                if d2 <= float((self.TILE_SIZE * 5.5) ** 2):
                     name = str(npc.get("name", "") or "")
                     if name:
                         font = self.app.font_s
@@ -32810,7 +32834,20 @@ class HardcoreSurvivalState(State):
         return
 
     def _draw_bike(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
-        bp = pygame.Vector2(self.bike.pos) - pygame.Vector2(cam_x, cam_y)       
+        # Pixel-lock two-wheeler drawing to match the pixel-locked camera (reduces jitter).
+        try:
+            if self.mount == "bike":
+                bwx, bwy = getattr(self, "_player_pixel_lock_world_xy")
+                bwx = int(bwx)
+                bwy = int(bwy)
+            else:
+                bwx = int(math.floor(float(self.bike.pos.x)))
+                bwy = int(math.floor(float(self.bike.pos.y)))
+        except Exception:
+            bwx = int(math.floor(float(getattr(getattr(self.bike, "pos", None), "x", 0.0))))
+            bwy = int(math.floor(float(getattr(getattr(self.bike, "pos", None), "y", 0.0))))
+
+        bp = pygame.Vector2(float(bwx - int(cam_x)), float(bwy - int(cam_y)))
         moving = self.mount == "bike" and self.bike.vel.length_squared() > 0.1
         frame = int(self.bike_anim) % 2 if moving else 0
         d = getattr(self, "bike_dir", "right")
@@ -32820,11 +32857,11 @@ class HardcoreSurvivalState(State):
         if not frames:
             return
         spr = frames[min(int(frame), len(frames) - 1)]
-        ground_y = int(round(float(bp.y) + float(getattr(self.bike, "h", 10)) / 2.0))
+        ground_y = iround(float(bp.y) + float(getattr(self.bike, "h", 10)) / 2.0)
         rect = spr.get_rect()
         baseline_y = int(self._sprite_baseline_y(spr))
-        rect.centerx = int(round(bp.x))
-        rect.bottom = int(round(float(ground_y) + float(rect.h - baseline_y)))
+        rect.centerx = int(bp.x)
+        rect.bottom = int(int(ground_y) + int(rect.h - baseline_y))
 
         # Soft ground shadow so the two-wheeler doesn't look like it's floating.
         shadow = self._two_wheel_shadow_rect(rect, str(d), ground_y=int(ground_y))
@@ -32872,10 +32909,10 @@ class HardcoreSurvivalState(State):
 
             if rider is not None:
                 rrect = rider.get_rect()
-                seat_off = 5 if d in ("up", "down") else 4
+                seat_from_ground = 4 if d in ("up", "down") else 3
                 if str(mid).startswith("moto"):
-                    seat_off = max(2, int(seat_off) - 1)
-                rrect.midbottom = (rect.centerx, rect.centery + int(seat_off))
+                    seat_from_ground = max(2, int(seat_from_ground) - 1)
+                rrect.midbottom = (rect.centerx, int(int(ground_y) - int(seat_from_ground)))
                 surface.blit(rider, rrect)
             else:
                 hair = self._PLAYER_PAL["H"]
@@ -37151,6 +37188,25 @@ class HardcoreSurvivalState(State):
 
         for m in getattr(self, "world_map_markers", []):
             draw_marker(int(getattr(m, "tx", 0)), int(getattr(m, "ty", 0)), tuple(getattr(m, "color", (255, 220, 140))), str(getattr(m, "label", "")))
+
+        # Story NPCs (pre-apocalypse only).
+        if bool(getattr(self, "story_enabled", False)) and bool(self._story_is_pre_apocalypse()):
+            npcs = getattr(self, "npcs", None)
+            if isinstance(npcs, list) and npcs:
+                for npc in npcs:
+                    if not isinstance(npc, dict):
+                        continue
+                    try:
+                        pos = pygame.Vector2(npc.get("pos", pygame.Vector2(0, 0)))
+                    except Exception:
+                        continue
+                    ntx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                    nty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                    script = str(npc.get("script", "") or "")
+                    col = (255, 220, 140) if script else (170, 170, 190)
+                    name = str(npc.get("name", "") or "")
+                    label = name if int(scale) >= 4 and name else None
+                    draw_marker(int(ntx), int(nty), col, label, r=3)
 
         # Legend (icon key): bottom-right, toggleable.
         self._world_map_legend_toggle_rect = None
