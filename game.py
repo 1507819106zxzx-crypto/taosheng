@@ -21536,6 +21536,7 @@ class HardcoreSurvivalState(State):
         self.world_time_s += dt_time
         self._update_weather(dt_time)
         self._story_update(dt_time)
+        self._story_update_npcs(dt_time)
 
         if getattr(self, "noise_left", 0.0) > 0.0:
             self.noise_left = max(0.0, float(self.noise_left) - dt_time)
@@ -22029,10 +22030,22 @@ class HardcoreSurvivalState(State):
             if not fuel_empty:
                 self.bike.vel = move * speed
             if self.bike.vel.length_squared() > 0.1:
-                if abs(self.bike.vel.y) >= abs(self.bike.vel.x):
-                    self.bike_dir = "down" if self.bike.vel.y >= 0 else "up"
+                # Stabilize 4-dir bike facing on diagonals (avoid rapid left/up flips).
+                vx = float(self.bike.vel.x)
+                vy = float(self.bike.vel.y)
+                ratio = abs(vy) / max(1e-6, abs(vx))
+                axis = int(getattr(self, "_bike_dir_axis", 0))  # 0=horiz, 1=vert
+                if axis == 0:
+                    if ratio > 1.18:
+                        axis = 1
                 else:
-                    self.bike_dir = "right" if self.bike.vel.x >= 0 else "left"
+                    if ratio < 0.85:
+                        axis = 0
+                self._bike_dir_axis = int(axis)
+                if axis == 1:
+                    self.bike_dir = "down" if vy >= 0.0 else "up"
+                else:
+                    self.bike_dir = "right" if vx >= 0.0 else "left"
                 self.bike_anim += dt * 10.0
             else:
                 self.bike_anim *= 0.85
@@ -22958,6 +22971,11 @@ class HardcoreSurvivalState(State):
             av = make_avatar(gender=int(gender), outfit=int(outfit))
             frames = HardcoreSurvivalState.build_avatar_player_frames(av, run=False)
             tx, ty = int(tile[0]), int(tile[1])
+            # Per-NPC rng (stable enough for wandering).
+            seed = 0
+            for ch in str(npc_id):
+                seed = (seed * 131 + ord(ch)) & 0xFFFFFFFF
+            rng = random.Random(int(seed) ^ int(self.seed) ^ 0x4C6E6B51)
             self.npcs.append(
                 {
                     "id": str(npc_id),
@@ -22965,6 +22983,11 @@ class HardcoreSurvivalState(State):
                     "pos": npc_pos_from_tile(int(tx), int(ty)),
                     "dir": "down",
                     "walk": random.random() * 2.0,
+                    "vel": pygame.Vector2(0, 0),
+                    "goal": npc_pos_from_tile(int(tx), int(ty)),
+                    "goal_left": 0.0,
+                    "axis": 0,
+                    "rng": rng,
                     "speed": float(speed),
                     "home": tuple(home) if isinstance(home, tuple) and len(home) == 2 else (int(tx), int(ty)),
                     "work": tuple(work) if isinstance(work, tuple) and len(work) == 2 else (int(tx), int(ty)),
@@ -23112,6 +23135,263 @@ class HardcoreSurvivalState(State):
                 )
         except Exception:
             pass
+
+    def _story_update_npcs(self, dt_time: float) -> None:
+        if not bool(getattr(self, "story_enabled", False)):
+            return
+        if not bool(self._story_is_pre_apocalypse()):
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return
+
+        npcs = getattr(self, "npcs", None)
+        if not isinstance(npcs, list) or not npcs:
+            return
+
+        dt_time = float(max(0.0, dt_time))
+        if dt_time <= 1e-6:
+            return
+
+        tday = float(self._time_of_day())
+        at_work = 0.34 <= tday <= 0.72
+
+        def tile_center(tx: int, ty: int) -> pygame.Vector2:
+            return pygame.Vector2(
+                (float(tx) + 0.5) * float(self.TILE_SIZE),
+                (float(ty) + 0.5) * float(self.TILE_SIZE),
+            )
+
+        npc_w = 8
+        npc_h = int(clamp(int(getattr(self.player, "collider_h", 10)), 8, 14))
+
+        for npc in npcs:
+            if not isinstance(npc, dict):
+                continue
+            try:
+                pos = pygame.Vector2(npc.get("pos", pygame.Vector2(0, 0)))
+            except Exception:
+                pos = pygame.Vector2(0, 0)
+
+            speed = float(npc.get("speed", 28.0))
+            if speed <= 0.1:
+                npc["vel"] = pygame.Vector2(0, 0)
+                npc["walk"] = float(npc.get("walk", 0.0)) * 0.85
+                continue
+
+            home = npc.get("home", (0, 0))
+            work = npc.get("work", (0, 0))
+            if not (isinstance(home, tuple) and len(home) == 2):
+                home = (0, 0)
+            if not (isinstance(work, tuple) and len(work) == 2):
+                work = (0, 0)
+            anchor_tile = work if bool(at_work) else home
+            ax, ay = int(anchor_tile[0]), int(anchor_tile[1])
+            anchor = tile_center(int(ax), int(ay))
+
+            goal_left = float(npc.get("goal_left", 0.0))
+            try:
+                goal = pygame.Vector2(npc.get("goal", anchor))
+            except Exception:
+                goal = pygame.Vector2(anchor)
+
+            # If the NPC ever gets displaced too far, snap its "intent" back.
+            if float((pos - anchor).length_squared()) > float((self.TILE_SIZE * 6) ** 2):
+                goal_left = 0.0
+                goal = pygame.Vector2(anchor)
+
+            goal_left = max(0.0, float(goal_left) - float(dt_time))
+            if goal_left <= 0.0 or float((goal - pos).length_squared()) <= 4.0:
+                rng = npc.get("rng", None)
+                if not isinstance(rng, random.Random):
+                    rng = random.Random(int(self.seed) ^ 0x1234)
+                radius = 2 if bool(at_work) else 3
+                best = pygame.Vector2(anchor)
+                for _ in range(24):
+                    dx = int(rng.randint(-radius, radius))
+                    dy = int(rng.randint(-radius, radius))
+                    tx = int(ax + dx)
+                    ty = int(ay + dy)
+                    tid = int(self.world.peek_tile(int(tx), int(ty)))
+                    if bool(self._tile_solid(int(tid))):
+                        continue
+                    best = tile_center(int(tx), int(ty))
+                    break
+                goal = pygame.Vector2(best)
+                goal_left = float(rng.uniform(1.2, 3.2))
+
+            d = pygame.Vector2(goal) - pygame.Vector2(pos)
+            vel = pygame.Vector2(0, 0)
+            if d.length_squared() > 1.0:
+                try:
+                    vel = d.normalize() * float(speed)
+                except Exception:
+                    vel = pygame.Vector2(0, 0)
+
+            new_pos = self._move_box(pygame.Vector2(pos), pygame.Vector2(vel), float(dt_time), w=int(npc_w), h=int(npc_h))
+            moved = pygame.Vector2(new_pos) - pygame.Vector2(pos)
+            npc_vel = moved / float(dt_time) if dt_time > 0.0 else pygame.Vector2(0, 0)
+
+            npc["pos"] = pygame.Vector2(new_pos)
+            npc["vel"] = pygame.Vector2(npc_vel)
+            npc["goal"] = pygame.Vector2(goal)
+            npc["goal_left"] = float(goal_left)
+
+            moving = npc_vel.length_squared() > 1.0
+            if moving:
+                npc["walk"] = float(npc.get("walk", 0.0)) + float(dt_time) * 6.0
+                axis = int(npc.get("axis", 0))
+                vx = float(npc_vel.x)
+                vy = float(npc_vel.y)
+                ratio = abs(vy) / max(1e-6, abs(vx))
+                if axis == 0:
+                    if ratio > 1.18:
+                        axis = 1
+                else:
+                    if ratio < 0.85:
+                        axis = 0
+                npc["axis"] = int(axis)
+                if axis == 1:
+                    npc["dir"] = "down" if vy >= 0.0 else "up"
+                else:
+                    npc["dir"] = "right" if vx >= 0.0 else "left"
+            else:
+                npc["walk"] = float(npc.get("walk", 0.0)) * 0.85
+
+    def _story_nearest_npc(self, *, radius_px: float = 18.0) -> dict[str, object] | None:
+        if not bool(getattr(self, "story_enabled", False)):
+            return None
+        if not bool(self._story_is_pre_apocalypse()):
+            return None
+        if getattr(self, "mount", None) is not None:
+            return None
+        npcs = getattr(self, "npcs", None)
+        if not isinstance(npcs, list) or not npcs:
+            return None
+        r2 = float(radius_px) * float(radius_px)
+        p = pygame.Vector2(self.player.pos)
+        best: dict[str, object] | None = None
+        best_d2 = 1e18
+        for npc in npcs:
+            if not isinstance(npc, dict):
+                continue
+            try:
+                pos = pygame.Vector2(npc.get("pos", pygame.Vector2(0, 0)))
+            except Exception:
+                continue
+            d2 = float((pos - p).length_squared())
+            if d2 <= r2 and d2 < best_d2:
+                best = npc
+                best_d2 = d2
+        return best
+
+    def _try_talk_to_story_npc(self) -> bool:
+        if bool(getattr(self, "conv_open", False)) or bool(getattr(self, "dialog_open", False)):
+            return False
+        npc = self._story_nearest_npc(radius_px=20.0)
+        if npc is None:
+            return False
+        script = str(npc.get("script", "") or "")
+        if not script:
+            self._set_hint("这个人现在不想说话", seconds=1.0)
+            return True
+        self._conv_open_script(
+            script,
+            node="start",
+            ctx={"npc_id": str(npc.get("id", "")), "npc_name": str(npc.get("name", ""))},
+        )
+        return True
+
+    def _draw_story_npcs(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        if not bool(getattr(self, "story_enabled", False)):
+            return
+        if not bool(self._story_is_pre_apocalypse()):
+            return
+        npcs = getattr(self, "npcs", None)
+        if not isinstance(npcs, list) or not npcs:
+            return
+
+        mouse = None
+        if not self.inv_open and not bool(getattr(self, "world_map_open", False)):
+            mouse = self.app.screen_to_internal(pygame.mouse.get_pos())
+        mx, my = (int(mouse[0]), int(mouse[1])) if mouse is not None else (-999, -999)
+
+        player_p = pygame.Vector2(self.player.pos)
+        hovered: tuple[float, pygame.Surface, pygame.Rect, list[str], tuple[int, int]] | None = None
+
+        for npc in npcs:
+            if not isinstance(npc, dict):
+                continue
+            frames = npc.get("frames", None)
+            if not isinstance(frames, dict):
+                continue
+            d = str(npc.get("dir", "down") or "down")
+            fr = frames.get(d) or frames.get("down")
+            if not fr:
+                continue
+            try:
+                pos = pygame.Vector2(npc.get("pos", pygame.Vector2(0, 0)))
+            except Exception:
+                continue
+
+            p = pygame.Vector2(pos) - pygame.Vector2(cam_x, cam_y)
+            sx = iround(float(p.x))
+            sy = iround(float(p.y))
+
+            vel = npc.get("vel", pygame.Vector2(0, 0))
+            try:
+                moving = pygame.Vector2(vel).length_squared() > 1.0
+            except Exception:
+                moving = False
+            if moving and len(fr) > 1:
+                walk = fr[1:]
+                phase = float(npc.get("walk", 0.0))
+                idx = int(phase) % len(walk) if walk else 0
+                spr = walk[idx] if walk else fr[0]
+            else:
+                spr = fr[0]
+
+            rect = spr.get_rect()
+            rect.midbottom = (int(sx), iround(float(sy) + float(getattr(self.player, "h", 12)) / 2.0))
+
+            shadow = pygame.Rect(0, 0, max(6, rect.w - 4), 4)
+            shadow.center = (int(rect.centerx), int(rect.bottom - 2))
+            pygame.draw.ellipse(surface, (0, 0, 0), shadow)
+            surface.blit(spr, rect)
+
+            # Name tag when close (avoids clutter).
+            try:
+                d2 = float((pos - player_p).length_squared())
+                if d2 <= float((self.TILE_SIZE * 2.4) ** 2):
+                    name = str(npc.get("name", "") or "")
+                    if name:
+                        font = self.app.font_s
+                        img = font.render(name, False, pygame.Color(240, 240, 244))
+                        pad = 3
+                        tag = img.get_rect(midbottom=(int(rect.centerx), int(rect.top - 2)))
+                        bg = pygame.Rect(tag.x - pad, tag.y - 1, tag.w + pad * 2, tag.h + 2)
+                        pygame.draw.rect(surface, (0, 0, 0), bg, border_radius=5)
+                        pygame.draw.rect(surface, (90, 90, 110), bg, 1, border_radius=5)
+                        surface.blit(img, tag)
+            except Exception:
+                pass
+
+            if mouse is not None and rect.collidepoint(int(mx), int(my)):
+                name = str(npc.get("name", "") or "NPC")
+                script = str(npc.get("script", "") or "")
+                prompt = "E 对话" if script else "（无法对话）"
+                lines = [name, prompt]
+                d2 = float((pos - player_p).length_squared())
+                if hovered is None or d2 < hovered[0]:
+                    hovered = (d2, spr, rect, lines, (mx, my))
+
+        if hovered is not None:
+            _d2, spr, rect, lines, mpos = hovered
+            self._blit_sprite_outline(surface, spr, rect, color=(255, 245, 140))
+            self._hover_tooltip = (lines, mpos)
 
     def _story_update(self, dt_time: float) -> None:
         if not bool(getattr(self, "story_enabled", False)):
@@ -24535,6 +24815,8 @@ class HardcoreSurvivalState(State):
         if self._try_toggle_home_light_world():
             return
         if self._try_open_home_storage_world():
+            return
+        if self._try_talk_to_story_npc():
             return
         if self._try_pickup(quiet=True):
             return
@@ -35065,6 +35347,7 @@ class HardcoreSurvivalState(State):
         self._draw_zombies(surface, cam_x, cam_y_draw, corpses=True, alive=False)
         self._draw_rv(surface, cam_x, cam_y_draw)
         self._draw_bike(surface, cam_x, cam_y_draw)
+        self._draw_story_npcs(surface, cam_x, cam_y_draw)
         self._draw_zombies(surface, cam_x, cam_y_draw, corpses=False, alive=True)
         self._draw_bullets(surface, cam_x, cam_y_draw)
         self._draw_thrown_furniture(surface, cam_x, cam_y_draw)
