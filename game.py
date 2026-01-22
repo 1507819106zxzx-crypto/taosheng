@@ -23621,8 +23621,177 @@ class HardcoreSurvivalState(State):
 
         # Guarantee a real, enterable office building at the work marker.
         try:
-            office_w = 12
-            office_h = 10
+            office_w = 10
+            office_h = 8
+
+            door_tids = {
+                int(self.T_DOOR),
+                int(self.T_DOOR_BROKEN),
+                int(self.T_DOOR_LOCKED),
+            }
+
+            clear_furn_tids = {
+                int(self.T_TABLE),
+                int(self.T_SHELF),
+                int(self.T_BED),
+                int(self.T_SOFA),
+                int(self.T_FRIDGE),
+                int(self.T_TV),
+                int(self.T_CHAIR),
+                int(self.T_PC),
+                int(self.T_TOILET),
+                int(self.T_SINK),
+                int(self.T_BARRICADE),
+                int(self.T_GAS_PUMP),
+            }
+
+            def set_world_tile(tx: int, ty: int, tid2: int) -> None:
+                tx = int(tx)
+                ty = int(ty)
+                cx2 = int(tx) // int(self.CHUNK_SIZE)
+                cy2 = int(ty) // int(self.CHUNK_SIZE)
+                ch2 = self.world.get_chunk(int(cx2), int(cy2))
+                lx2 = int(tx) - int(cx2) * int(self.CHUNK_SIZE)
+                ly2 = int(ty) - int(cy2) * int(self.CHUNK_SIZE)
+                if 0 <= lx2 < int(self.CHUNK_SIZE) and 0 <= ly2 < int(self.CHUNK_SIZE):
+                    ch2.tiles[int(ly2) * int(self.CHUNK_SIZE) + int(lx2)] = int(tid2)
+
+            def stamp_office_layout(*, btx0: int, bty0: int, bw: int, bh: int, door: tuple[int, int] | None = None) -> None:
+                btx0 = int(btx0)
+                bty0 = int(bty0)
+                bw = int(bw)
+                bh = int(bh)
+                if bw <= 3 or bh <= 3:
+                    return
+                ix0 = int(btx0 + 1)
+                iy0 = int(bty0 + 1)
+                ix1 = int(btx0 + bw - 2)
+                iy1 = int(bty0 + bh - 2)
+
+                def in_int(xx: int, yy: int) -> bool:
+                    return int(ix0) <= int(xx) <= int(ix1) and int(iy0) <= int(yy) <= int(iy1)
+
+                def place(tid2: int, xx: int, yy: int) -> None:
+                    if in_int(int(xx), int(yy)):
+                        set_world_tile(int(xx), int(yy), int(tid2))
+
+                # Clear the interior so the office is never "empty" or blocked by random furniture.
+                for yy in range(int(iy0), int(iy1) + 1):
+                    for xx in range(int(ix0), int(ix1) + 1):
+                        tid = int(self.world.get_tile(int(xx), int(yy)))
+                        if int(tid) in clear_furn_tids:
+                            set_world_tile(int(xx), int(yy), int(self.T_FLOOR))
+
+                # Ensure a clear entry step inside the door.
+                if isinstance(door, tuple) and len(door) == 2:
+                    dx, dy = int(door[0]), int(door[1])
+                    for ox, oy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                        nx = int(dx + ox)
+                        ny = int(dy + oy)
+                        if in_int(int(nx), int(ny)):
+                            set_world_tile(int(nx), int(ny), int(self.T_FLOOR))
+
+                # Desk coordinates (adapt to building size).
+                # Each desk is 2 tiles wide: PC at (x,y) and (x+1,y).
+                def clamp_i(v: int, lo: int, hi: int) -> int:
+                    return int(max(int(lo), min(int(hi), int(v))))
+
+                def pc_desk(x0: int, y0: int) -> None:
+                    x0 = int(x0)
+                    y0 = int(y0)
+                    x0 = clamp_i(int(x0), int(ix0), int(ix1 - 1))
+                    y0 = clamp_i(int(y0), int(iy0), int(iy1))
+                    place(int(self.T_PC), int(x0), int(y0))
+                    place(int(self.T_PC), int(x0 + 1), int(y0))
+                    # Chair tries to go "below" the left PC tile; fall back above if needed.
+                    cy = int(y0 + 1)
+                    if not in_int(int(x0), int(cy)):
+                        cy = int(y0 - 1)
+                    place(int(self.T_CHAIR), int(x0), int(cy))
+
+                # Boss (top-right), secretary (bottom-left), employees + player in the middle.
+                pc_desk(int(ix1 - 2), int(iy0 + 1))  # boss
+                pc_desk(int(ix0 + 1), int(iy1 - 1))  # secretary
+                pc_desk(int(ix0 + 3), int(iy1 - 1))  # employee A
+                pc_desk(int(ix1 - 4), int(iy1 - 1))  # employee B
+                pc_desk(int((ix0 + ix1) // 2 - 1), int((iy0 + iy1) // 2))  # player
+
+                # Filing shelves on the left wall.
+                place(int(self.T_SHELF), int(ix0), int(iy0 + 1))
+                place(int(self.T_SHELF), int(ix0), int(iy0 + 2))
+
+            claimed = False
+            try:
+                # Prefer to "claim" an existing nearby building as the office (most reliable),
+                # then stamp office furniture inside it so the location is never empty.
+                center_tx = int(stx)
+                center_ty = int(sty)
+                max_r_claim = 84
+                for r in range(0, int(max_r_claim) + 1):
+                    if claimed:
+                        break
+                    for dy in range(-r, r + 1):
+                        if claimed:
+                            break
+                        for dx in range(-r, r + 1):
+                            nx = int(center_tx + dx)
+                            ny = int(center_ty + dy)
+                            tid = int(self.world.get_tile(int(nx), int(ny)))
+                            if int(tid) not in door_tids:
+                                continue
+                            hit = self._peek_building_at_tile(int(nx), int(ny))
+                            if hit is None:
+                                continue
+                            btx0, bty0, bw, bh, _roof_kind, floors = hit
+                            if int(floors) != 1:
+                                continue
+                            if int(bw) < 9 or int(bh) < 7:
+                                continue
+                            # Door must be on the building border.
+                            if not (
+                                int(nx) in (int(btx0), int(btx0) + int(bw) - 1)
+                                or int(ny) in (int(bty0), int(bty0) + int(bh) - 1)
+                            ):
+                                continue
+
+                            # Validate outside + inside adjacency so it's actually enterable.
+                            ok = False
+                            for ox, oy in (
+                                ((0, -1) if int(ny) == int(bty0) else (0, 0)),
+                                ((0, 1) if int(ny) == int(bty0) + int(bh) - 1 else (0, 0)),
+                                ((-1, 0) if int(nx) == int(btx0) else (0, 0)),
+                                ((1, 0) if int(nx) == int(btx0) + int(bw) - 1 else (0, 0)),
+                            ):
+                                if ox == 0 and oy == 0:
+                                    continue
+                                out_tx = int(nx + ox)
+                                out_ty = int(ny + oy)
+                                in_tx = int(nx - ox)
+                                in_ty = int(ny - oy)
+                                if not (int(btx0) <= int(in_tx) < int(btx0) + int(bw) and int(bty0) <= int(in_ty) < int(bty0) + int(bh)):
+                                    continue
+                                try:
+                                    out_tid = int(self.world.get_tile(int(out_tx), int(out_ty)))
+                                    in_tid = int(self.world.get_tile(int(in_tx), int(in_ty)))
+                                except Exception:
+                                    continue
+                                if bool(self._tile_solid(int(out_tid))) or bool(self._tile_solid(int(in_tid))):
+                                    continue
+                                ok = True
+                                break
+                            if not ok:
+                                continue
+
+                            self.story_work_tile = (int(nx), int(ny))
+                            self.story_office_key = (int(btx0), int(bty0), int(bw), int(bh))
+                            # Make sure the office entrance is always usable.
+                            if int(tid) == int(self.T_DOOR_LOCKED):
+                                set_world_tile(int(nx), int(ny), int(self.T_DOOR))
+                            stamp_office_layout(btx0=int(btx0), bty0=int(bty0), bw=int(bw), bh=int(bh), door=(int(nx), int(ny)))
+                            claimed = True
+                            break
+            except Exception:
+                claimed = False
 
             def rects_overlap(ax0: int, ay0: int, aw: int, ah: int, bx0: int, by0: int, bw: int, bh: int) -> bool:
                 return int(ax0) < int(bx0 + bw) and int(ax0 + aw) > int(bx0) and int(ay0) < int(by0 + bh) and int(ay0 + ah) > int(by0)
@@ -23661,11 +23830,11 @@ class HardcoreSurvivalState(State):
                         if rects_overlap(int(tx0), int(ty0), int(office_w), int(office_h), int(bx0), int(by0), int(bw), int(bh)):
                             return None
 
-                # Don't block roads/highways/water with the office footprint.
+                # Don't place on highways/water with the office footprint.
                 for yy in range(int(ty0), int(ty0 + office_h)):
                     for xx in range(int(tx0), int(tx0 + office_w)):
                         tid = int(self.world.get_tile(int(xx), int(yy)))
-                        if int(tid) in (int(self.T_ROAD), int(self.T_HIGHWAY), int(self.T_WATER)):
+                        if int(tid) in (int(self.T_HIGHWAY), int(self.T_WATER)):
                             return None
 
                 # Require a walkable tile just outside the door.
@@ -23684,10 +23853,10 @@ class HardcoreSurvivalState(State):
 
             # Find a good door tile near the initial work tile.
             door_tx, door_ty = int(self.story_work_tile[0]), int(self.story_work_tile[1])
-            best = can_place_office_at_door(int(door_tx), int(door_ty))
-            if best is None:
+            best = can_place_office_at_door(int(door_tx), int(door_ty)) if not bool(claimed) else None
+            if (not bool(claimed)) and best is None:
                 found = None
-                max_r = 18
+                max_r = 32
                 for avoid_roads in (True, False):
                     for r in range(0, int(max_r) + 1):
                         if found is not None:
@@ -23716,6 +23885,41 @@ class HardcoreSurvivalState(State):
                         break
                 if found is not None:
                     door_tx, door_ty, best = int(found[0]), int(found[1]), found[2]
+
+            # Last-resort fallback: try deterministic placements in nearby chunks so the office
+            # never ends up "missing" (e.g. when the initial tile is near chunk borders).
+            if (not bool(claimed)) and best is None:
+                try:
+                    scx = int(stx) // int(self.CHUNK_SIZE)
+                    scy = int(sty) // int(self.CHUNK_SIZE)
+                    # Door local coordinates inside a chunk (y close to bottom so the office fits above).
+                    door_locals = [(16, 30), (12, 30), (20, 30), (16, 29), (10, 30), (22, 30)]
+                    placed = None
+                    max_chunk_r = 6
+                    for cr in range(0, int(max_chunk_r) + 1):
+                        if placed is not None:
+                            break
+                        for dy in range(-cr, cr + 1):
+                            if placed is not None:
+                                break
+                            for dx in range(-cr, cr + 1):
+                                if max(abs(int(dx)), abs(int(dy))) != int(cr):
+                                    continue
+                                ccx = int(scx + dx)
+                                ccy = int(scy + dy)
+                                base_tx2 = int(ccx) * int(self.CHUNK_SIZE)
+                                base_ty2 = int(ccy) * int(self.CHUNK_SIZE)
+                                for lx, ly in door_locals:
+                                    cand_tx = int(base_tx2 + int(lx))
+                                    cand_ty = int(base_ty2 + int(ly))
+                                    cand = can_place_office_at_door(int(cand_tx), int(cand_ty))
+                                    if cand is not None:
+                                        placed = (int(cand_tx), int(cand_ty), cand)
+                                        break
+                    if placed is not None:
+                        door_tx, door_ty, best = int(placed[0]), int(placed[1]), placed[2]
+                except Exception:
+                    pass
 
             if best is not None:
                 tx0, ty0, bw, bh = (int(best[0]), int(best[1]), int(best[2]), int(best[3]))
@@ -24585,6 +24789,7 @@ class HardcoreSurvivalState(State):
                 npc["rng"] = rng
 
             script_id = str(npc.get("script", "") or "")
+            allow_inside = str(script_id).startswith("npc_staff_")
             beh = npc_beh.get(str(script_id), {})
             work_action = str(beh.get("work_action", "") or "")
             home_action = str(beh.get("home_action", "") or "")
@@ -24611,8 +24816,12 @@ class HardcoreSurvivalState(State):
             if not (isinstance(work, tuple) and len(work) == 2):
                 work = (0, 0)
             # Ensure anchors are on walkable tiles.
-            hx, hy = find_open_tile_near(int(home[0]), int(home[1]), max_r=8, avoid_roads=True)
-            wx, wy = find_open_tile_near(int(work[0]), int(work[1]), max_r=8, avoid_roads=True)
+            if not bool(allow_inside):
+                hx, hy = find_open_tile_near(int(home[0]), int(home[1]), max_r=8, avoid_roads=True)
+                wx, wy = find_open_tile_near(int(work[0]), int(work[1]), max_r=8, avoid_roads=True)
+            else:
+                hx, hy = int(home[0]), int(home[1])
+                wx, wy = int(work[0]), int(work[1])
             home = (int(hx), int(hy))
             work = (int(wx), int(wy))
             npc["home"] = home
@@ -24734,15 +24943,16 @@ class HardcoreSurvivalState(State):
             # Stationary story NPCs (e.g. guard) still animate their actions.
             if float(speed) <= 0.1:
                 # Safety: if ever displaced into a facade tile, snap back.
-                try:
-                    ntx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
-                    nty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
-                    if self._peek_building_at_tile(int(ntx), int(nty)) is not None:
-                        sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
-                        pos = tile_center(int(sx), int(sy))
-                        npc["pos"] = pygame.Vector2(pos)
-                except Exception:
-                    pass
+                if not bool(allow_inside):
+                    try:
+                        ntx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                        nty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                        if self._peek_building_at_tile(int(ntx), int(nty)) is not None:
+                            sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
+                            pos = tile_center(int(sx), int(sy))
+                            npc["pos"] = pygame.Vector2(pos)
+                    except Exception:
+                        pass
 
                 npc["vel"] = pygame.Vector2(0, 0)
                 npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) * 0.92
@@ -24934,18 +25144,20 @@ class HardcoreSurvivalState(State):
             moved = pygame.Vector2(new_pos) - pygame.Vector2(prev_pos)
             npc_vel = moved / float(dt_time) if dt_time > 0.0 else pygame.Vector2(0, 0)
 
-            # Safety: story NPCs should never end up inside building footprints (facades).
+            # Safety: pedestrians shouldn't end up inside building footprints (facades).
+            # Staff NPCs (clerks/doctors/office) are intentionally placed indoors.
             try:
-                ntx = int(math.floor(float(new_pos.x) / float(self.TILE_SIZE)))
-                nty = int(math.floor(float(new_pos.y) / float(self.TILE_SIZE)))
-                if self._peek_building_at_tile(int(ntx), int(nty)) is not None:
-                    sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
-                    new_pos = tile_center(int(sx), int(sy))
-                    moved = pygame.Vector2(0, 0)
-                    npc_vel = pygame.Vector2(0, 0)
-                    goal = pygame.Vector2(new_pos)
-                    goal_left = 0.0
-                    stuck_t = 0.0
+                if not bool(allow_inside):
+                    ntx = int(math.floor(float(new_pos.x) / float(self.TILE_SIZE)))
+                    nty = int(math.floor(float(new_pos.y) / float(self.TILE_SIZE)))
+                    if self._peek_building_at_tile(int(ntx), int(nty)) is not None:
+                        sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
+                        new_pos = tile_center(int(sx), int(sy))
+                        moved = pygame.Vector2(0, 0)
+                        npc_vel = pygame.Vector2(0, 0)
+                        goal = pygame.Vector2(new_pos)
+                        goal_left = 0.0
+                        stuck_t = 0.0
             except Exception:
                 pass
 
