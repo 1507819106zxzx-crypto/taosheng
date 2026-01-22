@@ -4888,6 +4888,18 @@ class HardcoreSurvivalState(State):
             brake=360.0,
             fuel_per_px=0.015,
         ),
+        "police": _CarModel(
+            id="police",
+            name="警车",
+            sprite_size=(38, 18),
+            collider=(28, 12),
+            wheelbase=22.0,
+            max_fwd=145.0,
+            max_rev=52.0,
+            accel=235.0,
+            brake=380.0,
+            fuel_per_px=0.015,
+        ),
     }
 
     def _draw_wheel(
@@ -5152,6 +5164,39 @@ class HardcoreSurvivalState(State):
             win = roof.inflate(-2, -2)
             pygame.draw.rect(surf, glass, win, border_radius=3)
             pygame.draw.rect(surf, outline, win, 1, border_radius=3)
+            pygame.draw.circle(surf, light, (w - 4, 6), 1)
+            pygame.draw.circle(surf, light, (w - 4, h - 7), 1)
+            pygame.draw.circle(surf, tail, (3, 6), 1)
+            pygame.draw.circle(surf, tail, (3, h - 7), 1)
+            y_top = 4
+            y_bottom = h - 5
+            wheel_centers = [(10, y_top), (10, y_bottom), (w - 6, y_top), (w - 6, y_bottom)]
+            wheel_r = 2
+        elif model.id == "police":
+            body = (236, 236, 242)
+            body2 = (44, 44, 54)
+            shell = pygame.Rect(3, 4, w - 6, h - 8)
+            pygame.draw.rect(surf, body, shell, border_radius=5)
+            pygame.draw.rect(surf, outline, shell, 2, border_radius=5)
+            # Side dark stripe (doors).
+            stripe = pygame.Rect(shell.x + 4, shell.y + 5, shell.w - 18, 3)
+            pygame.draw.rect(surf, body2, stripe, border_radius=2)
+            pygame.draw.rect(surf, outline, stripe, 1, border_radius=2)
+            # Hood + roof.
+            hood = pygame.Rect(shell.right - 15, shell.y + 1, 10, shell.h - 2)
+            pygame.draw.rect(surf, tint(body2, (16, 16, 16)), hood, border_radius=4)
+            roof = pygame.Rect(shell.x + 11, shell.y + 2, shell.w - 24, shell.h - 4)
+            pygame.draw.rect(surf, tint(body, (6, 6, 8)), roof, border_radius=4)
+            win = roof.inflate(-2, -2)
+            pygame.draw.rect(surf, glass, win, border_radius=3)
+            pygame.draw.rect(surf, outline, win, 1, border_radius=3)
+            # Siren lights.
+            sir = pygame.Rect(roof.centerx - 3, roof.y - 1, 6, 2)
+            pygame.draw.rect(surf, (190, 190, 200), sir, border_radius=1)
+            pygame.draw.rect(surf, outline, sir, 1, border_radius=1)
+            surf.set_at((sir.x + 1, sir.y), (255, 90, 90))
+            surf.set_at((sir.right - 2, sir.y), (90, 160, 255))
+            # Lights.
             pygame.draw.circle(surf, light, (w - 4, 6), 1)
             pygame.draw.circle(surf, light, (w - 4, h - 7), 1)
             pygame.draw.circle(surf, tail, (3, 6), 1)
@@ -7677,6 +7722,18 @@ class HardcoreSurvivalState(State):
             pygame.draw.rect(surf, steel, pygame.Rect(cx + 3, cy - 1, 2, 3))
             pygame.draw.rect(surf, outline, pygame.Rect(cx + 3, cy - 1, 2, 3), 1)
             pygame.draw.line(surf, steel, (cx - 2, cy), (cx + 2, cy), 1)
+        elif icon == "home":
+            # Tiny house.
+            steel = (240, 240, 240)
+            pygame.draw.polygon(surf, steel, [(cx - 3, cy), (cx, cy - 3), (cx + 3, cy)], 1)
+            pygame.draw.rect(surf, steel, pygame.Rect(cx - 2, cy, 5, 4), 1)
+            pygame.draw.rect(surf, steel, pygame.Rect(cx - 1, cy + 2, 2, 2), 1)
+        elif icon == "work":
+            # Briefcase.
+            steel = (240, 240, 240)
+            pygame.draw.rect(surf, steel, pygame.Rect(cx - 4, cy - 1, 8, 5), 1)
+            pygame.draw.rect(surf, steel, pygame.Rect(cx - 1, cy - 3, 3, 2), 1)
+            pygame.draw.line(surf, steel, (cx - 3, cy + 1), (cx + 2, cy + 1), 1)
         else:
             steel = (220, 220, 230)
             pygame.draw.rect(surf, steel, pygame.Rect(cx - 2, cy - 2, 4, 4), 1)
@@ -7877,11 +7934,19 @@ class HardcoreSurvivalState(State):
         ),
         "sign_chinese": _PropDef(
             id="sign_chinese",
-            name="中式建筑牌匾",
+            name="餐厅招牌",
             category="招牌",
             solid=False,
             collider=(12, 8),
             sprites=(_make_prop_sprite_sign(bg=(70, 36, 36), accent=(240, 210, 130), icon="pagoda"),),
+        ),
+        "sign_office": _PropDef(
+            id="sign_office",
+            name="公司招牌",
+            category="招牌",
+            solid=False,
+            collider=(12, 8),
+            sprites=(_make_prop_sprite_sign(bg=(34, 40, 62), accent=(160, 220, 255), icon="work"),),
         ),
         "sign_home": _PropDef(
             id="sign_home",
@@ -10357,7 +10422,7 @@ class HardcoreSurvivalState(State):
                         reserved.add((int(x), int(y)))
 
             # Spawn cars in a loose grid.
-            car_pool = [mid for mid in self.state._CAR_MODELS.keys() if str(mid) != "rv"]
+            car_pool = [mid for mid in self.state._CAR_MODELS.keys() if str(mid) not in ("rv", "police")]
             if not car_pool:
                 return
             base_tx = int(cx) * int(self.state.CHUNK_SIZE)
@@ -11331,26 +11396,33 @@ class HardcoreSurvivalState(State):
                                         tiles[idx(x, y)] = self.state.T_SHELF
 
                 elif town_kind == "中式建筑":
-                    # Chinese-style small house: bed + table + side storage.
-                    bx = in_left + 1
+                    # Chinese restaurant: counter + dining tables + kitchen storage.
+                    # Counter near the entrance.
                     if door_side in ("N", "S"):
-                        if int(round(door_cx)) <= int((in_left + in_right) // 2):
-                            bx = in_right - 2
-                        else:
-                            bx = in_left + 1
-                    by = in_top + 1
-                    if tiles[idx(bx, by)] == self.state.T_FLOOR and tiles[idx(bx + 1, by)] == self.state.T_FLOOR:
-                        tiles[idx(bx, by)] = self.state.T_BED
-                        tiles[idx(bx + 1, by)] = self.state.T_BED
+                        cy = in_top + 1 if door_side == "N" else in_bottom - 1
+                        for x in range(in_left + 1, in_right, 2):
+                            if (int(x), int(cy)) in corridor or near_door(int(x), int(cy)):
+                                continue
+                            set_interior(int(x), int(cy), self.state.T_TABLE)
+                    else:
+                        cx2 = in_left + 1 if door_side == "W" else in_right - 1
+                        for y in range(in_top + 1, in_bottom, 2):
+                            if (int(cx2), int(y)) in corridor or near_door(int(cx2), int(y)):
+                                continue
+                            set_interior(int(cx2), int(y), self.state.T_TABLE)
 
-                    tx0c = int(clamp(int(round((in_left + in_right) / 2.0)), in_left + 1, in_right - 1))
-                    ty0c = int(clamp(int(round((in_top + in_bottom) / 2.0)), in_top + 1, in_bottom - 1))
-                    if tiles[idx(tx0c, ty0c)] == self.state.T_FLOOR:
-                        tiles[idx(tx0c, ty0c)] = self.state.T_TABLE
+                    # Dining tables in the main area.
+                    for y in range(in_top + 2, in_bottom - 1, 3):
+                        for x in range(in_left + 2, in_right - 1, 3):
+                            if (int(x), int(y)) in corridor or near_door(int(x), int(y)):
+                                continue
+                            if tiles[idx(int(x), int(y))] == self.state.T_FLOOR:
+                                tiles[idx(int(x), int(y))] = self.state.T_TABLE
 
-                    shelf_x = in_left if bx > int((in_left + in_right) // 2) else in_right
-                    for y in range(in_top + 2, in_bottom - 1, 2):
-                        set_interior(int(shelf_x), int(y), self.state.T_SHELF)
+                    # Kitchen shelves along one side.
+                    kitchen_x = in_left if float(door_cx) > float((in_left + in_right) * 0.5) else in_right
+                    for y in range(in_top + 2, in_bottom - 2, 2):
+                        set_interior(int(kitchen_x), int(y), self.state.T_SHELF)
 
                 elif town_kind == "住宅":
                     # Residential: 2F houses stay on the world-map (no full-screen portal).
@@ -12436,6 +12508,7 @@ class HardcoreSurvivalState(State):
             fuel=100.0,
         )
         self._apply_rv_model()
+        self.rv_hotwired = False
         self.rv_dir = "right"
         self.rv_anim = 0.0
         self.rv_headlights_on = True
@@ -12445,6 +12518,7 @@ class HardcoreSurvivalState(State):
             model_id="bike_mountain",
         )
         self._apply_bike_model()
+        self.bike_hotwired = False
         self._place_spawn_vehicles_safely()
         self.bike_dir = "right"
         self.bike_anim = 0.0
@@ -12730,6 +12804,12 @@ class HardcoreSurvivalState(State):
 
         # Story mode (disaster prelude) bootstrap.
         self._story_init()
+        # Crime / wanted (pre-apocalypse sandbox layer).
+        self.crime_heat = 0.0
+        self.wanted_level = 0
+        self.crime_spawn_left = 0.0
+        self.crime_last_reason = ""
+        self.crime_heli_phase = 0.0
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if bool(getattr(self, "pause_open", False)):
@@ -22042,6 +22122,7 @@ class HardcoreSurvivalState(State):
         self.world_time_s += dt_time
         self._update_weather(dt_time)
         self._story_update(dt_time)
+        self._crime_update(dt_time)
         self._story_update_npcs(dt_time)
         self._story_update_traffic(dt_time)
 
@@ -23548,6 +23629,27 @@ class HardcoreSurvivalState(State):
         self._story_add_marker(int(self.story_cafe_tile[0]), int(self.story_cafe_tile[1]), "咖啡店", color=(240, 200, 140))
         self._story_add_marker(int(self.story_gym_tile[0]), int(self.story_gym_tile[1]), "健身房", color=(210, 170, 255))
 
+        # Place an office sign prop so "上班地点" is visually obvious in-world.
+        try:
+            wtx, wty = int(self.story_work_tile[0]), int(self.story_work_tile[1])
+            wx = (float(wtx) + 0.5) * float(self.TILE_SIZE)
+            wy = (float(wty) + 0.5) * float(self.TILE_SIZE)
+            chunk = self.world.get_chunk(int(wtx) // int(self.CHUNK_SIZE), int(wty) // int(self.CHUNK_SIZE))
+            if chunk is not None:
+                props = getattr(chunk, "props", None)
+                if not isinstance(props, list):
+                    chunk.props = []
+                    props = chunk.props
+                props[:] = [
+                    pr
+                    for pr in props
+                    if str(getattr(pr, "prop_id", "")) != "sign_office"
+                    or (pygame.Vector2(getattr(pr, "pos", pygame.Vector2(0, 0))) - pygame.Vector2(wx, wy)).length_squared() > 9.0
+                ]
+                props.append(HardcoreSurvivalState._WorldProp(pos=pygame.Vector2(wx, wy), prop_id="sign_office", variant=0, dir="down"))
+        except Exception:
+            pass
+
         # Place a small gym sign prop so the POI is visually obvious in-world.
         try:
             gtx, gty = int(self.story_gym_tile[0]), int(self.story_gym_tile[1])
@@ -23572,6 +23674,9 @@ class HardcoreSurvivalState(State):
 
         # Story NPCs (lightweight pedestrians for the prelude).
         self.npcs: list[dict[str, object]] = []
+        # Facility staff (shop/hospital clerks etc) spawned lazily per building/sign.
+        self.story_staff_spawned: set[tuple[int, int, str]] = set()
+        self.story_staff_scan_left = 0.0
         # Prelude ambient traffic (decorative): cars/bikes moving on roads.
         self.story_traffic_enabled = True
         self.story_traffic: list[dict[str, object]] = []
@@ -24116,6 +24221,95 @@ class HardcoreSurvivalState(State):
                 "wander_home": 2,
                 "face": "player",
             },
+            # Facility staff (spawned dynamically via sign props).
+            "npc_staff_shop_clerk": {
+                "work_action": "type",
+                "home_action": "type",
+                "pose_rate": 3.0,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "down",
+            },
+            "npc_staff_shop_stocker": {
+                "work_action": "guard_scan",
+                "home_action": "guard_scan",
+                "pose_rate": 2.2,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "right",
+            },
+            "npc_staff_bookstore_clerk": {
+                "work_action": "type",
+                "home_action": "type",
+                "pose_rate": 3.0,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "down",
+            },
+            "npc_staff_gunshop_clerk": {
+                "work_action": "guard_scan",
+                "home_action": "guard_scan",
+                "pose_rate": 2.2,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "scan",
+            },
+            "npc_staff_hospital_doctor": {
+                "work_action": "type",
+                "home_action": "type",
+                "pose_rate": 3.2,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "down",
+            },
+            "npc_staff_hospital_nurse": {
+                "work_action": "coffee",
+                "home_action": "coffee",
+                "pose_rate": 2.0,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "right",
+            },
+            "npc_staff_restaurant_waiter": {
+                "work_action": "wave",
+                "home_action": "wave",
+                "pose_rate": 2.8,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "player",
+            },
+            "npc_staff_restaurant_chef": {
+                "work_action": "type",
+                "home_action": "type",
+                "pose_rate": 3.0,
+                "stay_work": (999.0, 999.0),
+                "stay_home": (999.0, 999.0),
+                "stay_chance": 1.0,
+                "wander_work": 0,
+                "wander_home": 0,
+                "face": "down",
+            },
         }
 
         for npc in npcs:
@@ -24558,6 +24752,12 @@ class HardcoreSurvivalState(State):
                 elif npc_id == "muscle_guy":
                     npc["action"] = "muscle_punch" if float(atk_anim) > 0.0 else "muscle_guard"
                     npc["pose_phase"] = float(npc.get("pose_phase", 0.0)) + float(dt_time) * (6.5 if float(atk_anim) > 0.0 else 3.6)
+                else:
+                    role = str(npc.get("role", "") or "")
+                    if role in ("police", "swat"):
+                        npc["action"] = "bruce_punch" if float(atk_anim) > 0.0 else "bruce_guard"
+                        rate = 8.2 if role == "swat" else 7.6
+                        npc["pose_phase"] = float(npc.get("pose_phase", 0.0)) + float(dt_time) * (rate if float(atk_anim) > 0.0 else 4.2)
 
                 try:
                     atk_left = float(npc.get("attack_left", 0.0))
@@ -24583,6 +24783,16 @@ class HardcoreSurvivalState(State):
                         dmg = 9
                         cd = 0.78
                         atk_range = 13.0
+                    else:
+                        role = str(npc.get("role", "") or "")
+                        if role == "police":
+                            dmg = 10
+                            cd = 0.70
+                            atk_range = 13.2
+                        elif role == "swat":
+                            dmg = 16
+                            cd = 0.62
+                            atk_range = 13.6
                     if d2p <= float(atk_range) * float(atk_range):
                         npc["attack_left"] = float(cd)
                         if npc_id == "street_thug":
@@ -24591,6 +24801,11 @@ class HardcoreSurvivalState(State):
                         elif npc_id == "muscle_guy":
                             npc["attack_anim_left"] = float(max(float(npc.get("attack_anim_left", 0.0) or 0.0), 0.45))
                             npc["action"] = "muscle_punch"
+                        else:
+                            role = str(npc.get("role", "") or "")
+                            if role in ("police", "swat"):
+                                npc["attack_anim_left"] = float(max(float(npc.get("attack_anim_left", 0.0) or 0.0), 0.40))
+                                npc["action"] = "bruce_punch"
                         try:
                             self.player.hp = max(0, int(self.player.hp) - int(dmg))
                         except Exception:
@@ -24623,7 +24838,9 @@ class HardcoreSurvivalState(State):
                     npc["dir"] = "down" if vy >= 0.0 else "up"
                 else:
                     npc["dir"] = "right" if vx >= 0.0 else "left"
-                if bool(hostile) and npc_id in ("street_thug", "muscle_guy"):
+                if bool(hostile) and (
+                    npc_id in ("street_thug", "muscle_guy") or str(npc.get("role", "") or "") in ("police", "swat")
+                ):
                     npc["dir"] = _face_to_player()
             else:
                 npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) * 0.92
@@ -24810,7 +25027,7 @@ class HardcoreSurvivalState(State):
         cx, cy = int(center_tile[0]), int(center_tile[1])
 
         try:
-            car_pool = [mid for mid in self._CAR_MODELS.keys() if str(mid) not in ("rv",)]
+            car_pool = [mid for mid in self._CAR_MODELS.keys() if str(mid) not in ("rv", "police")]
         except Exception:
             car_pool = ["beetle"]
         if not car_pool:
@@ -25033,8 +25250,13 @@ class HardcoreSurvivalState(State):
         if len(traffic) > int(target):
             drop = int(len(traffic) - int(target))
             if drop > 0:
-                rng.shuffle(traffic)
-                del traffic[:drop]
+                pinned = [a for a in traffic if isinstance(a, dict) and bool(a.get("pinned", False))]
+                others = [a for a in traffic if not (isinstance(a, dict) and bool(a.get("pinned", False)))]
+                rng.shuffle(others)
+                drop2 = int(min(int(drop), len(others)))
+                if drop2 > 0:
+                    del others[:drop2]
+                traffic[:] = pinned + others
 
         ppos = pygame.Vector2(self.player.pos)
         max_dist2 = float((float(self.TILE_SIZE) * 95.0) ** 2)
@@ -25139,36 +25361,98 @@ class HardcoreSurvivalState(State):
                 except Exception:
                     at_junction = False
                     tx, ty = 0, 0
-                if at_junction and float(prng.random()) < 0.16:
-                    if lane_axis == 0:
-                        # Turn into vertical.
-                        nd = "up" if float(prng.random()) < 0.5 else "down"
-                        a["dir"] = str(nd)
-                        a["lane_axis"] = 1
-                        a["lane_line"] = int(tx)
-                        lane_axis = 1
-                        lane_line = int(tx)
-                        d = str(nd)
-                        if kind == "car":
-                            a["heading"] = -math.pi / 2.0 if nd == "up" else math.pi / 2.0
+                is_police = str(a.get("tag", "") or "") == "police"
+                if at_junction and (bool(is_police) or float(prng.random()) < 0.16):
+                    if is_police:
+                        # Police chase: pick a direction that reduces Manhattan distance to the player.
+                        try:
+                            ptx2, pty2 = self._player_tile()
+                        except Exception:
+                            ptx2, pty2 = int(tx), int(ty)
+                        dxp = int(ptx2) - int(tx)
+                        dyp = int(pty2) - int(ty)
+
+                        def set_dir(nd: str) -> None:
+                            nonlocal d
+                            nd = str(nd)
+                            a["dir"] = str(nd)
+                            d = str(nd)
+                            if kind == "car":
+                                if nd == "left":
+                                    a["heading"] = math.pi
+                                elif nd == "right":
+                                    a["heading"] = 0.0
+                                elif nd == "up":
+                                    a["heading"] = -math.pi / 2.0
+                                else:
+                                    a["heading"] = math.pi / 2.0
+
+                        if lane_axis == 0:
+                            # Decide whether to turn into vertical or reverse/continue horizontally.
+                            if abs(int(dyp)) > abs(int(dxp)):
+                                # Turn vertical.
+                                nd = "up" if int(dyp) < 0 else "down"
+                                a["lane_axis"] = 1
+                                a["lane_line"] = int(tx)
+                                lane_axis = 1
+                                lane_line = int(tx)
+                                set_dir(nd)
+                            else:
+                                # Stay on horizontal, but pick the correct chase direction (may U-turn).
+                                nd = "left" if int(dxp) < 0 else "right"
+                                set_dir(nd)
+                        else:
+                            # lane_axis == 1 (vertical)
+                            if abs(int(dxp)) > abs(int(dyp)):
+                                # Turn horizontal.
+                                nd = "left" if int(dxp) < 0 else "right"
+                                a["lane_axis"] = 0
+                                a["lane_line"] = int(ty)
+                                lane_axis = 0
+                                lane_line = int(ty)
+                                set_dir(nd)
+                            else:
+                                # Stay on vertical (may U-turn).
+                                nd = "up" if int(dyp) < 0 else "down"
+                                set_dir(nd)
+
+                        # Snap to junction center so rotation doesn't "swim".
+                        pos.update((float(tx) + 0.5) * float(self.TILE_SIZE), (float(ty) + 0.5) * float(self.TILE_SIZE))
+                        if lane_axis == 0:
+                            pos.y += float(lane_offset)
+                        else:
+                            pos.x += float(lane_offset)
+                        turn_cd = float(prng.uniform(0.35, 0.75))
                     else:
-                        # Turn into horizontal.
-                        nd = "left" if float(prng.random()) < 0.5 else "right"
-                        a["dir"] = str(nd)
-                        a["lane_axis"] = 0
-                        a["lane_line"] = int(ty)
-                        lane_axis = 0
-                        lane_line = int(ty)
-                        d = str(nd)
-                        if kind == "car":
-                            a["heading"] = math.pi if nd == "left" else 0.0
-                    # Snap to junction center so rotation doesn't "swim".
-                    pos.update((float(tx) + 0.5) * float(self.TILE_SIZE), (float(ty) + 0.5) * float(self.TILE_SIZE))
-                    if lane_axis == 0:
-                        pos.y += float(lane_offset)
-                    else:
-                        pos.x += float(lane_offset)
-                    turn_cd = float(prng.uniform(0.9, 1.6))
+                        if lane_axis == 0:
+                            # Turn into vertical.
+                            nd = "up" if float(prng.random()) < 0.5 else "down"
+                            a["dir"] = str(nd)
+                            a["lane_axis"] = 1
+                            a["lane_line"] = int(tx)
+                            lane_axis = 1
+                            lane_line = int(tx)
+                            d = str(nd)
+                            if kind == "car":
+                                a["heading"] = -math.pi / 2.0 if nd == "up" else math.pi / 2.0
+                        else:
+                            # Turn into horizontal.
+                            nd = "left" if float(prng.random()) < 0.5 else "right"
+                            a["dir"] = str(nd)
+                            a["lane_axis"] = 0
+                            a["lane_line"] = int(ty)
+                            lane_axis = 0
+                            lane_line = int(ty)
+                            d = str(nd)
+                            if kind == "car":
+                                a["heading"] = math.pi if nd == "left" else 0.0
+                        # Snap to junction center so rotation doesn't "swim".
+                        pos.update((float(tx) + 0.5) * float(self.TILE_SIZE), (float(ty) + 0.5) * float(self.TILE_SIZE))
+                        if lane_axis == 0:
+                            pos.y += float(lane_offset)
+                        else:
+                            pos.x += float(lane_offset)
+                        turn_cd = float(prng.uniform(0.9, 1.6))
 
             # Collision with humans: traffic should not clip through the player/NPCs.
             try:
@@ -25750,7 +26034,16 @@ class HardcoreSurvivalState(State):
             if isinstance(spr, pygame.Surface):
                 return spr
 
-            w, h = int(base.get_width()), int(base.get_height())
+            base_w, base_h = int(base.get_width()), int(base.get_height())
+            pad_x = 0
+            pad_y = 0
+            # Some combat poses need extra canvas so fists can extend beyond the base sprite.
+            if action in ("bruce_guard", "bruce_punch"):
+                pad_x = 7
+            elif action in ("muscle_guard", "muscle_punch"):
+                pad_x = 10
+            w = int(base_w + pad_x * 2)
+            h = int(base_h + pad_y * 2)
             outline = (10, 10, 12)
             phone = (40, 40, 50)
             phone_hi = (230, 220, 140)
@@ -25768,6 +26061,8 @@ class HardcoreSurvivalState(State):
             skin = tuple(cols.get("skin", (220, 190, 160)))
 
             def px(x: int, y: int, c: tuple[int, int, int]) -> None:
+                x = int(x) + int(pad_x)
+                y = int(y) + int(pad_y)
                 if 0 <= int(x) < w and 0 <= int(y) < h:
                     try:
                         out.set_at((int(x), int(y)), c)
@@ -25775,16 +26070,20 @@ class HardcoreSurvivalState(State):
                         pass
 
             def mirror_x(x: int) -> int:
-                return int(w - 1 - int(x))
+                return int(int(base_w) - 1 - int(x))
 
             if action == "pushup":
                 out = pygame.Surface((w, h), pygame.SRCALPHA)
                 off_y = 1 if int(frame) == 1 else 0
-                out.blit(base, (0, int(off_y)))
+                out.blit(base, (int(pad_x), int(pad_y + off_y)))
                 px(6, 1 if int(frame) == 1 else 0, sweat)
                 px(7, 2 if int(frame) == 1 else 1, sweat)
             else:
-                out = base.copy()
+                if int(pad_x) > 0 or int(pad_y) > 0:
+                    out = pygame.Surface((w, h), pygame.SRCALPHA)
+                    out.blit(base, (int(pad_x), int(pad_y)))
+                else:
+                    out = base.copy()
 
             if action == "guard_scan":
                 x = 10 if str(direction) in ("right", "down") else 1
@@ -25843,6 +26142,7 @@ class HardcoreSurvivalState(State):
                 wind = bool(is_punch and int(frame) == 0)
                 jab = bool(is_punch and int(frame) == 1)
                 hi = phone_hi
+                x_fist = int(base_w) + int(pad_x) - 2
 
                 def sx(x: int) -> int:
                     x = int(x)
@@ -25864,22 +26164,23 @@ class HardcoreSurvivalState(State):
                         px(sx(10), 6, outline)
                     if jab:
                         y = 7
-                        # Thicker arm extension (2px high).
-                        for xx in range(8, 11):
+                        # Arm extension (2px high) into the padded canvas.
+                        for xx in range(8, int(x_fist)):
                             px(sx(xx), int(y), skin)
                             px(sx(xx), int(y - 1), skin)
                         # Fist (2x2).
-                        px(sx(11), int(y), skin)
-                        px(sx(11), int(y - 1), skin)
+                        for xx in (int(x_fist), int(x_fist) + 1):
+                            px(sx(xx), int(y), skin)
+                            px(sx(xx), int(y - 1), skin)
                         # Outline to separate from the body.
-                        px(sx(11), int(y - 2), outline)
-                        px(sx(11), int(y + 1), outline)
-                        px(sx(10), int(y - 2), outline)
-                        px(sx(10), int(y + 1), outline)
+                        px(sx(int(x_fist) + 1), int(y - 2), outline)
+                        px(sx(int(x_fist) + 1), int(y + 1), outline)
+                        px(sx(int(x_fist)), int(y - 2), outline)
+                        px(sx(int(x_fist)), int(y + 1), outline)
                         # Motion lines.
-                        px(sx(9), int(y - 3), hi)
-                        px(sx(10), int(y - 3), hi)
-                        px(sx(10), int(y - 2), hi)
+                        px(sx(int(x_fist) - 3), int(y - 3), hi)
+                        px(sx(int(x_fist) - 2), int(y - 3), hi)
+                        px(sx(int(x_fist) - 2), int(y - 2), hi)
                 else:
                     # Up/Down: punch to the side so it's visible.
                     y = 6 if str(direction) == "up" else 9
@@ -25890,18 +26191,21 @@ class HardcoreSurvivalState(State):
                         px(7, int(y), skin)
                         px(7, int(y - 1), outline)
                     if jab:
-                        for xx in range(7, 11):
+                        for xx in range(7, int(x_fist)):
                             px(int(xx), int(y), skin)
-                        px(10, int(y - 1), outline)
-                        px(10, int(y + 1), outline)
-                        px(9, int(y - 1), hi)
-                        px(8, int(y - 1), hi)
+                        for xx in (int(x_fist), int(x_fist) + 1):
+                            px(int(xx), int(y), skin)
+                        px(int(x_fist) + 1, int(y - 1), outline)
+                        px(int(x_fist) + 1, int(y + 1), outline)
+                        px(int(x_fist) - 1, int(y - 1), hi)
+                        px(int(x_fist) - 2, int(y - 1), hi)
             elif action in ("muscle_guard", "muscle_punch"):
                 # Bigger/thicker punch so it's always obvious the arm extends.
                 is_punch = bool(str(action) == "muscle_punch")
                 wind = bool(is_punch and int(frame) == 0)
                 jab = bool(is_punch and int(frame) == 1)
                 hi = phone_hi
+                x_fist = int(base_w) + int(pad_x) - 2
 
                 def sx(x: int) -> int:
                     x = int(x)
@@ -25930,19 +26234,20 @@ class HardcoreSurvivalState(State):
                     if jab:
                         y = 7
                         # Thick arm extension (3px tall).
-                        for xx in range(7, 11):
+                        for xx in range(7, int(x_fist)):
                             for yy in (y - 1, y, y + 1):
                                 px(sx(xx), int(yy), skin)
                         # Big fist at the end.
-                        for yy in (y - 1, y, y + 1):
-                            px(sx(11), int(yy), skin)
+                        for xx in (int(x_fist), int(x_fist) + 1):
+                            for yy in (y - 1, y, y + 1):
+                                px(sx(xx), int(yy), skin)
                         # Outline + motion.
-                        px(sx(11), int(y - 2), outline)
-                        px(sx(11), int(y + 2), outline)
-                        px(sx(10), int(y - 2), outline)
-                        px(sx(10), int(y + 2), outline)
-                        px(sx(9), int(y - 3), hi)
-                        px(sx(10), int(y - 3), hi)
+                        px(sx(int(x_fist) + 1), int(y - 2), outline)
+                        px(sx(int(x_fist) + 1), int(y + 2), outline)
+                        px(sx(int(x_fist)), int(y - 2), outline)
+                        px(sx(int(x_fist)), int(y + 2), outline)
+                        px(sx(int(x_fist) - 1), int(y - 3), hi)
+                        px(sx(int(x_fist)), int(y - 3), hi)
                 else:
                     # Up/Down: punch to the side so it stays visible.
                     y = 6 if str(direction) == "up" else 9
@@ -25953,16 +26258,17 @@ class HardcoreSurvivalState(State):
                         px(7, int(y), skin)
                         px(7, int(y - 1), outline)
                     if jab:
-                        for xx in range(7, 11):
+                        for xx in range(7, int(x_fist)):
                             px(int(xx), int(y), skin)
                             px(int(xx), int(y - 1), skin)
-                        px(11, int(y), skin)
-                        px(11, int(y - 1), skin)
-                        px(11, int(y - 2), outline)
-                        px(11, int(y + 1), outline)
-                        px(10, int(y - 2), outline)
-                        px(10, int(y + 1), outline)
-                        px(9, int(y - 3), hi)
+                        for xx in (int(x_fist), int(x_fist) + 1):
+                            px(int(xx), int(y), skin)
+                            px(int(xx), int(y - 1), skin)
+                        px(int(x_fist) + 1, int(y - 2), outline)
+                        px(int(x_fist) + 1, int(y + 1), outline)
+                        px(int(x_fist), int(y - 2), outline)
+                        px(int(x_fist), int(y + 1), outline)
+                        px(int(x_fist) - 1, int(y - 3), hi)
 
             cache[key] = out
             return out
@@ -26138,6 +26444,737 @@ class HardcoreSurvivalState(State):
                 self.story_last_work_ping_day = int(day)
                 if offset in (-3, -2, -1):
                     self._set_hint("去上班打卡（看地图：上班地点）", seconds=1.6)
+
+        # Lazy-spawn facility staff (clerks/doctors) near generated buildings.
+        self._story_update_staff(float(dt_time))
+
+    def _story_update_staff(self, dt_time: float) -> None:
+        if not bool(getattr(self, "story_enabled", False)):
+            return
+        if not bool(self._story_is_pre_apocalypse()):
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return
+
+        dt_time = float(max(0.0, dt_time))
+        left = float(getattr(self, "story_staff_scan_left", 0.0))
+        left = float(max(0.0, float(left) - float(dt_time)))
+        if float(left) > 0.0:
+            self.story_staff_scan_left = float(left)
+            return
+        self.story_staff_scan_left = 1.25
+
+        spawned = getattr(self, "story_staff_spawned", None)
+        if not isinstance(spawned, set):
+            self.story_staff_spawned = set()
+            spawned = self.story_staff_spawned
+
+        npcs = getattr(self, "npcs", None)
+        if not isinstance(npcs, list):
+            self.npcs = []
+            npcs = self.npcs
+
+        # Ensure the staff scripts exist (minimal talking, no shop UI yet).
+        staff_scripts: dict[str, dict[str, object]] = {
+            "npc_staff_shop_clerk": {
+                "start": {"speaker": "店员", "text": "欢迎光临～随便看看哈。", "options": [{"label": "随便看看", "action": "close"}]},
+            },
+            "npc_staff_shop_stocker": {
+                "start": {"speaker": "理货员", "text": "我在补货，别挡道～", "options": [{"label": "好", "action": "close"}]},
+            },
+            "npc_staff_bookstore_clerk": {
+                "start": {"speaker": "书店店员", "text": "今天书卖得飞快……有点怪。", "options": [{"label": "先看看", "action": "close"}]},
+            },
+            "npc_staff_gunshop_clerk": {
+                "start": {"speaker": "枪械店老板", "text": "不卖军火哈，只卖合法的。", "options": [{"label": "知道了", "action": "close"}]},
+            },
+            "npc_staff_hospital_doctor": {
+                "start": {"speaker": "医生", "text": "最近别往急诊凑热闹，听我一句。", "options": [{"label": "怎么了？", "action": "hint:医院里人多得离谱，救护车一辆接一辆……", "next": "start"}, {"label": "明白", "action": "close"}]},
+            },
+            "npc_staff_hospital_nurse": {
+                "start": {"speaker": "护士", "text": "你脸色不太好，早点回家休息。", "options": [{"label": "谢谢", "action": "close"}]},
+            },
+            "npc_staff_restaurant_waiter": {
+                "start": {
+                    "speaker": "服务员",
+                    "text": "两位吗？这边请～今天推荐：红烧肉！",
+                    "options": [{"label": "先随便看看", "action": "close"}],
+                },
+            },
+            "npc_staff_restaurant_chef": {
+                "start": {
+                    "speaker": "厨师",
+                    "text": "后厨重地，闲人免进～（但你看起来挺靠谱的）",
+                    "options": [{"label": "我就看看", "action": "close"}],
+                },
+            },
+        }
+        try:
+            scripts = getattr(self, "_CONV_SCRIPTS", None)
+            if not isinstance(scripts, dict):
+                self._CONV_SCRIPTS = {}
+                scripts = self._CONV_SCRIPTS
+            for sid, sdef in staff_scripts.items():
+                if str(sid) not in scripts:
+                    scripts[str(sid)] = dict(sdef)
+        except Exception:
+            pass
+
+        staff_by_sign: dict[str, list[dict[str, object]]] = {
+            "sign_hospital": [
+                {"role": "doctor", "name": "医生", "script": "npc_staff_hospital_doctor", "gender": 0, "outfit": 1},
+                {"role": "nurse", "name": "护士", "script": "npc_staff_hospital_nurse", "gender": 1, "outfit": 1},
+            ],
+            "sign_shop": [
+                {"role": "clerk", "name": "店员", "script": "npc_staff_shop_clerk", "gender": 1, "outfit": 6},
+            ],
+            "sign_shop_big": [
+                {"role": "cashier", "name": "收银员", "script": "npc_staff_shop_clerk", "gender": 1, "outfit": 6},
+                {"role": "stocker", "name": "理货员", "script": "npc_staff_shop_stocker", "gender": 0, "outfit": 6},
+            ],
+            "sign_bookstore": [
+                {"role": "clerk", "name": "店员", "script": "npc_staff_bookstore_clerk", "gender": 0, "outfit": 1},
+            ],
+            "sign_gunshop": [
+                {"role": "clerk", "name": "老板", "script": "npc_staff_gunshop_clerk", "gender": 0, "outfit": 2},
+            ],
+            "sign_chinese": [
+                {"role": "waiter", "name": "服务员", "script": "npc_staff_restaurant_waiter", "gender": 1, "outfit": 11},
+                {"role": "chef", "name": "厨师", "script": "npc_staff_restaurant_chef", "gender": 0, "outfit": 8},
+            ],
+        }
+
+        door_tids = {
+            int(self.T_DOOR),
+            int(self.T_DOOR_HOME),
+            int(self.T_DOOR_LOCKED),
+            int(self.T_DOOR_HOME_LOCKED),
+            int(self.T_DOOR_BROKEN),
+        }
+
+        def prop_tile(pr: object) -> tuple[int, int] | None:
+            try:
+                p = pygame.Vector2(getattr(pr, "pos", pygame.Vector2(0, 0)))
+            except Exception:
+                return None
+            tx = int(math.floor(float(p.x) / float(self.TILE_SIZE)))
+            ty = int(math.floor(float(p.y) / float(self.TILE_SIZE)))
+            return int(tx), int(ty)
+
+        def is_walkable_tid(tid: int) -> bool:
+            tid = int(tid)
+            if tid in door_tids:
+                return False
+            return not bool(self._tile_solid(int(tid)))
+
+        def find_nearest_door(tx: int, ty: int, *, r: int = 5) -> tuple[int, int] | None:
+            best: tuple[int, int, int] | None = None
+            for dy in range(-int(r), int(r) + 1):
+                for dx in range(-int(r), int(r) + 1):
+                    nx = int(tx + dx)
+                    ny = int(ty + dy)
+                    tid = int(self.world.get_tile(int(nx), int(ny)))
+                    if int(tid) not in door_tids:
+                        continue
+                    d2 = int(dx * dx + dy * dy)
+                    if best is None or int(d2) < int(best[0]):
+                        best = (int(d2), int(nx), int(ny))
+            return (int(best[1]), int(best[2])) if best is not None else None
+
+        def building_key_at_door(tx: int, ty: int) -> tuple[int, int, int, int] | None:
+            try:
+                hit = self._peek_building_at_tile(int(tx), int(ty))
+            except Exception:
+                hit = None
+            if hit is None:
+                return None
+            return (int(hit[0]), int(hit[1]), int(hit[2]), int(hit[3]))
+
+        def find_inside_tile(bkey: tuple[int, int, int, int], door: tuple[int, int]) -> tuple[int, int] | None:
+            tx0, ty0, bw, bh = (int(bkey[0]), int(bkey[1]), int(bkey[2]), int(bkey[3]))
+            dx, dy = int(door[0]), int(door[1])
+            for ox, oy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                nx = int(dx + ox)
+                ny = int(dy + oy)
+                if not (int(tx0) <= int(nx) < int(tx0 + bw) and int(ty0) <= int(ny) < int(ty0 + bh)):
+                    continue
+                tid = int(self.world.get_tile(int(nx), int(ny)))
+                if not bool(is_walkable_tid(int(tid))):
+                    continue
+                return int(nx), int(ny)
+            # Fallback: scan for any walkable interior tile.
+            for ny in range(int(ty0) + 1, int(ty0 + bh) - 1):
+                for nx in range(int(tx0) + 1, int(tx0 + bw) - 1):
+                    tid = int(self.world.get_tile(int(nx), int(ny)))
+                    if bool(is_walkable_tid(int(tid))):
+                        return int(nx), int(ny)
+            return None
+
+        def find_adjacent_floor_to(
+            bkey: tuple[int, int, int, int],
+            target_tid: int,
+            *,
+            reachable: set[tuple[int, int]] | None = None,
+        ) -> tuple[int, int] | None:
+            tx0, ty0, bw, bh = (int(bkey[0]), int(bkey[1]), int(bkey[2]), int(bkey[3]))
+            want = int(target_tid)
+            for ty in range(int(ty0) + 1, int(ty0 + bh) - 1):
+                for tx in range(int(tx0) + 1, int(tx0 + bw) - 1):
+                    if int(self.world.get_tile(int(tx), int(ty))) != int(want):
+                        continue
+                    for ox, oy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                        nx = int(tx + ox)
+                        ny = int(ty + oy)
+                        if not (int(tx0) <= int(nx) < int(tx0 + bw) and int(ty0) <= int(ny) < int(ty0 + bh)):
+                            continue
+                        tid2 = int(self.world.get_tile(int(nx), int(ny)))
+                        if bool(is_walkable_tid(int(tid2))) and (reachable is None or (int(nx), int(ny)) in reachable):
+                            return int(nx), int(ny)
+            return None
+
+        def add_staff_npc(
+            *,
+            npc_id: str,
+            name: str,
+            tile: tuple[int, int],
+            gender: int,
+            outfit: int,
+            script: str,
+            role: str = "staff",
+        ) -> None:
+            npc_id = str(npc_id)
+            if any(isinstance(n, dict) and str(n.get("id", "")) == npc_id for n in npcs):
+                return
+            tx, ty = int(tile[0]), int(tile[1])
+            tid = int(self.world.get_tile(int(tx), int(ty)))
+            if not bool(is_walkable_tid(int(tid))):
+                return
+            if self._peek_building_at_tile(int(tx), int(ty)) is None:
+                return
+
+            seed = 0
+            for ch in npc_id:
+                seed = (seed * 131 + ord(ch)) & 0xFFFFFFFF
+            rng = random.Random(int(seed) ^ int(getattr(self, "seed", 0)) ^ 0x4C6E6B51)
+            g = int(gender)
+            av = SurvivalAvatar(
+                gender=int(g),
+                height=rng.choice([0, 1, 1, 2]),
+                face=rng.randrange(0, 3),
+                eyes=rng.randrange(0, 4),
+                hair=rng.randrange(0, len(SURVIVAL_HAIR_OPTIONS)),
+                nose=rng.randrange(0, 3),
+                skin=rng.randrange(0, len(SURVIVAL_SKIN_OPTIONS)),
+                hair_color=rng.randrange(0, len(SURVIVAL_HAIR_COLOR_OPTIONS)),
+                eye_color=rng.randrange(0, len(SURVIVAL_EYE_COLOR_OPTIONS)),
+                mouth=rng.randrange(0, len(SURVIVAL_MOUTH_OPTIONS)),
+                beard=(rng.choice([0, 0, 1, 1, 2, 3]) if g == 0 else 0),
+                makeup=(rng.choice([0, 1, 2]) if g != 0 else 0),
+                accessory=(rng.choice([0, 0, 1, 2, 3]) if g != 0 else rng.choice([0, 0, 1])),
+                outfit=int(outfit),
+            )
+            av.clamp_all()
+            frames = HardcoreSurvivalState.build_avatar_player_frames(av, run=False)
+            pos = pygame.Vector2((float(tx) + 0.5) * float(self.TILE_SIZE), (float(ty) + 0.5) * float(self.TILE_SIZE))
+            npcs.append(
+                {
+                    "id": str(npc_id),
+                    "name": str(name),
+                    "pos": pygame.Vector2(pos),
+                    "dir": "down",
+                    "walk_phase": float(rng.random() * math.tau),
+                    "vel": pygame.Vector2(0, 0),
+                    "goal": pygame.Vector2(pos),
+                    "goal_left": 0.0,
+                    "axis": 0,
+                    "stuck": 0.0,
+                    "rng": rng,
+                    "speed": 0.0,
+                    "home": (int(tx), int(ty)),
+                    "work": (int(tx), int(ty)),
+                    "frames": frames,
+                    "script": str(script),
+                    "role": str(role),
+                    "avatar": av,
+                    "action": "",
+                    "pose_phase": float(rng.random() * math.tau),
+                    "stay_left": 0.0,
+                    "pose_cache": {},
+                }
+            )
+
+        def reachable_in_building(
+            bkey: tuple[int, int, int, int],
+            start: tuple[int, int],
+        ) -> set[tuple[int, int]]:
+            tx0, ty0, bw, bh = (int(bkey[0]), int(bkey[1]), int(bkey[2]), int(bkey[3]))
+            sx, sy = (int(start[0]), int(start[1]))
+            if not (int(tx0) <= int(sx) < int(tx0 + bw) and int(ty0) <= int(sy) < int(ty0 + bh)):
+                return set()
+            seen: set[tuple[int, int]] = set()
+            stack = [(int(sx), int(sy))]
+            while stack and len(seen) < int(bw) * int(bh):
+                x, y = stack.pop()
+                x = int(x)
+                y = int(y)
+                if (x, y) in seen:
+                    continue
+                if not (int(tx0) <= int(x) < int(tx0 + bw) and int(ty0) <= int(y) < int(ty0 + bh)):
+                    continue
+                try:
+                    tid = int(self.world.peek_tile(int(x), int(y)))
+                except Exception:
+                    continue
+                if bool(self._tile_solid(int(tid))):
+                    continue
+                seen.add((x, y))
+                stack.extend([(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)])
+            return seen
+
+        ptx, pty = self._player_tile()
+        pcx = int(ptx) // int(self.CHUNK_SIZE)
+        pcy = int(pty) // int(self.CHUNK_SIZE)
+        scan_r = 2
+        for cy in range(int(pcy) - int(scan_r), int(pcy) + int(scan_r) + 1):
+            for cx in range(int(pcx) - int(scan_r), int(pcx) + int(scan_r) + 1):
+                chunk = self.world.peek_chunk(int(cx), int(cy))
+                if chunk is None:
+                    continue
+                props = getattr(chunk, "props", None)
+                if not isinstance(props, list) or not props:
+                    continue
+                for pr in props:
+                    pid = str(getattr(pr, "prop_id", "") or "")
+                    staff_defs = staff_by_sign.get(pid)
+                    if not staff_defs:
+                        continue
+                    pt = prop_tile(pr)
+                    if pt is None:
+                        continue
+                    door = find_nearest_door(int(pt[0]), int(pt[1]), r=5)
+                    if door is None:
+                        continue
+                    bkey = building_key_at_door(int(door[0]), int(door[1]))
+                    if bkey is None:
+                        continue
+                    start_inside = find_inside_tile(bkey, door=(int(door[0]), int(door[1])))
+                    if start_inside is None:
+                        continue
+                    reachable = reachable_in_building(bkey, start=start_inside)
+                    if not reachable:
+                        reachable = None
+
+                    # Choose staff placement by role.
+                    for sdef in staff_defs:
+                        role = str(sdef.get("role", "staff"))
+                        spawn_key = (int(bkey[0]), int(bkey[1]), f"{pid}:{role}")
+                        if spawn_key in spawned:
+                            continue
+
+                        spot = None
+                        if role in ("doctor", "cashier", "clerk", "waiter"):
+                            spot = find_adjacent_floor_to(bkey, int(self.T_TABLE), reachable=reachable)
+                        elif role in ("nurse",):
+                            spot = find_adjacent_floor_to(bkey, int(self.T_BED), reachable=reachable)
+                        elif role in ("stocker", "chef"):
+                            spot = find_adjacent_floor_to(bkey, int(self.T_SHELF), reachable=reachable)
+                        if spot is None:
+                            spot = start_inside
+                        if spot is None:
+                            continue
+
+                        npc_id = f"staff_{pid}_{int(bkey[0])}_{int(bkey[1])}_{role}"
+                        add_staff_npc(
+                            npc_id=npc_id,
+                            name=str(sdef.get("name", "店员")),
+                            tile=(int(spot[0]), int(spot[1])),
+                            gender=int(sdef.get("gender", 0)),
+                            outfit=int(sdef.get("outfit", 0)),
+                            script=str(sdef.get("script", "")),
+                            role=str(role),
+                        )
+                        spawned.add(spawn_key)
+
+    def _crime_level_from_heat(self, heat: float) -> int:
+        heat = float(max(0.0, float(heat)))
+        if heat < 1.0:
+            return 0
+        if heat < 20.0:
+            return 1
+        if heat < 40.0:
+            return 2
+        if heat < 60.0:
+            return 3
+        if heat < 80.0:
+            return 4
+        return 5
+
+    def _crime_add(self, heat: float, reason: str) -> None:
+        # Add heat during the pre-apocalypse sandbox (GTA-like wanted system).
+        if not bool(getattr(self, "story_enabled", False)):
+            return
+        if not bool(self._story_is_pre_apocalypse()):
+            return
+        heat = float(max(0.0, float(heat)))
+        if heat <= 0.0:
+            return
+
+        cur = float(getattr(self, "crime_heat", 0.0))
+        cur2 = float(clamp(float(cur) + float(heat), 0.0, 100.0))
+        self.crime_heat = float(cur2)
+        self.crime_last_reason = str(reason or "")
+
+        prev_lvl = int(getattr(self, "wanted_level", 0))
+        lvl = int(self._crime_level_from_heat(cur2))
+        self.wanted_level = int(lvl)
+
+        if int(lvl) <= 0:
+            return
+        if int(lvl) >= 2 and int(prev_lvl) < 2:
+            self._set_hint(f"犯罪等级 {lvl}：警察出动！", seconds=1.2)
+            return
+        if str(reason).strip():
+            self._set_hint(f"犯罪等级 {lvl}：{str(reason).strip()}", seconds=1.0)
+        else:
+            self._set_hint(f"犯罪等级 {lvl}", seconds=0.9)
+
+    def _crime_clear_units(self) -> None:
+        # Remove police cars and police NPCs (used when wanted clears or story ends).
+        try:
+            traffic = getattr(self, "story_traffic", None)
+            if isinstance(traffic, list) and traffic:
+                traffic[:] = [a for a in traffic if not (isinstance(a, dict) and str(a.get("tag", "")) == "police")]
+        except Exception:
+            pass
+        try:
+            npcs = getattr(self, "npcs", None)
+            if isinstance(npcs, list) and npcs:
+                npcs[:] = [
+                    n
+                    for n in npcs
+                    if not (isinstance(n, dict) and str(n.get("role", "")) in ("police", "swat"))
+                ]
+        except Exception:
+            pass
+
+    def _crime_update(self, dt_time: float) -> None:
+        if not bool(getattr(self, "story_enabled", False)) or not bool(self._story_is_pre_apocalypse()):
+            if int(getattr(self, "wanted_level", 0)) > 0 or float(getattr(self, "crime_heat", 0.0)) > 0.0:
+                self._crime_clear_units()
+            self.crime_heat = 0.0
+            self.wanted_level = 0
+            self.crime_spawn_left = 0.0
+            self.crime_last_reason = ""
+            self.crime_heli_phase = 0.0
+            return
+
+        dt_time = float(max(0.0, float(dt_time)))
+        if dt_time <= 1e-6:
+            return
+
+        # Decay wanted heat (faster when hidden indoors).
+        heat = float(getattr(self, "crime_heat", 0.0))
+        prev_lvl = int(getattr(self, "wanted_level", self._crime_level_from_heat(heat)))
+        inside = getattr(self, "_inside_building_key", None) is not None
+        if bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "house_interior", False)) or bool(getattr(self, "sch_interior", False)):
+            inside = True
+
+        decay = 3.2
+        if inside:
+            decay = 6.0
+        if prev_lvl >= 4:
+            decay *= 0.55
+        elif prev_lvl >= 2:
+            decay *= 0.75
+        heat = float(max(0.0, float(heat) - float(decay) * float(dt_time)))
+        self.crime_heat = float(heat)
+
+        lvl = int(self._crime_level_from_heat(heat))
+        self.wanted_level = int(lvl)
+        if lvl >= 5:
+            self.crime_heli_phase = float(getattr(self, "crime_heli_phase", 0.0)) + float(dt_time) * 3.2
+        else:
+            self.crime_heli_phase = float(getattr(self, "crime_heli_phase", 0.0)) * 0.85
+
+        # Cooldown between spawns so police trickle in rather than popping a crowd.
+        spawn_left = float(getattr(self, "crime_spawn_left", 0.0))
+        spawn_left = float(max(0.0, float(spawn_left) - float(dt_time)))
+        self.crime_spawn_left = float(spawn_left)
+
+        if lvl <= 0:
+            if prev_lvl > 0:
+                self._set_hint("通缉解除", seconds=1.0)
+            self._crime_clear_units()
+            return
+
+        # Level 1: only a warning; level 2+: police respond.
+        desired_cars = 0
+        desired_police = 0
+        desired_swat = 0
+        if lvl >= 2:
+            desired_cars = 1
+            desired_police = 2
+        if lvl >= 3:
+            desired_cars = 2
+            desired_police = 3
+        if lvl >= 4:
+            desired_cars = 3
+            desired_police = 4
+        if lvl >= 5:
+            desired_cars = 4
+            desired_police = 4
+            desired_swat = 2
+
+        # If the player is in a full-screen interior, don't spawn new units (they'll wait outside).
+        blocked = bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "house_interior", False)) or bool(getattr(self, "sch_interior", False))
+
+        # Ensure traffic list exists so police cars can reuse its movement/collision.
+        traffic = getattr(self, "story_traffic", None)
+        if not isinstance(traffic, list):
+            self.story_traffic = []
+            traffic = self.story_traffic
+
+        # Ensure NPC list exists for police on foot.
+        npcs = getattr(self, "npcs", None)
+        if not isinstance(npcs, list):
+            self.npcs = []
+            npcs = self.npcs
+
+        rng = getattr(self, "story_traffic_rng", None)
+        if not isinstance(rng, random.Random):
+            rng = random.Random(int(getattr(self, "seed", 0)) ^ 0x54B3_9C21)
+            self.story_traffic_rng = rng
+
+        def ensure_police_car() -> None:
+            nonlocal spawn_left
+            if bool(blocked) or float(spawn_left) > 0.0:
+                return
+            center = self._player_tile()
+            actor = None
+            for _ in range(60):
+                cand = self._story_spawn_one_traffic(rng=rng, center_tile=(int(center[0]), int(center[1])), radius=70)
+                if isinstance(cand, dict):
+                    if str(cand.get("kind", "")) == "car":
+                        actor = cand
+                        break
+                    actor = cand
+            if not isinstance(actor, dict):
+                return
+            d = str(actor.get("dir", "right") or "right")
+            heading = 0.0
+            if d == "left":
+                heading = math.pi
+            elif d == "down":
+                heading = math.pi / 2.0
+            elif d == "up":
+                heading = -math.pi / 2.0
+            actor["kind"] = "car"
+            actor["model_id"] = "police"
+            actor["tag"] = "police"
+            actor["pinned"] = True
+            actor["speed"] = float(86.0 + 8.0 * float(lvl))
+            actor["turn_cd"] = 0.0
+            actor["heading"] = float(heading)
+            actor["steer_state"] = 0
+            actor["frame"] = int(rng.randrange(0, 2))
+            # Remove any rider/convertible decoration from reused actors.
+            for k in ("driver_style", "driver_avatar", "rider_avatar", "rider_frames"):
+                actor.pop(k, None)
+            traffic.append(actor)
+            spawn_left = 0.7
+            self.crime_spawn_left = float(spawn_left)
+
+        def spawn_police_npc(*, role: str) -> None:
+            nonlocal spawn_left
+            if bool(blocked) or float(spawn_left) > 0.0:
+                return
+            role = str(role)
+            base_name = "警察" if role == "police" else "特警"
+            outfit = 2 if role == "police" else 12
+            # Find a spawn tile on/near roads, outside buildings, not on solid tiles.
+            ptx, pty = self._player_tile()
+            tx_best = None
+            ty_best = None
+            for _ in range(140):
+                tx = int(ptx + rng.randint(-22, 22))
+                ty = int(pty + rng.randint(-22, 22))
+                if abs(int(tx) - int(ptx)) < 10 and abs(int(ty) - int(pty)) < 10:
+                    continue
+                try:
+                    if self._peek_building_at_tile(int(tx), int(ty)) is not None:
+                        continue
+                except Exception:
+                    pass
+                try:
+                    tid = int(self.world.peek_tile(int(tx), int(ty), default=int(self.T_GRASS)))
+                except Exception:
+                    tid = int(self.T_GRASS)
+                if bool(self._tile_solid(int(tid))):
+                    continue
+                try:
+                    on_road = bool(self.world.is_road(int(tx), int(ty)))
+                except Exception:
+                    on_road = False
+                if not on_road and int(tid) not in (int(self.T_PAVEMENT), int(self.T_SIDEWALK), int(self.T_ROAD), int(self.T_HIGHWAY)):
+                    continue
+                tx_best, ty_best = int(tx), int(ty)
+                break
+            if tx_best is None or ty_best is None:
+                return
+
+            # Pick an unused id.
+            used: set[str] = set()
+            for n in npcs:
+                if isinstance(n, dict):
+                    used.add(str(n.get("id", "")))
+            idx = 1
+            while f"{role}_{idx}" in used and idx < 99:
+                idx += 1
+            npc_id = f"{role}_{idx}"
+
+            g = 0 if role == "police" else 0
+            av = SurvivalAvatar(
+                gender=int(g),
+                height=int(rng.choice([1, 1, 2])),
+                face=int(rng.randrange(0, 3)),
+                eyes=int(rng.randrange(0, 4)),
+                hair=int(rng.randrange(0, len(SURVIVAL_HAIR_OPTIONS))),
+                nose=int(rng.randrange(0, 3)),
+                skin=int(rng.randrange(0, len(SURVIVAL_SKIN_OPTIONS))),
+                hair_color=int(rng.randrange(0, len(SURVIVAL_HAIR_COLOR_OPTIONS))),
+                eye_color=int(rng.randrange(0, len(SURVIVAL_EYE_COLOR_OPTIONS))),
+                mouth=int(rng.randrange(0, len(SURVIVAL_MOUTH_OPTIONS))),
+                beard=int(rng.choice([0, 0, 1, 1, 2])) if int(g) == 0 else 0,
+                makeup=0,
+                accessory=int(rng.choice([0, 1])),
+                outfit=int(outfit),
+            )
+            av.clamp_all()
+            frames = HardcoreSurvivalState.build_avatar_player_frames(av, run=False)
+            pos = pygame.Vector2((float(tx_best) + 0.5) * float(self.TILE_SIZE), (float(ty_best) + 0.5) * float(self.TILE_SIZE))
+            npcs.append(
+                {
+                    "id": npc_id,
+                    "name": base_name,
+                    "pos": pygame.Vector2(pos),
+                    "dir": "down",
+                    "walk_phase": float(rng.random() * math.tau),
+                    "vel": pygame.Vector2(0, 0),
+                    "goal": pygame.Vector2(pos),
+                    "goal_left": 0.0,
+                    "axis": 0,
+                    "stuck": 0.0,
+                    "rng": random.Random(int(rng.randrange(0, 2**31 - 1)) ^ 0x6F6C6963),
+                    "speed": 86.0 if role == "police" else 92.0,
+                    "home": (int(tx_best), int(ty_best)),
+                    "work": (int(tx_best), int(ty_best)),
+                    "frames": frames,
+                    "script": "",
+                    "role": role,
+                    "avatar": av,
+                    "action": "",
+                    "pose_phase": float(rng.random() * math.tau),
+                    "stay_left": 0.0,
+                    "pose_cache": {},
+                    "hostile_left": 3.0,
+                    "attack_left": 0.0,
+                    "attack_anim_left": 0.0,
+                }
+            )
+            spawn_left = 0.6
+            self.crime_spawn_left = float(spawn_left)
+
+        # Keep police NPCs hostile while wanted is active.
+        for n in npcs:
+            if not isinstance(n, dict):
+                continue
+            if str(n.get("role", "")) in ("police", "swat"):
+                n["hostile_left"] = float(max(float(n.get("hostile_left", 0.0) or 0.0), 1.6))
+                n["speed"] = float(max(float(n.get("speed", 28.0) or 28.0), 86.0))
+
+        # Police cars: keep them pinned and fast.
+        police_cars = [a for a in traffic if isinstance(a, dict) and str(a.get("tag", "")) == "police"]
+        for a in police_cars:
+            a["pinned"] = True
+            a["kind"] = "car"
+            a["model_id"] = "police"
+            a["speed"] = float(max(float(a.get("speed", 0.0) or 0.0), 86.0 + 8.0 * float(lvl)))
+
+        # Remove extras if wanted level dropped.
+        if len(police_cars) > int(desired_cars):
+            extra = police_cars[int(desired_cars) :]
+            for a in extra:
+                try:
+                    traffic.remove(a)
+                except Exception:
+                    pass
+
+        # Remove extra cops/swat (when wanted drops).
+        police_npcs = [n for n in npcs if isinstance(n, dict) and str(n.get("role", "")) == "police"]
+        swat_npcs = [n for n in npcs if isinstance(n, dict) and str(n.get("role", "")) == "swat"]
+        if len(swat_npcs) > int(desired_swat):
+            for n in swat_npcs[int(desired_swat) :]:
+                try:
+                    npcs.remove(n)
+                except Exception:
+                    pass
+        if len(police_npcs) > int(desired_police):
+            for n in police_npcs[int(desired_police) :]:
+                try:
+                    npcs.remove(n)
+                except Exception:
+                    pass
+
+        # Spawn missing units (one per cooldown tick).
+        if lvl >= 2:
+            police_cars = [a for a in traffic if isinstance(a, dict) and str(a.get("tag", "")) == "police"]
+            police_npcs = [n for n in npcs if isinstance(n, dict) and str(n.get("role", "")) == "police"]
+            swat_npcs = [n for n in npcs if isinstance(n, dict) and str(n.get("role", "")) == "swat"]
+
+            if len(police_cars) < int(desired_cars):
+                ensure_police_car()
+            elif lvl >= 5 and len(swat_npcs) < int(desired_swat):
+                spawn_police_npc(role="swat")
+            elif len(police_npcs) < int(desired_police):
+                spawn_police_npc(role="police")
+
+    def _draw_wanted_helicopter_overlay(self, surface: pygame.Surface) -> None:
+        # Minimal "helicopter spotlight" for wanted level 5 (visual pressure).
+        if int(getattr(self, "wanted_level", 0)) < 5:
+            return
+        if not bool(getattr(self, "story_enabled", False)) or not bool(self._story_is_pre_apocalypse()):
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return
+        if getattr(self, "_inside_building_key", None) is not None:
+            return
+        try:
+            phase = float(getattr(self, "crime_heli_phase", 0.0))
+        except Exception:
+            phase = 0.0
+
+        anchor = getattr(self, "_last_player_screen_rect", None)
+        if not isinstance(anchor, pygame.Rect):
+            anchor = pygame.Rect(INTERNAL_W // 2 - 6, INTERNAL_H // 2 - 10, 12, 20)
+        cx = int(anchor.centerx)
+        cy = int(anchor.centery - 8)
+        r = 96
+
+        overlay = pygame.Surface((INTERNAL_W, INTERNAL_H), pygame.SRCALPHA)
+        pygame.draw.circle(overlay, (190, 210, 255, 22), (cx, cy), r)
+        ex = int(cx + math.cos(float(phase)) * float(r))
+        ey = int(cy + math.sin(float(phase)) * float(r))
+        pygame.draw.line(overlay, (230, 230, 255, 55), (cx, cy), (ex, ey), 2)
+        pygame.draw.circle(overlay, (230, 230, 255, 40), (ex, ey), 3)
+        surface.blit(overlay, (0, 0))
 
     def _speech_say(self, text: str, *, seconds: float = 1.2) -> None:
         self.speech_text = str(text)
@@ -26831,15 +27868,18 @@ class HardcoreSurvivalState(State):
         for pb in getattr(chunk, "bikes", []):
             if (pygame.Vector2(getattr(pb, "pos", pos)) - pos).length_squared() <= (6.0 * 6.0):
                 return
-        chunk.bikes.append(
-            HardcoreSurvivalState._ParkedBike(
-                pos=pos,
-                model_id=mid,
-                dir=d,
-                frame=0,
-                fuel=float(getattr(self.bike, "fuel", 0.0)),
-            )
+        parked = HardcoreSurvivalState._ParkedBike(
+            pos=pos,
+            model_id=mid,
+            dir=d,
+            frame=0,
+            fuel=float(getattr(self.bike, "fuel", 0.0)),
         )
+        try:
+            setattr(parked, "owned", True)
+        except Exception:
+            pass
+        chunk.bikes.append(parked)
 
     def _stash_personal_car_as_parked(self) -> None:
         if not hasattr(self, "rv") or self.rv is None:
@@ -26902,16 +27942,19 @@ class HardcoreSurvivalState(State):
         for pc in getattr(chunk, "cars", []):
             if (pygame.Vector2(getattr(pc, "pos", pos)) - pos).length_squared() <= (8.0 * 8.0):
                 return
-        chunk.cars.append(
-            HardcoreSurvivalState._ParkedCar(
-                pos=pos,
-                model_id=mid,
-                heading=float(heading),
-                steer_state=0,
-                frame=0,
-                fuel=float(fuel),
-            )
+        parked = HardcoreSurvivalState._ParkedCar(
+            pos=pos,
+            model_id=mid,
+            heading=float(heading),
+            steer_state=0,
+            frame=0,
+            fuel=float(fuel),
         )
+        try:
+            setattr(parked, "owned", True)
+        except Exception:
+            pass
+        chunk.cars.append(parked)
 
     def _special_building_for_door_tile(
         self, tx: int, ty: int
@@ -30910,6 +31953,7 @@ class HardcoreSurvivalState(State):
         pdir = pdir.normalize()
 
         mdef = self._MELEE_DEFS.get(str(getattr(self, "_melee_swing_id", "")) or "") or self._MELEE_DEFS.get("fist")
+        swing_id = str(getattr(mdef, "id", "fist")) if mdef is not None else "fist"
 
         origin = pygame.Vector2(self.player.pos)
         max_r = float(getattr(mdef, "range_px", getattr(self, "_PUNCH_RANGE_PX", 18.0))) if mdef is not None else float(getattr(self, "_PUNCH_RANGE_PX", 18.0))
@@ -30954,8 +31998,52 @@ class HardcoreSurvivalState(State):
             # Zombies become corpses (decay later) instead of being removed immediately.
             return
 
+        # No zombie hit: allow punching story NPCs in the prelude (starts a brawl + crime heat).
+        try:
+            if bool(getattr(self, "story_enabled", False)) and bool(self._story_is_pre_apocalypse()):
+                npcs = getattr(self, "npcs", None)
+                if isinstance(npcs, list) and npcs:
+                    best_npc: dict[str, object] | None = None
+                    best_npc_d2 = 1e18
+                    for npc in npcs:
+                        if not isinstance(npc, dict):
+                            continue
+                        try:
+                            npos = pygame.Vector2(npc.get("pos", pygame.Vector2(0, 0)))
+                        except Exception:
+                            continue
+                        to = pygame.Vector2(npos) - origin
+                        d2 = float(to.length_squared())
+                        if d2 > max_r2:
+                            continue
+                        if d2 > 0.001:
+                            dot = float(to.normalize().dot(pdir))
+                            if dot < arc_dot:
+                                continue
+                        if d2 < best_npc_d2:
+                            best_npc = npc
+                            best_npc_d2 = d2
+                    if best_npc is not None:
+                        npc_id = str(best_npc.get("id", "") or "")
+                        self._story_set_npc_hostile(npc_id, seconds=12.0)
+                        try:
+                            best_npc["attack_anim_left"] = float(
+                                max(float(best_npc.get("attack_anim_left", 0.0) or 0.0), 0.35)
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            hit_pos = pygame.Vector2(best_npc.get("pos", origin))
+                        except Exception:
+                            hit_pos = origin + pdir * float(max_r)
+                        self._spawn_hit_fx(pygame.Vector2(hit_pos), dir=pdir)
+                        self.app.play_sfx("hit")
+                        self._crime_add(10.0 if swing_id == "fist" else 18.0, "殴打路人" if swing_id == "fist" else "持械伤人")
+                        return
+        except Exception:
+            pass
+
         # No zombie hit: allow melee to damage/break furniture (tables/chairs/etc).
-        swing_id = str(getattr(mdef, "id", "fist")) if mdef is not None else "fist"
         struct_dmg = int(max(1, int(round(float(dmg) * 0.80))))
         if swing_id == "fist":
             struct_dmg = 1
@@ -31141,6 +32229,36 @@ class HardcoreSurvivalState(State):
         parked_chunk, parked_bike, parked_d2 = self._find_nearest_parked_bike(radius_px=18.0)
         # Cars are large; use a bigger pickup radius than bikes so you can interact near the doors.
         parked_car_chunk, parked_car, parked_car_d2 = self._find_nearest_parked_car(radius_px=70.0)
+        # Moving (story) traffic can also be hijacked like GTA.
+        traffic = getattr(self, "story_traffic", None)
+        traffic_pick: dict[str, object] | None = None
+        traffic_pick_kind = ""
+        traffic_pick_d2 = 1e18
+        if (
+            bool(getattr(self, "story_enabled", False))
+            and bool(self._story_is_pre_apocalypse())
+            and bool(getattr(self, "story_traffic_enabled", True))
+            and isinstance(traffic, list)
+        ):
+            for a in traffic:
+                if not isinstance(a, dict):
+                    continue
+                kind2 = str(a.get("kind", "") or "")
+                if kind2 not in ("car", "bike", "moto"):
+                    continue
+                try:
+                    pos2 = pygame.Vector2(a.get("pos", pygame.Vector2(0, 0)))
+                except Exception:
+                    continue
+                try:
+                    d2 = float((pos2 - self.player.pos).length_squared())
+                except Exception:
+                    continue
+                rad = 80.0 if kind2 == "car" else 36.0
+                if d2 <= float(rad * rad) and d2 < float(traffic_pick_d2):
+                    traffic_pick = a
+                    traffic_pick_kind = str(kind2)
+                    traffic_pick_d2 = float(d2)
         try:
             pad = 22
             can_rv = bool(
@@ -31153,13 +32271,17 @@ class HardcoreSurvivalState(State):
         can_bike = bike_d2 <= (18.0 * 18.0)
         can_parked_bike = parked_bike is not None and parked_chunk is not None
         can_parked_car = parked_car is not None and parked_car_chunk is not None
-        if not can_rv and not can_bike and not can_parked_bike and not can_parked_car:
+        can_traffic_car = traffic_pick is not None and traffic_pick_kind == "car"
+        can_traffic_bike = traffic_pick is not None and traffic_pick_kind in ("bike", "moto")
+        if not can_rv and not can_bike and not can_parked_bike and not can_parked_car and not can_traffic_car and not can_traffic_bike:
             self._set_hint("离载具太远")
             return
 
         # Choose the nearest available vehicle (parked beats personal when closer).
         choice: tuple[str, float] | None = None
         for kind, ok, d2 in (
+            ("traffic_car", bool(can_traffic_car), float(traffic_pick_d2)),
+            ("traffic_bike", bool(can_traffic_bike), float(traffic_pick_d2)),
             ("parked_car", bool(can_parked_car), float(parked_car_d2)),
             ("parked_bike", bool(can_parked_bike), float(parked_d2)),
             ("bike", bool(can_bike), float(bike_d2)),
@@ -31173,6 +32295,75 @@ class HardcoreSurvivalState(State):
             self._set_hint("离载具太远")
             return
         pick = str(choice[0])
+
+        if pick == "traffic_car":
+            if traffic_pick is None or not isinstance(traffic, list):
+                self._set_hint("离载具太远")
+                return
+            try:
+                wpos = pygame.Vector2(traffic_pick.get("pos", self.player.pos))
+            except Exception:
+                wpos = pygame.Vector2(self.player.pos)
+            mid = str(traffic_pick.get("model_id", "beetle") or "beetle")
+            head = float(traffic_pick.get("heading", 0.0) or 0.0)
+            try:
+                self._stash_personal_car_as_parked()
+            except Exception:
+                pass
+            self.rv.pos.update(wpos)
+            self.rv.vel.update(0, 0)
+            self.rv.model_id = str(mid)
+            # Traffic actors don't track fuel; assume some usable amount.
+            self.rv.fuel = float(clamp(55.0 + random.uniform(-20.0, 25.0), 10.0, 95.0))
+            self.rv.heading = float(head)
+            self.rv.speed = 0.0
+            self.rv.steer = 0.0
+            self._apply_rv_model()
+            self.rv_hotwired = True
+            try:
+                traffic.remove(traffic_pick)
+            except Exception:
+                pass
+            self.mount = "rv"
+            self.player.pos.update(self.rv.pos)
+            self.player.vel.update(0, 0)
+            self._crime_add(42.0, "抢劫车辆")
+            model = self._CAR_MODELS.get(str(self.rv.model_id))
+            name = model.name if model is not None else str(self.rv.model_id)
+            self._set_hint(f"抢到一辆车：{name}", seconds=1.0)
+            return
+
+        if pick == "traffic_bike":
+            if traffic_pick is None or not isinstance(traffic, list):
+                self._set_hint("离载具太远")
+                return
+            try:
+                wpos = pygame.Vector2(traffic_pick.get("pos", self.player.pos))
+            except Exception:
+                wpos = pygame.Vector2(self.player.pos)
+            mid = str(traffic_pick.get("model_id", "bike") or "bike")
+            d = str(traffic_pick.get("dir", "right") or "right")
+            try:
+                self._stash_personal_bike_as_parked()
+            except Exception:
+                pass
+            self.bike.pos.update(wpos)
+            self.bike.vel.update(0, 0)
+            self.bike.model_id = str(mid)
+            self.bike.fuel = float(clamp(55.0 + random.uniform(-25.0, 30.0), 0.0, 95.0)) if str(mid).startswith("moto") else 0.0
+            self.bike_dir = str(d)
+            self.bike_anim = 0.0
+            self._apply_bike_model()
+            self.bike_hotwired = bool(str(mid).startswith("moto"))
+            try:
+                traffic.remove(traffic_pick)
+            except Exception:
+                pass
+            self.mount = "bike"
+            self.player.pos.update(self.bike.pos)
+            self._crime_add(28.0 if str(mid).startswith("moto") else 18.0, "抢劫两轮")
+            self._set_hint(f"抢到 {self._two_wheel_name(self.bike.model_id)}", seconds=1.0)
+            return
 
         if pick == "parked_car":
             pc = parked_car
@@ -31207,7 +32398,9 @@ class HardcoreSurvivalState(State):
             if not near:
                 self._set_hint("靠近后: F 开车", seconds=1.0)
                 return
-            if int(self.inventory.count("key_rv")) <= 0:
+            owned = bool(getattr(pc, "owned", False))
+            has_key = int(self.inventory.count("key_rv")) > 0
+            if owned and not has_key:
                 self._set_hint("需要车钥匙", seconds=1.1)
                 return
             try:
@@ -31222,6 +32415,7 @@ class HardcoreSurvivalState(State):
             self.rv.speed = 0.0
             self.rv.steer = 0.0
             self._apply_rv_model()
+            self.rv_hotwired = bool((not owned) and (not has_key))
             try:
                 parked_car_chunk.cars.remove(pc)
             except Exception:
@@ -31231,14 +32425,20 @@ class HardcoreSurvivalState(State):
             self.player.vel.update(0, 0)
             model = self._CAR_MODELS.get(str(self.rv.model_id))
             name = model.name if model is not None else str(self.rv.model_id)
-            self._set_hint(f"上车：{name}", seconds=1.0)
+            if not owned:
+                self._crime_add(40.0 if not has_key else 28.0, "偷车")
+                self._set_hint(f"偷走车辆：{name}", seconds=1.0)
+            else:
+                self._set_hint(f"上车：{name}", seconds=1.0)
             return
 
         if pick == "parked_bike":
             # Take a parked two-wheeler (including motorcycles) and mount it.
             pb = parked_bike
             pb_mid = str(getattr(pb, "model_id", "bike")) if pb is not None else "bike"
-            if pb_mid.startswith("moto") and int(self.inventory.count("key_moto")) <= 0:
+            owned = bool(getattr(pb, "owned", False))
+            has_key = int(self.inventory.count("key_moto")) > 0
+            if owned and pb_mid.startswith("moto") and not has_key:
                 self._set_hint("需要摩托钥匙", seconds=1.1)
                 return
             try:
@@ -31252,18 +32452,26 @@ class HardcoreSurvivalState(State):
             self.bike_dir = str(getattr(pb, "dir", "right"))
             self.bike_anim = 0.0
             self._apply_bike_model()
+            self.bike_hotwired = bool((not owned) and pb_mid.startswith("moto") and (not has_key))
             try:
                 parked_chunk.bikes.remove(pb)
             except Exception:
                 pass
             self.mount = "bike"
             self.player.pos.update(self.bike.pos)
-            self._set_hint(f"骑上 {self._two_wheel_name(self.bike.model_id)}")
+            if not owned:
+                heat = 26.0 if pb_mid.startswith("moto") else 14.0
+                if pb_mid.startswith("moto") and not has_key:
+                    heat = 34.0
+                self._crime_add(float(heat), "偷走两轮")
+                self._set_hint(f"偷走 {self._two_wheel_name(self.bike.model_id)}", seconds=1.0)
+            else:
+                self._set_hint(f"骑上 {self._two_wheel_name(self.bike.model_id)}")
             return
 
         if pick == "bike":
             mid = str(getattr(self.bike, "model_id", "bike"))
-            if mid.startswith("moto") and int(self.inventory.count("key_moto")) <= 0:
+            if mid.startswith("moto") and int(self.inventory.count("key_moto")) <= 0 and not bool(getattr(self, "bike_hotwired", False)):
                 self._set_hint("需要摩托钥匙", seconds=1.1)
                 return
             self.mount = "bike"
@@ -31273,7 +32481,7 @@ class HardcoreSurvivalState(State):
 
         # Car (personal): F is always mount/drive. Use H to enter the RV interior.
 
-        if int(self.inventory.count("key_rv")) <= 0:
+        if int(self.inventory.count("key_rv")) <= 0 and not bool(getattr(self, "rv_hotwired", False)):
             self._set_hint("需要车钥匙", seconds=1.1)
             return
         self.mount = "rv"
@@ -38180,6 +39388,7 @@ class HardcoreSurvivalState(State):
         self._draw_roofs(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_world_lighting(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_weather_effects(surface, in_rv=False)
+        self._draw_wanted_helicopter_overlay(surface)
         self._draw_home_move_mode_overlay(surface, cam_x, cam_y_draw)
         self._draw_survival_ui(surface)
         if getattr(self, "world_map_open", False):
@@ -39932,6 +41141,12 @@ class HardcoreSurvivalState(State):
         w = self.WEATHER_NAMES.get(str(getattr(self, "weather_kind", "clear")), "?")
         info = f"DAY {day}  {season}  {hh:02d}:{mm:02d}  {w}"
         draw_text(surface, self.app.font_s, info, (6, 6), pygame.Color(230, 230, 240), anchor="topleft")
+        try:
+            wl = int(getattr(self, "wanted_level", 0))
+        except Exception:
+            wl = 0
+        if wl > 0 and bool(getattr(self, "story_enabled", False)) and bool(self._story_is_pre_apocalypse()):
+            draw_text(surface, self.app.font_s, f"通缉 {wl}", (INTERNAL_W - 6, 20), pygame.Color(255, 170, 170), anchor="topright")
 
         def stat_line(y: int, label: str, value: float, *, fg: tuple[int, int, int]) -> None:
             value = float(clamp(value, 0.0, 100.0))
