@@ -13,6 +13,10 @@ from typing import Callable, Sequence
 
 import pygame
 
+# Enable native IME UI (candidate window) for TEXTINPUT/TEXTEDITING on SDL2.
+# Must be set before pygame.init().
+os.environ.setdefault("SDL_IME_SHOW_UI", "1")
+
 BASE_INTERNAL_W = 480
 BASE_INTERNAL_H = 270
 
@@ -2220,6 +2224,17 @@ class App:
             return x, y
         return None
 
+    def internal_rect_to_screen(self, rect: pygame.Rect) -> pygame.Rect:
+        rect = pygame.Rect(rect)
+        if not hasattr(self, "view_rect"):
+            self._update_view_transform()
+        vr = self.view_rect
+        sx = int(vr.x + int(rect.x) * int(vr.w) / max(1, int(INTERNAL_W)))
+        sy = int(vr.y + int(rect.y) * int(vr.h) / max(1, int(INTERNAL_H)))
+        sw = int(max(1, int(rect.w) * int(vr.w) / max(1, int(INTERNAL_W))))
+        sh = int(max(1, int(rect.h) * int(vr.h) / max(1, int(INTERNAL_H))))
+        return pygame.Rect(int(sx), int(sy), int(sw), int(sh))
+
     def set_state(self, state: State) -> None:
         self.state = state
         self.state.on_enter()
@@ -2348,8 +2363,14 @@ SURVIVAL_GENDER_OPTIONS = ("男", "女")
 SURVIVAL_HEIGHT_OPTIONS = ("矮", "标准", "高")
 SURVIVAL_FACE_OPTIONS = ("圆", "方", "尖")
 SURVIVAL_EYE_OPTIONS = ("正常", "大眼", "凶", "眯眼")
-SURVIVAL_HAIR_OPTIONS = ("短发", "刘海", "长发", "帽子")
+SURVIVAL_HAIR_OPTIONS = ("短发", "刘海", "长发", "帽子", "马尾", "双马尾", "波波头", "丸子头")
 SURVIVAL_NOSE_OPTIONS = ("无", "点", "线")
+SURVIVAL_SKIN_OPTIONS = ("白皙", "小麦", "健康", "黝黑")
+SURVIVAL_HAIR_COLOR_OPTIONS = ("黑", "棕", "金", "银", "红", "蓝")
+SURVIVAL_EYE_COLOR_OPTIONS = ("黑", "棕", "蓝", "绿", "红")
+SURVIVAL_MOUTH_OPTIONS = ("自然", "微笑", "撇嘴", "冷酷")
+SURVIVAL_MAKEUP_OPTIONS = ("无", "淡妆", "口红", "浓妆")
+SURVIVAL_ACCESSORY_OPTIONS = ("无", "眼镜", "口罩", "耳饰")
 SURVIVAL_OUTFIT_OPTIONS = (
     "夹克蓝",
     "工装绿",
@@ -2378,6 +2399,12 @@ class SurvivalAvatar:
     eyes: int = 0
     hair: int = 0
     nose: int = 0
+    skin: int = 0
+    hair_color: int = 0
+    eye_color: int = 0
+    mouth: int = 0
+    makeup: int = 0
+    accessory: int = 0
     outfit: int = 0
 
     def clamp_all(self) -> None:
@@ -2387,6 +2414,12 @@ class SurvivalAvatar:
         self.eyes = int(self.eyes) % len(SURVIVAL_EYE_OPTIONS)
         self.hair = int(self.hair) % len(SURVIVAL_HAIR_OPTIONS)
         self.nose = int(self.nose) % len(SURVIVAL_NOSE_OPTIONS)
+        self.skin = int(self.skin) % len(SURVIVAL_SKIN_OPTIONS)
+        self.hair_color = int(self.hair_color) % len(SURVIVAL_HAIR_COLOR_OPTIONS)
+        self.eye_color = int(self.eye_color) % len(SURVIVAL_EYE_COLOR_OPTIONS)
+        self.mouth = int(self.mouth) % len(SURVIVAL_MOUTH_OPTIONS)
+        self.makeup = int(self.makeup) % len(SURVIVAL_MAKEUP_OPTIONS)
+        self.accessory = int(self.accessory) % len(SURVIVAL_ACCESSORY_OPTIONS)
         self.outfit = int(self.outfit) % len(SURVIVAL_OUTFIT_OPTIONS)
 
 
@@ -2532,13 +2565,20 @@ class SurvivalCreateState(State):
         self.fields: list[tuple[str, str, tuple[str, ...]]] = [
             ("性别", "gender", SURVIVAL_GENDER_OPTIONS),
             ("身高", "height", SURVIVAL_HEIGHT_OPTIONS),
+            ("肤色", "skin", SURVIVAL_SKIN_OPTIONS),
             ("脸型", "face", SURVIVAL_FACE_OPTIONS),
             ("眼睛", "eyes", SURVIVAL_EYE_OPTIONS),
+            ("瞳色", "eye_color", SURVIVAL_EYE_COLOR_OPTIONS),
             ("头发", "hair", SURVIVAL_HAIR_OPTIONS),
+            ("发色", "hair_color", SURVIVAL_HAIR_COLOR_OPTIONS),
             ("鼻子", "nose", SURVIVAL_NOSE_OPTIONS),
+            ("嘴型", "mouth", SURVIVAL_MOUTH_OPTIONS),
+            ("妆容", "makeup", SURVIVAL_MAKEUP_OPTIONS),
+            ("饰品", "accessory", SURVIVAL_ACCESSORY_OPTIONS),
             ("衣服", "outfit", SURVIVAL_OUTFIT_OPTIONS),
         ]
         self.index = 0
+        self.scroll = 0
         self._dirty = True
         self._preview_frames: dict[str, list[pygame.Surface]] | None = None
         self.row_rects: list[pygame.Rect] = []
@@ -2592,20 +2632,20 @@ class SurvivalCreateState(State):
         # Arrow buttons first.
         for i, r in enumerate(self.left_rects):
             if r.collidepoint(internal):
-                self.index = int(i)
+                self.index = int(i) + int(getattr(self, "scroll", 0))
                 if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, "button", 0) == 1:
                     self._change_value(-1)
                 return
         for i, r in enumerate(self.right_rects):
             if r.collidepoint(internal):
-                self.index = int(i)
+                self.index = int(i) + int(getattr(self, "scroll", 0))
                 if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, "button", 0) == 1:
                     self._change_value(1)
                 return
 
         for i, r in enumerate(self.row_rects):
             if r.collidepoint(internal):
-                self.index = int(i)
+                self.index = int(i) + int(getattr(self, "scroll", 0))
                 return
 
     def update(self, dt: float) -> None:
@@ -2631,11 +2671,23 @@ class SurvivalCreateState(State):
         self.row_rects = []
         self.left_rects = []
         self.right_rects = []
-        for i, (label, attr, options) in enumerate(self.fields):
+        visible_rows = int((INTERNAL_H - y0 - 10) // max(1, (row_h + gap)))
+        visible_rows = int(clamp(int(visible_rows), 6, 10))
+        max_scroll = max(0, len(self.fields) - int(visible_rows))
+        scroll = int(clamp(int(getattr(self, "scroll", 0)), 0, int(max_scroll)))
+        if int(self.index) < int(scroll):
+            scroll = int(self.index)
+        if int(self.index) >= int(scroll) + int(visible_rows):
+            scroll = int(self.index) - int(visible_rows) + 1
+        scroll = int(clamp(int(scroll), 0, int(max_scroll)))
+        self.scroll = int(scroll)
+
+        for local_i, (label, attr, options) in enumerate(self.fields[int(scroll) : int(scroll) + int(visible_rows)]):
+            i = int(scroll) + int(local_i)
             v = int(getattr(self.avatar, attr, 0)) % max(1, len(options))
             selected = i == int(self.index)
             text = f"{label}: {options[v]}"
-            r = pygame.Rect(x0, y0 + i * (row_h + gap), row_w, row_h)
+            r = pygame.Rect(x0, y0 + int(local_i) * (row_h + gap), row_w, row_h)
 
             bg = (34, 34, 42) if selected else (24, 24, 30)
             border = (110, 110, 130) if selected else (70, 70, 86)
@@ -2652,6 +2704,16 @@ class SurvivalCreateState(State):
             self.row_rects.append(r)
             self.left_rects.append(left_btn)
             self.right_rects.append(right_btn)
+
+        if int(max_scroll) > 0:
+            draw_text(
+                surface,
+                self.app.font_s,
+                f"{int(scroll) + 1}-{min(int(scroll) + int(visible_rows), len(self.fields))}/{len(self.fields)}",
+                (x0, y0 + int(visible_rows) * (row_h + gap) + 2),
+                pygame.Color(160, 160, 175),
+                anchor="topleft",
+            )
 
         # Preview (right)
         panel = pygame.Rect(250, 70, 208, 170)
@@ -2681,6 +2743,7 @@ class NameInputState(State):
             # Keep it simple: a few "town-friendly" defaults.
             self.name = random.choice(("小周", "阿城", "小林", "小李", "小陈", "小许", "小白", "阿北"))
         self.msg = ""
+        self.ime_text = ""
         self.blink_t = 0.0
         try:
             pygame.key.start_text_input()
@@ -2688,6 +2751,7 @@ class NameInputState(State):
             pass
 
     def _stop_text_input(self) -> None:
+        self.ime_text = ""
         try:
             pygame.key.stop_text_input()
         except Exception:
@@ -2722,7 +2786,10 @@ class NameInputState(State):
                 return
             if key in (pygame.K_BACKSPACE,):
                 try:
-                    self.name = str(getattr(self, "name", ""))[:-1]
+                    if str(getattr(self, "ime_text", "")):
+                        self.ime_text = ""
+                    else:
+                        self.name = str(getattr(self, "name", ""))[:-1]
                 except Exception:
                     self.name = ""
                 return
@@ -2735,6 +2802,12 @@ class NameInputState(State):
             cur = str(getattr(self, "name", "") or "")
             cur = cur + text
             self.name = self._sanitize_name(cur)
+            self.ime_text = ""
+            return
+
+        if event.type == getattr(pygame, "TEXTEDITING", None):
+            # IME composing text (e.g. Pinyin) - show it so input doesn't feel broken.
+            self.ime_text = str(getattr(event, "text", "") or "")
 
     def update(self, dt: float) -> None:
         self.blink_t = float(getattr(self, "blink_t", 0.0)) + float(dt)
@@ -2757,10 +2830,38 @@ class NameInputState(State):
         pygame.draw.rect(surface, (90, 90, 110), box, 2, border_radius=8)
 
         name = self._sanitize_name(getattr(self, "name", ""))
+        ime = str(getattr(self, "ime_text", "") or "")
         cursor = "|" if int(float(getattr(self, "blink_t", 0.0)) * 2.0) % 2 == 0 else " "
-        shown = (name if name else "（输入你的名字）") + cursor
-        col = pygame.Color(240, 240, 240) if name else pygame.Color(150, 150, 165)
-        draw_text(surface, self.app.font_m, shown, (box.centerx, box.centery - 1), col, anchor="center")
+
+        # IME candidate window position (needs screen-space rect).
+        try:
+            pygame.key.set_text_input_rect(self.app.internal_rect_to_screen(box))
+        except Exception:
+            pass
+
+        if ime:
+            # Left-align inside the box so we can draw a composition segment.
+            pad_x = 10
+            x0 = int(box.x + pad_x)
+            y0 = int(box.centery - 1)
+            base = name if name else ""
+            base_img = self.app.font_m.render(base, False, pygame.Color(240, 240, 240))
+            surface.blit(base_img, (x0, y0 - base_img.get_height() // 2))
+            bw = int(base_img.get_width())
+
+            ime_img = self.app.font_m.render(ime, False, pygame.Color(18, 18, 22))
+            iw = int(ime_img.get_width())
+            ime_bg = pygame.Rect(int(x0 + bw), int(y0 - ime_img.get_height() // 2 - 1), int(iw + 10), int(ime_img.get_height() + 2))
+            pygame.draw.rect(surface, (255, 220, 140), ime_bg, border_radius=6)
+            surface.blit(ime_img, (int(ime_bg.x + 5), int(y0 - ime_img.get_height() // 2)))
+
+            cur_x = int(ime_bg.right + 2) if cursor == "|" else int(ime_bg.right)
+            if cursor == "|":
+                pygame.draw.line(surface, pygame.Color(240, 240, 240), (cur_x, ime_bg.top + 2), (cur_x, ime_bg.bottom - 2), 2)
+        else:
+            shown = (name if name else "（输入你的名字）") + cursor
+            col = pygame.Color(240, 240, 240) if name else pygame.Color(150, 150, 165)
+            draw_text(surface, self.app.font_m, shown, (box.centerx, box.centery - 1), col, anchor="center")
 
         if str(getattr(self, "msg", "")).strip():
             draw_text(surface, self.app.font_s, str(self.msg), (INTERNAL_W // 2, 148), pygame.Color(255, 220, 140), anchor="center")
@@ -3518,11 +3619,43 @@ class HardcoreSurvivalState(State):
     def _avatar_colors(cls, avatar: SurvivalAvatar) -> dict[str, tuple[int, int, int]]:
         avatar.clamp_all()
         gender = int(avatar.gender)
+        makeup = int(getattr(avatar, "makeup", 0))
         outfit = int(avatar.outfit)
 
-        hair = (26, 26, 30) if gender == 0 else (34, 28, 30)
-        skin = (220, 190, 160) if gender == 0 else (230, 198, 168)
-        eye = (6, 6, 8)
+        skin_pals = [
+            (236, 210, 180),  # 白皙
+            (220, 190, 160),  # 小麦
+            (202, 172, 142),  # 健康
+            (170, 140, 110),  # 黝黑
+        ]
+        hair_pals = [
+            (26, 26, 30),  # 黑
+            (60, 44, 34),  # 棕
+            (170, 140, 84),  # 金
+            (200, 200, 210),  # 银
+            (180, 60, 60),  # 红
+            (60, 120, 200),  # 蓝
+        ]
+        eye_pals = [
+            (6, 6, 8),  # 黑
+            (46, 28, 16),  # 棕
+            (36, 90, 170),  # 蓝
+            (40, 140, 90),  # 绿
+            (160, 40, 40),  # 红
+        ]
+
+        skin = skin_pals[int(getattr(avatar, "skin", 0)) % len(skin_pals)]
+        hair = hair_pals[int(getattr(avatar, "hair_color", 0)) % len(hair_pals)]
+        eye = eye_pals[int(getattr(avatar, "eye_color", 0)) % len(eye_pals)]
+
+        # A tiny gender tint so "女" doesn't look identical at a glance.
+        if gender != 0:
+            hair = (min(255, hair[0] + 8), min(255, hair[1] + 4), min(255, hair[2] + 6))
+            skin = (min(255, skin[0] + 6), min(255, skin[1] + 4), min(255, skin[2] + 2))
+
+        blush = (240, 140, 160)
+        lipstick = (210, 70, 80)
+        lip = lipstick if int(makeup) >= 2 else (max(0, skin[0] - 70), max(0, skin[1] - 70), max(0, skin[2] - 70))
         boots = (22, 22, 26)
 
         pals: list[tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]]] = [
@@ -3554,6 +3687,8 @@ class HardcoreSurvivalState(State):
             "pants": pants,
             "pants_dark": pants_dark,
             "boots": boots,
+            "lip": lip,
+            "blush": blush,
         }
 
     @classmethod
@@ -3587,11 +3722,20 @@ class HardcoreSurvivalState(State):
             step = 2
 
         height_delta = 1 if int(avatar.height) == 0 else -1 if int(avatar.height) == 2 else 0
+        gender = int(getattr(avatar, "gender", 0))
         face_kind = int(avatar.face)
         eye_kind = int(avatar.eyes)
         hair_kind = int(avatar.hair)
         nose_kind = int(avatar.nose)
+        mouth_kind = int(getattr(avatar, "mouth", 0))
+        makeup_kind = int(getattr(avatar, "makeup", 0))
+        accessory_kind = int(getattr(avatar, "accessory", 0))
         outfit_kind = int(avatar.outfit)
+        lip = cols.get("lip", skin_shade)
+        blush = cols.get("blush", (240, 140, 160))
+        glass = (90, 90, 110)
+        mask = (180, 180, 190)
+        ear = (255, 220, 140)
 
         def draw_hair_down() -> None:
             if hair_kind == 3:  # hat
@@ -3608,6 +3752,19 @@ class HardcoreSurvivalState(State):
             elif hair_kind == 2:  # long
                 for (x, y) in ((3, 2), (8, 2), (3, 3), (8, 3), (3, 4), (8, 4)):
                     surf.set_at((x, y), hair)
+            elif hair_kind == 4:  # ponytail
+                for (x, y) in ((3, 2), (8, 2), (6, 3), (6, 4)):
+                    surf.set_at((x, y), hair)
+            elif hair_kind == 5:  # twin tails
+                for (x, y) in ((2, 2), (9, 2), (2, 3), (9, 3), (3, 4), (8, 4)):
+                    surf.set_at((x, y), hair)
+            elif hair_kind == 6:  # bob
+                surf.fill(hair, pygame.Rect(4, 0, 4, 3))
+                for (x, y) in ((3, 2), (8, 2), (3, 3), (8, 3)):
+                    surf.set_at((x, y), hair)
+            elif hair_kind == 7:  # bun
+                surf.set_at((6, 0), hair)
+                surf.set_at((6, 1), hair)
 
         def draw_face_down() -> None:
             if face_kind == 0:  # round
@@ -3642,6 +3799,38 @@ class HardcoreSurvivalState(State):
                 surf.set_at((5, 4), skin_shade)
                 surf.set_at((6, 4), skin_shade)
 
+            # Feminine cue: subtle eyeliner/eyelashes.
+            if int(gender) != 0:
+                surf.set_at((4, 3), outline)
+                surf.set_at((8, 3), outline)
+
+            # Mouth.
+            if mouth_kind == 1:  # smile
+                surf.set_at((6, 4), lip)
+                surf.set_at((5, 4), lip)
+            elif mouth_kind == 2:  # pout
+                surf.set_at((6, 4), lip)
+                surf.set_at((7, 4), lip)
+            elif mouth_kind == 3:  # cold
+                surf.set_at((6, 4), outline)
+
+            # Makeup.
+            if int(makeup_kind) >= 1:
+                surf.set_at((4, 4), blush)
+                surf.set_at((8, 4), blush)
+
+            # Accessories.
+            if accessory_kind == 1:  # glasses
+                for x in range(4, 9):
+                    surf.set_at((x, 3), glass)
+                surf.set_at((4, 2), glass)
+                surf.set_at((8, 2), glass)
+            elif accessory_kind == 2:  # mask
+                surf.fill(mask, pygame.Rect(4, 4, 4, 1))
+            elif accessory_kind == 3:  # earrings
+                surf.set_at((3, 4), ear)
+                surf.set_at((9, 4), ear)
+
         def draw_hair_right() -> None:
             if hair_kind == 3:  # hat
                 hat = coat_dark
@@ -3654,8 +3843,20 @@ class HardcoreSurvivalState(State):
             if hair_kind == 1:  # bangs
                 surf.set_at((7, 2), hair)
             elif hair_kind == 2:  # long
-                for (x, y) in ((4, 2), (4, 3), (4, 4)):
+                for (x, y) in ((4, 2), (4, 3), (4, 4), (3, 3)):
                     surf.set_at((x, y), hair)
+            elif hair_kind == 4:  # ponytail
+                for (x, y) in ((4, 2), (4, 3), (3, 4), (4, 4)):
+                    surf.set_at((x, y), hair)
+            elif hair_kind == 5:  # twin tails
+                for (x, y) in ((4, 2), (3, 2), (4, 3), (3, 3), (4, 4)):
+                    surf.set_at((x, y), hair)
+            elif hair_kind == 6:  # bob
+                surf.fill(hair, pygame.Rect(4, 0, 4, 3))
+                for (x, y) in ((4, 3), (4, 4), (3, 3)):
+                    surf.set_at((x, y), hair)
+            elif hair_kind == 7:  # bun
+                surf.set_at((3, 1), hair)
 
         def draw_face_right() -> None:
             if face_kind == 0:
@@ -3683,6 +3884,29 @@ class HardcoreSurvivalState(State):
             elif nose_kind == 2:
                 surf.set_at((7, 4), skin_shade)
                 surf.set_at((8, 4), skin_shade)
+
+            if int(gender) != 0:
+                surf.set_at((9, 2), outline)
+
+            if mouth_kind == 1:
+                surf.set_at((9, 4), lip)
+            elif mouth_kind == 2:
+                surf.set_at((9, 4), lip)
+                surf.set_at((9, 5), lip)
+            elif mouth_kind == 3:
+                surf.set_at((9, 4), outline)
+
+            if int(makeup_kind) >= 1:
+                surf.set_at((6, 4), blush)
+
+            if accessory_kind == 1:  # glasses
+                surf.set_at((7, 3), glass)
+                surf.set_at((8, 3), glass)
+                surf.set_at((9, 3), glass)
+            elif accessory_kind == 2:  # mask
+                surf.fill(mask, pygame.Rect(7, 4, 3, 1))
+            elif accessory_kind == 3:  # earrings
+                surf.set_at((5, 4), ear)
 
         def draw_line(
             col: tuple[int, int, int],
@@ -3817,6 +4041,10 @@ class HardcoreSurvivalState(State):
                 elif outfit_kind == 1:  # belt
                     surf.fill(pants_dark, pygame.Rect(3, 9, 6, 1))
 
+                # A tiny skirt hint for the maid outfit so "女" reads quickly.
+                if int(gender) != 0 and int(outfit_kind) == 15:
+                    surf.fill(coat_dark, pygame.Rect(3, 11, 6, 1))
+
                 draw_hair_down()
                 draw_face_down()
             else:
@@ -3826,9 +4054,16 @@ class HardcoreSurvivalState(State):
                 surf.fill(coat, pygame.Rect(9, 5, 1, 4))
                 surf.fill(hair, pygame.Rect(4, 0, 4, 3))
                 surf.fill(skin, pygame.Rect(5, 3, 2, 1))
-                if hair_kind == 2:  # long hair back
+                if hair_kind in (2, 4, 5):  # longer styles
                     surf.set_at((3, 3), hair)
                     surf.set_at((8, 3), hair)
+                if hair_kind == 4:  # ponytail
+                    surf.set_at((6, 4), hair)
+                if hair_kind == 6:  # bob
+                    surf.set_at((4, 3), hair)
+                    surf.set_at((7, 3), hair)
+                if hair_kind == 7:  # bun
+                    surf.set_at((6, 1), hair)
 
             return surf
 
@@ -11806,6 +12041,9 @@ class HardcoreSurvivalState(State):
                     loot_choices = ["food_can", "water"]
 
                 loot_n = rng.randint(2, 4) if town_kind in ("超市", "大型超市", "新华书店", "医院", "枪械店") else rng.randint(2, 3)
+                prelude = str(getattr(self.state, "world_gen_story_mode", "")) == "prelude"
+                if prelude and town_kind in ("住宅", "高层住宅", "高层住宅大"):
+                    loot_n = rng.randint(0, 1)
 
                 # Place loot only on tiles reachable from the entrance, so we
                 # don't create "see the item but cannot enter" situations.
@@ -11847,8 +12085,22 @@ class HardcoreSurvivalState(State):
                             reachable_floor.append((x, y))
                         stack.extend([(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)])
 
+                reachable_shelf_front: list[tuple[int, int]] = []
                 if reachable_floor:
-                    rng.shuffle(reachable_floor)
+                    for ix, iy in reachable_floor:
+                        for nx, ny in ((ix + 1, iy), (ix - 1, iy), (ix, iy + 1), (ix, iy - 1)):
+                            if not (int(x0) <= int(nx) < int(x0 + w) and int(y0) <= int(ny) < int(y0 + h)):
+                                continue
+                            if int(tiles[idx(int(nx), int(ny))]) == int(self.state.T_SHELF):
+                                reachable_shelf_front.append((int(ix), int(iy)))
+                                break
+
+                if reachable_floor:
+                    if prelude and reachable_shelf_front:
+                        # Neat shelf-front placement during the pre-apocalypse days.
+                        reachable_floor = sorted(reachable_shelf_front, key=lambda p: (int(p[1]), int(p[0])))
+                    else:
+                        rng.shuffle(reachable_floor)
 
                 # Multi-floor houses share the same world-tile footprint for 1F/2F.
                 # To avoid items appearing on the "wrong" floor, don't spawn loot
@@ -11963,6 +12215,10 @@ class HardcoreSurvivalState(State):
             )
 
     def on_enter(self) -> None:
+        # Worldgen style toggles (used by chunk generation before story init runs).
+        # "prelude" => tidy interiors + shelf-ish loot placement.
+        self.world_gen_story_mode = "prelude"
+
         self.seed = int(time.time()) & 0xFFFFFFFF
         self.world = HardcoreSurvivalState._World(self, seed=self.seed)
         spawn_tx, spawn_ty = self.world.spawn_tile()
@@ -22961,13 +23217,20 @@ class HardcoreSurvivalState(State):
             return pygame.Vector2((float(tx) + 0.5) * float(self.TILE_SIZE), (float(ty) + 0.5) * float(self.TILE_SIZE))
 
         def make_avatar(*, gender: int, outfit: int) -> SurvivalAvatar:
+            g = int(gender)
             av = SurvivalAvatar(
-                gender=int(gender),
+                gender=int(g),
                 height=random.choice([0, 1, 1, 2]),
                 face=random.randrange(0, 3),
                 eyes=random.randrange(0, 4),
-                hair=random.randrange(0, 4),
+                hair=random.randrange(0, len(SURVIVAL_HAIR_OPTIONS)),
                 nose=random.randrange(0, 3),
+                skin=random.randrange(0, len(SURVIVAL_SKIN_OPTIONS)),
+                hair_color=random.randrange(0, len(SURVIVAL_HAIR_COLOR_OPTIONS)),
+                eye_color=random.randrange(0, len(SURVIVAL_EYE_COLOR_OPTIONS)),
+                mouth=random.randrange(0, len(SURVIVAL_MOUTH_OPTIONS)),
+                makeup=(random.choice([0, 1, 2]) if g != 0 else 0),
+                accessory=(random.choice([0, 0, 1, 2, 3]) if g != 0 else random.choice([0, 0, 1])),
                 outfit=int(outfit),
             )
             av.clamp_all()
@@ -22985,6 +23248,22 @@ class HardcoreSurvivalState(State):
             speed: float = 28.0,
             script: str = "",
         ) -> None:
+            # Clamp to walkable tiles so NPCs don't spawn/anchor inside walls/furniture.
+            try:
+                tile = find_open_tile_near(int(tile[0]), int(tile[1]), max_r=10)
+            except Exception:
+                pass
+            if isinstance(home, tuple) and len(home) == 2:
+                try:
+                    home = find_open_tile_near(int(home[0]), int(home[1]), max_r=10)
+                except Exception:
+                    pass
+            if isinstance(work, tuple) and len(work) == 2:
+                try:
+                    work = find_open_tile_near(int(work[0]), int(work[1]), max_r=10)
+                except Exception:
+                    pass
+
             av = make_avatar(gender=int(gender), outfit=int(outfit))
             frames = HardcoreSurvivalState.build_avatar_player_frames(av, run=False)
             tx, ty = int(tile[0]), int(tile[1])
@@ -23004,6 +23283,7 @@ class HardcoreSurvivalState(State):
                     "goal": npc_pos_from_tile(int(tx), int(ty)),
                     "goal_left": 0.0,
                     "axis": 0,
+                    "stuck": 0.0,
                     "rng": rng,
                     "speed": float(speed),
                     "home": tuple(home) if isinstance(home, tuple) and len(home) == 2 else (int(tx), int(ty)),
@@ -23183,6 +23463,20 @@ class HardcoreSurvivalState(State):
                 (float(ty) + 0.5) * float(self.TILE_SIZE),
             )
 
+        def find_open_tile_near(tx: int, ty: int, *, max_r: int = 6) -> tuple[int, int]:
+            tx = int(tx)
+            ty = int(ty)
+            max_r = int(max(0, max_r))
+            for r in range(0, max_r + 1):
+                for dy in range(-r, r + 1):
+                    for dx in range(-r, r + 1):
+                        nx = int(tx + dx)
+                        ny = int(ty + dy)
+                        tid = int(self.world.peek_tile(int(nx), int(ny)))
+                        if not bool(self._tile_solid(int(tid))):
+                            return int(nx), int(ny)
+            return int(tx), int(ty)
+
         npc_w = 8
         npc_h = int(clamp(int(getattr(self.player, "collider_h", 10)), 8, 14))
 
@@ -23200,12 +23494,21 @@ class HardcoreSurvivalState(State):
                 npc["walk"] = float(npc.get("walk", 0.0)) * 0.85
                 continue
 
+            stuck_t = float(npc.get("stuck", 0.0))
             home = npc.get("home", (0, 0))
             work = npc.get("work", (0, 0))
             if not (isinstance(home, tuple) and len(home) == 2):
                 home = (0, 0)
             if not (isinstance(work, tuple) and len(work) == 2):
                 work = (0, 0)
+            # Ensure anchors are on walkable tiles.
+            hx, hy = find_open_tile_near(int(home[0]), int(home[1]), max_r=8)
+            wx, wy = find_open_tile_near(int(work[0]), int(work[1]), max_r=8)
+            home = (int(hx), int(hy))
+            work = (int(wx), int(wy))
+            npc["home"] = home
+            npc["work"] = work
+
             anchor_tile = work if bool(at_work) else home
             ax, ay = int(anchor_tile[0]), int(anchor_tile[1])
             anchor = tile_center(int(ax), int(ay))
@@ -23222,24 +23525,54 @@ class HardcoreSurvivalState(State):
                 goal = pygame.Vector2(anchor)
 
             goal_left = max(0.0, float(goal_left) - float(dt_time))
+            if float(stuck_t) > 0.60:
+                goal_left = 0.0
+
             if goal_left <= 0.0 or float((goal - pos).length_squared()) <= 4.0:
                 rng = npc.get("rng", None)
                 if not isinstance(rng, random.Random):
                     rng = random.Random(int(self.seed) ^ 0x1234)
-                radius = 2 if bool(at_work) else 3
-                best = pygame.Vector2(anchor)
-                for _ in range(24):
-                    dx = int(rng.randint(-radius, radius))
-                    dy = int(rng.randint(-radius, radius))
-                    tx = int(ax + dx)
-                    ty = int(ay + dy)
+                radius = (2 if bool(at_work) else 3) + (1 if float(stuck_t) > 0.60 else 0)
+                radius = int(clamp(int(radius), 1, 5))
+
+                # Pick a reachable walkable tile near the anchor so NPCs don't
+                # keep pushing into walls/corners.
+                try:
+                    ptx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                    pty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                except Exception:
+                    ptx, pty = int(ax), int(ay)
+
+                seen: set[tuple[int, int]] = set()
+                stack: list[tuple[int, int]] = [(int(ax), int(ay))]
+                cands: list[tuple[int, int]] = []
+                limit = 120
+                while stack and len(seen) < limit:
+                    tx, ty = stack.pop()
+                    tx = int(tx)
+                    ty = int(ty)
+                    if (tx, ty) in seen:
+                        continue
+                    if abs(int(tx) - int(ax)) > int(radius) or abs(int(ty) - int(ay)) > int(radius):
+                        continue
                     tid = int(self.world.peek_tile(int(tx), int(ty)))
                     if bool(self._tile_solid(int(tid))):
                         continue
-                    best = tile_center(int(tx), int(ty))
-                    break
-                goal = pygame.Vector2(best)
-                goal_left = float(rng.uniform(1.2, 3.2))
+                    seen.add((tx, ty))
+                    cands.append((tx, ty))
+                    stack.extend([(tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)])
+
+                best_tile = (int(ax), int(ay))
+                if cands:
+                    rng.shuffle(cands)
+                    for tx, ty in cands:
+                        if (int(tx), int(ty)) == (int(ptx), int(pty)):
+                            continue
+                        best_tile = (int(tx), int(ty))
+                        break
+
+                goal = tile_center(int(best_tile[0]), int(best_tile[1]))
+                goal_left = float(rng.uniform(0.9, 2.2))
 
             d = pygame.Vector2(goal) - pygame.Vector2(pos)
             vel = pygame.Vector2(0, 0)
@@ -23257,6 +23590,17 @@ class HardcoreSurvivalState(State):
             npc["vel"] = pygame.Vector2(npc_vel)
             npc["goal"] = pygame.Vector2(goal)
             npc["goal_left"] = float(goal_left)
+
+            # Stuck detection: if we're trying to move but can't, re-roll goals faster.
+            want_move = float(d.length_squared()) > float((self.TILE_SIZE * 0.65) ** 2)
+            barely = float(moved.length_squared()) < 0.20
+            if bool(want_move and barely):
+                stuck_t = float(stuck_t) + float(dt_time)
+            else:
+                stuck_t = max(0.0, float(stuck_t) - float(dt_time) * 1.8)
+            npc["stuck"] = float(stuck_t)
+            if float(stuck_t) > 1.20:
+                npc["goal_left"] = 0.0
 
             moving = npc_vel.length_squared() > 1.0
             if moving:
@@ -23426,6 +23770,15 @@ class HardcoreSurvivalState(State):
         day = int(self._story_world_day())
         t = float(self._time_of_day())
         offset = int(self._story_day_offset())
+
+        # Switch worldgen flavor for newly-generated chunks.
+        try:
+            if pre:
+                self.world_gen_story_mode = "prelude"
+            else:
+                self.world_gen_story_mode = "apocalypse"
+        except Exception:
+            pass
 
         # Toggle zombies at outbreak.
         if pre:
@@ -32670,6 +33023,7 @@ class HardcoreSurvivalState(State):
                 for it in chunk.items:
                     # Hide items inside cutaway buildings unless the player is inside.
                     # Otherwise loot can appear "on" the facade/roof when the interior is hidden.
+                    y_off = 0
                     try:
                         itx = int(math.floor(float(it.pos.x) / float(self.TILE_SIZE)))
                         ity = int(math.floor(float(it.pos.y) / float(self.TILE_SIZE)))
@@ -32688,10 +33042,18 @@ class HardcoreSurvivalState(State):
                             visible = getattr(self, "_inside_building_visible", None)
                             if isinstance(visible, set) and (int(itx), int(ity)) not in visible:
                                 continue
+                            # Shelf loot: lift the sprite a bit so it reads like "on the shelf".
+                            try:
+                                for nx, ny in ((itx + 1, ity), (itx - 1, ity), (itx, ity + 1), (itx, ity - 1)):
+                                    if int(self.world.peek_tile(int(nx), int(ny))) == int(self.T_SHELF):
+                                        y_off = -4
+                                        break
+                            except Exception:
+                                y_off = 0
                     except Exception:
                         pass
                     sx = iround(float(it.pos.x) - float(cam_x))
-                    sy = iround(float(it.pos.y) - float(cam_y))
+                    sy = iround(float(it.pos.y) - float(cam_y)) + int(y_off)
                     if sx < -8 or sx > INTERNAL_W + 8 or sy < -8 or sy > INTERNAL_H + 8:
                         continue
                     self._ensure_item_visuals(it.item_id)
