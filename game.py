@@ -24942,6 +24942,23 @@ class HardcoreSurvivalState(State):
         ppos = pygame.Vector2(self.player.pos)
         max_dist2 = float((float(self.TILE_SIZE) * 95.0) ** 2)
 
+        # Snapshot previous rects so traffic actors can collide with each other
+        # using sweep checks (helps when dt spikes).
+        try:
+            for a in traffic:
+                if not isinstance(a, dict):
+                    continue
+                try:
+                    a["_prev_pos"] = pygame.Vector2(a.get("pos", pygame.Vector2(0, 0)))
+                except Exception:
+                    a["_prev_pos"] = pygame.Vector2(0, 0)
+                try:
+                    a["_prev_trect"] = self._story_traffic_rect_for_actor(a)
+                except Exception:
+                    a["_prev_trect"] = None
+        except Exception:
+            pass
+
         for a in traffic:
             if not isinstance(a, dict):
                 continue
@@ -25228,6 +25245,101 @@ class HardcoreSurvivalState(State):
                             if hits(nrect):
                                 blocked = True
                                 break
+
+                # Other traffic actors (cars/bikes) also collide with each other.
+                if not blocked:
+                    for o in traffic:
+                        if not isinstance(o, dict) or o is a:
+                            continue
+                        try:
+                            orect = self._story_traffic_rect_for_actor(o)
+                        except Exception:
+                            orect = None
+                        if not isinstance(orect, pygame.Rect):
+                            continue
+                        if hits(orect):
+                            blocked = True
+                            break
+                        # Symmetric sweep: check motion boxes vs motion boxes.
+                        try:
+                            o_prev = o.get("_prev_trect", None)
+                            if isinstance(prev_trect, pygame.Rect) and isinstance(o_prev, pygame.Rect):
+                                sweep_a = prev_trect.union(trect)
+                                sweep_b = o_prev.union(orect)
+                                if sweep_a.colliderect(sweep_b):
+                                    blocked = True
+                                    break
+                        except Exception:
+                            pass
+
+                # Parked vehicles in the world also block traffic.
+                if not blocked:
+                    try:
+                        ts = float(self.TILE_SIZE)
+                        left = int(math.floor(float(trect.left) / float(ts)))
+                        right = int(math.floor(float(trect.right - 1) / float(ts)))
+                        top = int(math.floor(float(trect.top) / float(ts)))
+                        bottom = int(math.floor(float(trect.bottom - 1) / float(ts)))
+                        start_cx = left // self.CHUNK_SIZE
+                        end_cx = right // self.CHUNK_SIZE
+                        start_cy = top // self.CHUNK_SIZE
+                        end_cy = bottom // self.CHUNK_SIZE
+                        for cy in range(int(start_cy), int(end_cy) + 1):
+                            for cx in range(int(start_cx), int(end_cx) + 1):
+                                chunk = self.world.get_chunk(int(cx), int(cy))
+
+                                for car in getattr(chunk, "cars", []):
+                                    mid2 = str(getattr(car, "model_id", "rv"))
+                                    model2 = self._CAR_MODELS.get(mid2) or self._CAR_MODELS.get("rv")
+                                    if model2 is None:
+                                        continue
+                                    cw, ch = int(model2.collider[0]), int(model2.collider[1])
+                                    if cw <= 0 or ch <= 0:
+                                        continue
+                                    cpos = pygame.Vector2(getattr(car, "pos", pygame.Vector2(0, 0)))
+                                    chead = float(getattr(car, "heading", 0.0))
+                                    c = abs(math.cos(float(chead)))
+                                    s = abs(math.sin(float(chead)))
+                                    ww = float(cw) * c + float(ch) * s
+                                    hh = float(cw) * s + float(ch) * c
+                                    pw = int(max(2, int(round(float(ww)))))
+                                    ph = int(max(2, int(round(float(hh)))))
+                                    crect = pygame.Rect(
+                                        int(round(float(cpos.x) - float(pw) / 2.0)),
+                                        int(round(float(cpos.y) - float(ph) / 2.0)),
+                                        int(pw),
+                                        int(ph),
+                                    )
+                                    if hits(crect):
+                                        blocked = True
+                                        break
+                                if blocked:
+                                    break
+
+                                for b in getattr(chunk, "bikes", []):
+                                    mid2 = str(getattr(b, "model_id", "bike"))
+                                    bw, bh = self._two_wheel_collider_px(mid2)
+                                    bd = str(getattr(b, "dir", "right"))
+                                    if bd in ("up", "down"):
+                                        bw, bh = int(bh), int(bw)
+                                    bw = max(2, int(bw))
+                                    bh = max(2, int(bh))
+                                    bpos = pygame.Vector2(getattr(b, "pos", pygame.Vector2(0, 0)))
+                                    brect = pygame.Rect(
+                                        int(round(float(bpos.x) - float(bw) / 2.0)),
+                                        int(round(float(bpos.y) - float(bh) / 2.0)),
+                                        int(bw),
+                                        int(bh),
+                                    )
+                                    if hits(brect):
+                                        blocked = True
+                                        break
+                                if blocked:
+                                    break
+                            if blocked:
+                                break
+                    except Exception:
+                        pass
 
             if blocked:
                 # Bounce back along the previous lane direction to keep motion stable.
