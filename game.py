@@ -7669,6 +7669,14 @@ class HardcoreSurvivalState(State):
                 y = int(cy + dy)
                 if 0 <= x < surf.get_width() and 0 <= y < surf.get_height():
                     surf.set_at((x, y), white)
+        elif icon == "gym":
+            steel = (240, 240, 240)
+            # Dumbbell silhouette.
+            pygame.draw.rect(surf, steel, pygame.Rect(cx - 4, cy - 1, 2, 3))
+            pygame.draw.rect(surf, outline, pygame.Rect(cx - 4, cy - 1, 2, 3), 1)
+            pygame.draw.rect(surf, steel, pygame.Rect(cx + 3, cy - 1, 2, 3))
+            pygame.draw.rect(surf, outline, pygame.Rect(cx + 3, cy - 1, 2, 3), 1)
+            pygame.draw.line(surf, steel, (cx - 2, cy), (cx + 2, cy), 1)
         else:
             steel = (220, 220, 230)
             pygame.draw.rect(surf, steel, pygame.Rect(cx - 2, cy - 2, 4, 4), 1)
@@ -7802,6 +7810,14 @@ class HardcoreSurvivalState(State):
             solid=False,
             collider=(10, 8),
             sprites=(_make_prop_sprite_sign(bg=(60, 60, 72), accent=(230, 200, 120), icon="cart"),),
+        ),
+        "sign_gym": _PropDef(
+            id="sign_gym",
+            name="健身房招牌",
+            category="招牌",
+            solid=False,
+            collider=(12, 8),
+            sprites=(_make_prop_sprite_sign(bg=(44, 40, 56), accent=(190, 140, 240), icon="gym"),),
         ),
         "sign_gas": _PropDef(
             id="sign_gas",
@@ -20997,6 +21013,48 @@ class HardcoreSurvivalState(State):
                         hits.append(brect)
             except Exception:
                 pass
+
+        # Prelude traffic/NPCs should also block drivable vehicles so cars/bikes
+        # don't clip through people during the "normal town" phase.
+        try:
+            if (
+                bool(getattr(self, "story_enabled", False))
+                and bool(self._story_is_pre_apocalypse())
+                and not (
+                    bool(getattr(self, "hr_interior", False))
+                    or bool(getattr(self, "house_interior", False))
+                    or bool(getattr(self, "sch_interior", False))
+                )
+            ):
+                npcs = getattr(self, "npcs", None)
+                if isinstance(npcs, list) and npcs:
+                    npc_w, npc_h = self._story_npc_collider_wh()
+                    for npc in npcs:
+                        if not isinstance(npc, dict):
+                            continue
+                        try:
+                            pos = pygame.Vector2(npc.get("pos", pygame.Vector2(0, 0)))
+                        except Exception:
+                            continue
+                        nrect = pygame.Rect(
+                            iround(float(pos.x) - float(npc_w) / 2.0),
+                            iround(float(pos.y) - float(npc_h) / 2.0),
+                            int(npc_w),
+                            int(npc_h),
+                        )
+                        if rect.colliderect(nrect):
+                            hits.append(nrect)
+
+                traffic = getattr(self, "story_traffic", None)
+                if isinstance(traffic, list) and traffic:
+                    for a in traffic:
+                        if not isinstance(a, dict):
+                            continue
+                        trect = self._story_traffic_rect_for_actor(a)
+                        if isinstance(trect, pygame.Rect) and rect.colliderect(trect):
+                            hits.append(trect)
+        except Exception:
+            pass
         return hits
 
     def _collide_rect_world_story_npc(self, rect: pygame.Rect) -> list[pygame.Rect]:
@@ -21026,6 +21084,91 @@ class HardcoreSurvivalState(State):
                     tile_rect = pygame.Rect(int(tx) * int(self.TILE_SIZE), int(ty) * int(self.TILE_SIZE), int(self.TILE_SIZE), int(self.TILE_SIZE))
                     if rect.colliderect(tile_rect):
                         hits.append(tile_rect)
+        except Exception:
+            pass
+
+        # Prevent NPCs from overlapping the player (on-foot).
+        if getattr(self, "mount", None) is None:
+            try:
+                prect = self.player.rect_at()
+                if rect.colliderect(prect):
+                    hits.append(prect)
+            except Exception:
+                pass
+
+        # Story traffic (moving vehicles) blocks NPCs too.
+        try:
+            traffic = getattr(self, "story_traffic", None)
+            if isinstance(traffic, list):
+                for a in traffic:
+                    if not isinstance(a, dict):
+                        continue
+                    trect = self._story_traffic_rect_for_actor(a)
+                    if isinstance(trect, pygame.Rect) and rect.colliderect(trect):
+                        hits.append(trect)
+        except Exception:
+            pass
+        return hits
+
+    def _story_npc_collider_wh(self) -> tuple[int, int]:
+        # Keep story NPC collision volume aligned with the player's footprint so
+        # crowds/brawls feel solid (avoid "ghosting" through NPCs).
+        try:
+            w = int(getattr(self.player, "w", 10))
+        except Exception:
+            w = 10
+        try:
+            h = int(getattr(self.player, "collider_h", 10))
+        except Exception:
+            h = 10
+        w = int(clamp(int(w), 8, 12))
+        h = int(clamp(int(h), 8, 14))
+        return int(w), int(h)
+
+    def _collide_rect_world_player(self, rect: pygame.Rect) -> list[pygame.Rect]:
+        # Player collision in the world: includes static world + story NPCs + story traffic.
+        hits = list(self._collide_rect_world(rect))
+        if not bool(getattr(self, "story_enabled", False)):
+            return hits
+        if not bool(self._story_is_pre_apocalypse()):
+            return hits
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return hits
+
+        # Story NPC collision volume.
+        npcs = getattr(self, "npcs", None)
+        if isinstance(npcs, list) and npcs:
+            npc_w, npc_h = self._story_npc_collider_wh()
+            for npc in npcs:
+                if not isinstance(npc, dict):
+                    continue
+                try:
+                    pos = pygame.Vector2(npc.get("pos", pygame.Vector2(0, 0)))
+                except Exception:
+                    continue
+                nrect = pygame.Rect(
+                    iround(float(pos.x) - float(npc_w) / 2.0),
+                    iround(float(pos.y) - float(npc_h) / 2.0),
+                    int(npc_w),
+                    int(npc_h),
+                )
+                if rect.colliderect(nrect):
+                    hits.append(nrect)
+
+        # Story traffic collision volume.
+        try:
+            traffic = getattr(self, "story_traffic", None)
+            if isinstance(traffic, list):
+                for a in traffic:
+                    if not isinstance(a, dict):
+                        continue
+                    trect = self._story_traffic_rect_for_actor(a)
+                    if isinstance(trect, pygame.Rect) and rect.colliderect(trect):
+                        hits.append(trect)
         except Exception:
             pass
         return hits
@@ -21900,6 +22043,7 @@ class HardcoreSurvivalState(State):
         self._update_weather(dt_time)
         self._story_update(dt_time)
         self._story_update_npcs(dt_time)
+        self._story_update_traffic(dt_time)
 
         if getattr(self, "noise_left", 0.0) > 0.0:
             self.noise_left = max(0.0, float(self.noise_left) - dt_time)
@@ -22491,6 +22635,7 @@ class HardcoreSurvivalState(State):
                 dt,
                 w=self.player.w,
                 h=int(getattr(self.player, "collider_h", self.player.h)),
+                collide_fn=self._collide_rect_world_player,
             )
             # Anti-jitter: if we started from a non-penetrating position, never let
             # collision resolution move the player *opposite* their intended axis
@@ -23057,6 +23202,30 @@ class HardcoreSurvivalState(State):
                 if item_id and qty > 0 and isinstance(getattr(self, "inventory", None), HardcoreSurvivalState._Inventory):
                     self.inventory.add(item_id, int(qty), self._ITEMS)
             return True
+        if action.startswith("start_fight"):
+            # start_fight[:<npc_id>[:<seconds>]]
+            parts = action.split(":")
+            npc_id = ""
+            seconds = 10.0
+            if len(parts) >= 2 and str(parts[1]).strip():
+                npc_id = str(parts[1]).strip()
+            else:
+                ctx = getattr(self, "conv_ctx", None)
+                if isinstance(ctx, dict):
+                    npc_id = str(ctx.get("npc_id", "")).strip()
+            if len(parts) >= 3:
+                try:
+                    seconds = float(parts[2])
+                except Exception:
+                    seconds = 10.0
+            if npc_id:
+                try:
+                    self._story_set_npc_hostile(str(npc_id), seconds=float(seconds))
+                except Exception:
+                    pass
+                self._set_hint("他脸色一变，冲了过来！", seconds=1.4)
+            self._conv_close()
+            return True
         if action == "knock_open":
             # A brutal "you opened the door" story fail.
             try:
@@ -23360,6 +23529,7 @@ class HardcoreSurvivalState(State):
         self.story_work_tile = find_open_tile_near(int(stx + 2), int(sty + 2), max_r=10)
         self.story_hardware_tile = find_open_tile_near(int(stx + 4), int(sty + 1), max_r=12)
         self.story_cafe_tile = find_open_tile_near(int(stx - 2), int(sty + 1), max_r=12)
+        self.story_gym_tile = find_open_tile_near(int(stx - 5), int(sty + 3), max_r=14)
 
         try:
             gate_x0 = int(getattr(self.world, "compound_gate_x0", 0))
@@ -23373,9 +23543,37 @@ class HardcoreSurvivalState(State):
         self._story_add_marker(int(self.story_work_tile[0]), int(self.story_work_tile[1]), "上班地点", color=(160, 220, 255))
         self._story_add_marker(int(self.story_hardware_tile[0]), int(self.story_hardware_tile[1]), "五金店", color=(200, 200, 210))
         self._story_add_marker(int(self.story_cafe_tile[0]), int(self.story_cafe_tile[1]), "咖啡店", color=(240, 200, 140))
+        self._story_add_marker(int(self.story_gym_tile[0]), int(self.story_gym_tile[1]), "健身房", color=(210, 170, 255))
+
+        # Place a small gym sign prop so the POI is visually obvious in-world.
+        try:
+            gtx, gty = int(self.story_gym_tile[0]), int(self.story_gym_tile[1])
+            gx = (float(gtx) + 0.5) * float(self.TILE_SIZE)
+            gy = (float(gty) + 0.5) * float(self.TILE_SIZE)
+            chunk = self.world.get_chunk(int(gtx) // int(self.CHUNK_SIZE), int(gty) // int(self.CHUNK_SIZE))
+            if chunk is not None:
+                props = getattr(chunk, "props", None)
+                if not isinstance(props, list):
+                    chunk.props = []
+                    props = chunk.props
+                # De-dupe nearby same prop_id.
+                props[:] = [
+                    pr
+                    for pr in props
+                    if str(getattr(pr, "prop_id", "")) != "sign_gym"
+                    or (pygame.Vector2(getattr(pr, "pos", pygame.Vector2(0, 0))) - pygame.Vector2(gx, gy)).length_squared() > 9.0
+                ]
+                props.append(HardcoreSurvivalState._WorldProp(pos=pygame.Vector2(gx, gy), prop_id="sign_gym", variant=0, dir="down"))
+        except Exception:
+            pass
 
         # Story NPCs (lightweight pedestrians for the prelude).
         self.npcs: list[dict[str, object]] = []
+        # Prelude ambient traffic (decorative): cars/bikes moving on roads.
+        self.story_traffic_enabled = True
+        self.story_traffic: list[dict[str, object]] = []
+        self.story_traffic_max = 10
+        self.story_traffic_rng = random.Random(int(self.seed) ^ 0x54B3_9C21)
 
         def npc_pos_from_tile(tx: int, ty: int) -> pygame.Vector2:
             return pygame.Vector2((float(tx) + 0.5) * float(self.TILE_SIZE), (float(ty) + 0.5) * float(self.TILE_SIZE))
@@ -23467,6 +23665,7 @@ class HardcoreSurvivalState(State):
         gate_tx, gate_ty = tuple(getattr(self, "story_gate_tile", (stx, sty)))
         work_tx, work_ty = tuple(getattr(self, "story_work_tile", (stx, sty)))
         cafe_tx, cafe_ty = tuple(getattr(self, "story_cafe_tile", (stx, sty)))
+        gym_tx, gym_ty = tuple(getattr(self, "story_gym_tile", (stx, sty)))
         home_door = getattr(self, "home_highrise_door", None)
         home_tx, home_ty = (int(home_door[0]), int(home_door[1])) if isinstance(home_door, tuple) and len(home_door) == 2 else (int(stx), int(sty))
 
@@ -23475,7 +23674,8 @@ class HardcoreSurvivalState(State):
         add_npc("qiao_white", "阿乔", tile=(int(cafe_tx), int(cafe_ty)), home=(int(home_tx) + 2, int(home_ty) - 2), work=(int(cafe_tx), int(cafe_ty)), gender=1, outfit=0, script="npc_aqiao")
         add_npc("nana_influencer", "娜娜", tile=(int(cafe_tx) + 2, int(cafe_ty) + 1), home=(int(home_tx) - 2, int(home_ty) - 2), work=(int(cafe_tx) + 2, int(cafe_ty) + 1), gender=1, outfit=6, script="npc_nana")
         add_npc("green_tea", "绿茶姐", tile=(int(home_tx) - 1, int(home_ty) - 1), home=(int(home_tx) - 1, int(home_ty) - 1), work=(int(cafe_tx) - 2, int(cafe_ty) + 2), gender=1, outfit=6, script="npc_green_tea")
-        add_npc("muscle_guy", "肌肉男", tile=(int(home_tx) - 2, int(home_ty) - 1), home=(int(home_tx) - 2, int(home_ty) - 1), work=(int(cafe_tx) - 3, int(cafe_ty) + 2), gender=0, outfit=2, script="npc_muscle_guy")
+        add_npc("muscle_guy", "肌肉男", tile=(int(gym_tx), int(gym_ty)), home=(int(home_tx) - 2, int(home_ty) - 1), work=(int(gym_tx), int(gym_ty)), gender=0, outfit=2, script="npc_muscle_guy")
+        add_npc("street_thug", "小混混", tile=(int(gate_tx) + 4, int(gate_ty) + 1), home=(int(gate_tx) + 4, int(gate_ty) + 1), work=(int(gate_tx) + 4, int(gate_ty) + 1), gender=0, outfit=6, speed=32.0, script="npc_hooligan")
 
         # Conversation scripts for story NPCs.
         self._CONV_SCRIPTS = {
@@ -23578,10 +23778,28 @@ class HardcoreSurvivalState(State):
                     "options": [
                         {"label": "没事", "action": "close"},
                         {"label": "最近外面不对劲", "action": "hint:他冷笑一声：‘怕就躲家里。’", "next": "start"},
+                        {"label": "挑衅他一下", "action": "start_fight:muscle_guy:8"},
+                    ],
+                }
+            },
+            "npc_hooligan": {
+                "start": {
+                    "speaker": "小混混",
+                    "text": "喂，{PLAYER_NAME}。别挡道。要不…借点‘路费’？",
+                    "options": [
+                        {"label": "不给", "action": "start_fight:street_thug:10"},
+                        {"label": "你想干嘛？", "action": "hint:他咧嘴笑：‘开个玩笑。’", "next": "start"},
+                        {"label": "先走了", "action": "close"},
                     ],
                 }
             },
         }
+
+        # Bootstrap traffic so the town feels alive immediately.
+        try:
+            self._story_bootstrap_traffic()
+        except Exception:
+            pass
 
         # Prelude starts with no zombies; outbreak will enable them.
         self.zombie_cap = 0
@@ -23651,8 +23869,107 @@ class HardcoreSurvivalState(State):
                             return int(nx), int(ny)
             return int(tx), int(ty)
 
-        npc_w = 8
-        npc_h = int(clamp(int(getattr(self.player, "collider_h", 10)), 8, 14))
+        def is_open_outdoor_tile(tx: int, ty: int) -> bool:
+            tx = int(tx)
+            ty = int(ty)
+            try:
+                if self._peek_building_at_tile(int(tx), int(ty)) is not None:
+                    return False
+            except Exception:
+                pass
+            try:
+                tid = int(self.world.peek_tile(int(tx), int(ty)))
+                if bool(self._tile_solid(int(tid))):
+                    return False
+            except Exception:
+                pass
+            return True
+
+        road_x = getattr(self.world, "_is_road_x", None)
+        road_y = getattr(self.world, "_is_road_y", None)
+
+        def find_road_tile_near(tx: int, ty: int, *, axis: str | None = None, max_r: int = 18) -> tuple[int, int]:
+            tx = int(tx)
+            ty = int(ty)
+            axis = None if axis is None else str(axis)
+            max_r = int(max(0, max_r))
+            for r in range(0, max_r + 1):
+                for dy in range(-r, r + 1):
+                    for dx in range(-r, r + 1):
+                        nx = int(tx + dx)
+                        ny = int(ty + dy)
+                        if axis == "v" and callable(road_x):
+                            try:
+                                if not bool(road_x(int(nx))):
+                                    continue
+                            except Exception:
+                                continue
+                        elif axis == "h" and callable(road_y):
+                            try:
+                                if not bool(road_y(int(ny))):
+                                    continue
+                            except Exception:
+                                continue
+                        else:
+                            try:
+                                if not bool(self.world.is_road(int(nx), int(ny))):
+                                    continue
+                            except Exception:
+                                continue
+                        if is_open_outdoor_tile(int(nx), int(ny)):
+                            return int(nx), int(ny)
+            # Fallback: at least keep it walkable.
+            return find_open_tile_near(int(tx), int(ty), max_r=8)
+
+        def plan_commute_points(
+            start_tile: tuple[int, int],
+            dest_tile: tuple[int, int],
+            *,
+            rng: random.Random,
+        ) -> list[pygame.Vector2]:
+            # Simple "town commute": walk to the nearest road, follow road grid, then walk off-road.
+            sx, sy = int(start_tile[0]), int(start_tile[1])
+            dx, dy = int(dest_tile[0]), int(dest_tile[1])
+            if (sx, sy) == (dx, dy):
+                return []
+
+            # Two candidates: enter road via vertical then exit via horizontal, or the opposite.
+            sv = find_road_tile_near(int(sx), int(sy), axis="v", max_r=20)
+            sh = find_road_tile_near(int(sx), int(sy), axis="h", max_r=20)
+            dv = find_road_tile_near(int(dx), int(dy), axis="v", max_r=20)
+            dh = find_road_tile_near(int(dx), int(dy), axis="h", max_r=20)
+
+            def build(points: list[tuple[int, int]]) -> list[pygame.Vector2]:
+                out_tiles: list[tuple[int, int]] = []
+                last = None
+                for tx, ty in points:
+                    tx, ty = int(tx), int(ty)
+                    if not is_open_outdoor_tile(int(tx), int(ty)):
+                        tx, ty = find_open_tile_near(int(tx), int(ty), max_r=8)
+                    cur = (int(tx), int(ty))
+                    if last is None or cur != last:
+                        out_tiles.append(cur)
+                        last = cur
+                # Drop the first point (current tile) so the NPC won't "stall" on it.
+                out_tiles = out_tiles[1:] if len(out_tiles) > 1 else []
+                return [tile_center(int(tx), int(ty)) for tx, ty in out_tiles]
+
+            cand_a = [(sx, sy), sv, (int(sv[0]), int(dh[1])), dh, (dx, dy)]
+            cand_b = [(sx, sy), sh, (int(dv[0]), int(sh[1])), dv, (dx, dy)]
+            pa = build(cand_a)
+            pb = build(cand_b)
+            # Choose the shorter (slightly randomized so NPCs don't look cloned).
+            if not pb:
+                return pa
+            if not pa:
+                return pb
+            la = abs(int(sv[0]) - int(dx)) + abs(int(dh[1]) - int(sy))
+            lb = abs(int(sh[1]) - int(dy)) + abs(int(dv[0]) - int(sx))
+            if la == lb and float(rng.random()) < 0.35:
+                return pb
+            return pa if la <= lb else pb
+
+        npc_w, npc_h = self._story_npc_collider_wh()
         base_speed = 60.0
         npc_beh: dict[str, dict[str, object]] = {
             # Each story NPC gets a tiny "slice of life" action so they don't all look identical.
@@ -23722,6 +24039,17 @@ class HardcoreSurvivalState(State):
                 "wander_home": 1,
                 "face": "flex",
             },
+            "npc_hooligan": {
+                "work_action": "guard_scan",
+                "home_action": "guard_scan",
+                "pose_rate": 2.4,
+                "stay_work": (1.0, 2.4),
+                "stay_home": (1.0, 2.2),
+                "stay_chance": 0.45,
+                "wander_work": 2,
+                "wander_home": 2,
+                "face": "player",
+            },
         }
 
         for npc in npcs:
@@ -23732,6 +24060,7 @@ class HardcoreSurvivalState(State):
             except Exception:
                 pos = pygame.Vector2(0, 0)
 
+            npc_id = str(npc.get("id", "") or "")
             speed = float(npc.get("speed", 28.0))
             stuck_t = float(npc.get("stuck", 0.0))
 
@@ -23779,6 +24108,65 @@ class HardcoreSurvivalState(State):
             ax, ay = int(anchor_tile[0]), int(anchor_tile[1])
             anchor = tile_center(int(ax), int(ay))
 
+            # Hostile mode (story fights): temporarily chase the player instead of commuting.
+            try:
+                hostile_left = float(npc.get("hostile_left", 0.0))
+            except Exception:
+                hostile_left = 0.0
+            if hostile_left > 0.0:
+                hostile_left = float(max(0.0, float(hostile_left) - float(dt_time)))
+                npc["hostile_left"] = float(hostile_left)
+            else:
+                hostile_left = 0.0
+                npc["hostile_left"] = 0.0
+            hostile = float(hostile_left) > 0.0
+            if hostile:
+                # Cancel commute/wander actions while hostile.
+                npc["path_pts"] = []
+                npc["path_i"] = 0
+                npc["stay_left"] = 0.0
+                action_target = ""
+                wander_base = 0
+                speed = max(float(speed), 76.0)
+                try:
+                    ptx, pty = self._player_tile()
+                except Exception:
+                    ptx, pty = int(ax), int(ay)
+                ax, ay = int(ptx), int(pty)
+                anchor = pygame.Vector2(self.player.pos)
+
+            # Commute path (home <-> work): only recompute when schedule flips.
+            if not bool(hostile):
+                dest_kind = "work" if bool(at_work) else "home"
+                prev_kind = str(npc.get("schedule_dest", "") or "")
+                if prev_kind != str(dest_kind):
+                    npc["schedule_dest"] = str(dest_kind)
+                    try:
+                        ptx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                        pty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                    except Exception:
+                        ptx, pty = int(ax), int(ay)
+                    try:
+                        npc["path_pts"] = plan_commute_points((int(ptx), int(pty)), (int(ax), int(ay)), rng=rng)
+                        npc["path_i"] = 0
+                    except Exception:
+                        npc["path_pts"] = []
+                        npc["path_i"] = 0
+                    npc["goal_left"] = 0.0
+                    npc["stay_left"] = 0.0
+            else:
+                npc["schedule_dest"] = "hostile"
+
+            path_pts = npc.get("path_pts", None)
+            try:
+                path_i = int(npc.get("path_i", 0))
+            except Exception:
+                path_i = 0
+            commuting = (not bool(hostile)) and isinstance(path_pts, list) and 0 <= int(path_i) < len(path_pts)
+            if commuting:
+                # No "posing" while commuting; just walk the route.
+                action_target = ""
+
             def _face_to_player() -> str:
                 try:
                     v = pygame.Vector2(self.player.pos) - pygame.Vector2(pos)
@@ -23823,7 +24211,7 @@ class HardcoreSurvivalState(State):
                     npc["dir"] = _face_to_player()
 
             # Stay/pose logic so story NPCs have distinct day-to-day actions.
-            near_anchor = float((pos - anchor).length_squared()) <= float((self.TILE_SIZE * 1.60) ** 2)
+            near_anchor = (not bool(commuting)) and float((pos - anchor).length_squared()) <= float((self.TILE_SIZE * 1.60) ** 2)
             stay_left = float(npc.get("stay_left", 0.0))
             if not bool(near_anchor):
                 stay_left = 0.0
@@ -23875,8 +24263,25 @@ class HardcoreSurvivalState(State):
             except Exception:
                 goal = pygame.Vector2(anchor)
 
+            # Follow commute waypoints if present.
+            if commuting and isinstance(path_pts, list):
+                try:
+                    while int(path_i) < len(path_pts) and float((pygame.Vector2(path_pts[int(path_i)]) - pos).length_squared()) <= 4.0:
+                        path_i = int(path_i) + 1
+                    npc["path_i"] = int(path_i)
+                    if int(path_i) >= len(path_pts):
+                        npc["path_pts"] = []
+                        commuting = False
+                    else:
+                        goal = pygame.Vector2(path_pts[int(path_i)])
+                        goal_left = max(float(goal_left), 1.4)
+                except Exception:
+                    npc["path_pts"] = []
+                    npc["path_i"] = 0
+                    commuting = False
+
             # If the NPC ever gets displaced too far, snap its "intent" back.
-            if float((pos - anchor).length_squared()) > float((self.TILE_SIZE * 6) ** 2):
+            if (not bool(commuting)) and float((pos - anchor).length_squared()) > float((self.TILE_SIZE * 6) ** 2):
                 goal_left = 0.0
                 goal = pygame.Vector2(anchor)
 
@@ -23885,68 +24290,72 @@ class HardcoreSurvivalState(State):
                 goal_left = 0.0
 
             if goal_left <= 0.0 or float((goal - pos).length_squared()) <= 4.0:
-                # If we're near the anchor, sometimes pause and do an "action" instead
-                # of immediately picking a new wander target.
-                if action_target and bool(near_anchor) and float(stay_max) > 0.01:
-                    if float(rng.random()) < float(stay_chance):
-                        hold = float(rng.uniform(float(stay_min), float(stay_max)))
-                        npc["stay_left"] = float(hold)
-                        npc["vel"] = pygame.Vector2(0, 0)
-                        npc["goal"] = pygame.Vector2(pos)
-                        npc["goal_left"] = 0.0
-                        npc["stuck"] = 0.0
-                        npc["action"] = str(action_target)
-                        pp = float(npc.get("pose_phase", 0.0)) + float(dt_time) * float(pose_rate)
-                        npc["pose_phase"] = float(pp)
-                        _apply_action_facing(str(action_target), phase=float(pp))
-                        continue
+                if bool(commuting):
+                    # Keep walking along the route; avoid falling into "wander" selection.
+                    goal_left = float(max(float(goal_left), 1.0))
+                else:
+                    # If we're near the anchor, sometimes pause and do an "action" instead
+                    # of immediately picking a new wander target.
+                    if action_target and bool(near_anchor) and float(stay_max) > 0.01:
+                        if float(rng.random()) < float(stay_chance):
+                            hold = float(rng.uniform(float(stay_min), float(stay_max)))
+                            npc["stay_left"] = float(hold)
+                            npc["vel"] = pygame.Vector2(0, 0)
+                            npc["goal"] = pygame.Vector2(pos)
+                            npc["goal_left"] = 0.0
+                            npc["stuck"] = 0.0
+                            npc["action"] = str(action_target)
+                            pp = float(npc.get("pose_phase", 0.0)) + float(dt_time) * float(pose_rate)
+                            npc["pose_phase"] = float(pp)
+                            _apply_action_facing(str(action_target), phase=float(pp))
+                            continue
 
-                radius = int(wander_base) + (1 if float(stuck_t) > 0.60 else 0)
-                radius = int(clamp(int(radius), 0, 5))
+                    radius = int(wander_base) + (1 if float(stuck_t) > 0.60 else 0)
+                    radius = int(clamp(int(radius), 0, 5))
 
-                # Pick a reachable walkable tile near the anchor so NPCs don't
-                # keep pushing into walls/corners.
-                try:
-                    ptx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
-                    pty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
-                except Exception:
-                    ptx, pty = int(ax), int(ay)
-
-                seen: set[tuple[int, int]] = set()
-                stack: list[tuple[int, int]] = [(int(ax), int(ay))]
-                cands: list[tuple[int, int]] = []
-                limit = 120
-                while stack and len(seen) < limit:
-                    tx, ty = stack.pop()
-                    tx = int(tx)
-                    ty = int(ty)
-                    if (tx, ty) in seen:
-                        continue
-                    if abs(int(tx) - int(ax)) > int(radius) or abs(int(ty) - int(ay)) > int(radius):
-                        continue
+                    # Pick a reachable walkable tile near the anchor so NPCs don't
+                    # keep pushing into walls/corners.
                     try:
-                        if self._peek_building_at_tile(int(tx), int(ty)) is not None:
-                            continue
+                        ptx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                        pty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
                     except Exception:
-                        pass
-                    tid = int(self.world.peek_tile(int(tx), int(ty)))
-                    if bool(self._tile_solid(int(tid))):
-                        continue
-                    seen.add((tx, ty))
-                    cands.append((tx, ty))
-                    stack.extend([(tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)])
+                        ptx, pty = int(ax), int(ay)
 
-                best_tile = (int(ax), int(ay))
-                if cands:
-                    rng.shuffle(cands)
-                    for tx, ty in cands:
-                        if (int(tx), int(ty)) == (int(ptx), int(pty)):
+                    seen: set[tuple[int, int]] = set()
+                    stack: list[tuple[int, int]] = [(int(ax), int(ay))]
+                    cands: list[tuple[int, int]] = []
+                    limit = 120
+                    while stack and len(seen) < limit:
+                        tx, ty = stack.pop()
+                        tx = int(tx)
+                        ty = int(ty)
+                        if (tx, ty) in seen:
                             continue
-                        best_tile = (int(tx), int(ty))
-                        break
+                        if abs(int(tx) - int(ax)) > int(radius) or abs(int(ty) - int(ay)) > int(radius):
+                            continue
+                        try:
+                            if self._peek_building_at_tile(int(tx), int(ty)) is not None:
+                                continue
+                        except Exception:
+                            pass
+                        tid = int(self.world.peek_tile(int(tx), int(ty)))
+                        if bool(self._tile_solid(int(tid))):
+                            continue
+                        seen.add((tx, ty))
+                        cands.append((tx, ty))
+                        stack.extend([(tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)])
 
-                goal = tile_center(int(best_tile[0]), int(best_tile[1]))
-                goal_left = float(rng.uniform(0.9, 2.2))
+                    best_tile = (int(ax), int(ay))
+                    if cands:
+                        rng.shuffle(cands)
+                        for tx, ty in cands:
+                            if (int(tx), int(ty)) == (int(ptx), int(pty)):
+                                continue
+                            best_tile = (int(tx), int(ty))
+                            break
+
+                    goal = tile_center(int(best_tile[0]), int(best_tile[1]))
+                    goal_left = float(rng.uniform(0.9, 2.2))
 
             d = pygame.Vector2(goal) - pygame.Vector2(pos)
             vel = pygame.Vector2(0, 0)
@@ -24037,17 +24446,74 @@ class HardcoreSurvivalState(State):
                 goal_left = 0.0
 
             npc["pos"] = pygame.Vector2(new_pos)
-            npc["vel"] = pygame.Vector2(npc_vel)
+            # Match the player: animate using intended velocity, not just the post-collision delta.
+            npc["vel"] = pygame.Vector2(vel)
             npc["goal"] = pygame.Vector2(goal)
             npc["goal_left"] = float(goal_left)
             npc["stuck"] = float(stuck_t)
 
-            moving = npc_vel.length_squared() > 1.0
+            # Story fight: hostile NPCs can punch the player (pre-apocalypse brawls).
+            if bool(hostile) and getattr(self, "mount", None) is None:
+                # Visible attack pose (李小龙式快拳) for the street thug.
+                try:
+                    atk_anim = float(npc.get("attack_anim_left", 0.0))
+                except Exception:
+                    atk_anim = 0.0
+                atk_anim = float(max(0.0, float(atk_anim) - float(dt_time)))
+                npc["attack_anim_left"] = float(atk_anim)
+                if npc_id == "street_thug":
+                    npc["action"] = "bruce_punch" if float(atk_anim) > 0.0 else "bruce_guard"
+                    npc["pose_phase"] = float(npc.get("pose_phase", 0.0)) + float(dt_time) * (7.5 if float(atk_anim) > 0.0 else 4.0)
+
+                try:
+                    atk_left = float(npc.get("attack_left", 0.0))
+                except Exception:
+                    atk_left = 0.0
+                atk_left = float(max(0.0, float(atk_left) - float(dt_time)))
+                npc["attack_left"] = float(atk_left)
+                if float(atk_left) <= 0.0:
+                    try:
+                        to_p = pygame.Vector2(self.player.pos) - pygame.Vector2(new_pos)
+                        d2p = float(to_p.length_squared())
+                    except Exception:
+                        to_p = pygame.Vector2(0, 0)
+                        d2p = 1e18
+                    dmg = 8
+                    cd = 0.85
+                    atk_range = 11.0
+                    if npc_id == "muscle_guy":
+                        dmg = 14
+                        cd = 1.05
+                        atk_range = 12.5
+                    elif npc_id == "street_thug":
+                        dmg = 9
+                        cd = 0.78
+                        atk_range = 13.0
+                    if d2p <= float(atk_range) * float(atk_range):
+                        npc["attack_left"] = float(cd)
+                        if npc_id == "street_thug":
+                            npc["attack_anim_left"] = float(max(float(npc.get("attack_anim_left", 0.0) or 0.0), 0.40))
+                            npc["action"] = "bruce_punch"
+                        try:
+                            self.player.hp = max(0, int(self.player.hp) - int(dmg))
+                        except Exception:
+                            pass
+                        try:
+                            self.player.morale = float(clamp(self.player.morale - (1.6 + float(dmg) * 0.22), 0.0, 100.0))
+                        except Exception:
+                            pass
+                        try:
+                            if to_p.length_squared() > 0.01:
+                                self._spawn_hit_fx(pygame.Vector2(self.player.pos), dir=to_p.normalize())
+                        except Exception:
+                            pass
+
+            moving = pygame.Vector2(vel).length_squared() > 1.0
             if moving:
-                npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) + float(dt_time) * 10.0 * (float(npc_vel.length()) / float(base_speed))
+                npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) + float(dt_time) * 10.0 * (float(pygame.Vector2(vel).length()) / float(base_speed))
                 axis = int(npc.get("axis", 0))
-                vx = float(npc_vel.x)
-                vy = float(npc_vel.y)
+                vx = float(getattr(vel, "x", 0.0))
+                vy = float(getattr(vel, "y", 0.0))
                 ratio = abs(vy) / max(1e-6, abs(vx))
                 if axis == 0:
                     if ratio > 1.18:
@@ -24060,11 +24526,16 @@ class HardcoreSurvivalState(State):
                     npc["dir"] = "down" if vy >= 0.0 else "up"
                 else:
                     npc["dir"] = "right" if vx >= 0.0 else "left"
+                if bool(hostile) and npc_id == "street_thug":
+                    npc["dir"] = _face_to_player()
             else:
                 npc["walk_phase"] = float(npc.get("walk_phase", 0.0)) * 0.92
 
             # If idle near the anchor, show the NPC's current story action.
-            if moving or not action_target:
+            if bool(hostile):
+                # Hostile pose is managed by the fight system; don't overwrite here.
+                pass
+            elif moving or not action_target:
                 npc["action"] = ""
             else:
                 try:
@@ -24079,6 +24550,867 @@ class HardcoreSurvivalState(State):
                     _apply_action_facing(str(action_target), phase=float(pp))
                 else:
                     npc["action"] = ""
+
+        # Post-pass: prevent story NPCs from overlapping each other (soft collision volume).
+        try:
+            colliders: list[tuple[dict[str, object], pygame.Rect]] = []
+            for npc in npcs:
+                if not isinstance(npc, dict):
+                    continue
+                try:
+                    pos = pygame.Vector2(npc.get("pos", pygame.Vector2(0, 0)))
+                except Exception:
+                    continue
+                rect = pygame.Rect(
+                    iround(float(pos.x) - float(npc_w) / 2.0),
+                    iround(float(pos.y) - float(npc_h) / 2.0),
+                    int(npc_w),
+                    int(npc_h),
+                )
+                colliders.append((npc, rect))
+
+            resolved: list[tuple[dict[str, object], pygame.Rect]] = []
+            for npc, rect in colliders:
+                rect = pygame.Rect(rect)
+                for _ in range(6):
+                    pushed = False
+                    for _onpc, orect in resolved:
+                        if not rect.colliderect(orect):
+                            continue
+                        dx = float(rect.centerx - orect.centerx)
+                        dy = float(rect.centery - orect.centery)
+                        overlap_x = (float(rect.w) + float(orect.w)) / 2.0 - abs(dx)
+                        overlap_y = (float(rect.h) + float(orect.h)) / 2.0 - abs(dy)
+                        if overlap_x <= 0.0 or overlap_y <= 0.0:
+                            continue
+                        sign_x = 1.0 if dx >= 0.0 else -1.0
+                        sign_y = 1.0 if dy >= 0.0 else -1.0
+                        if dx == 0.0:
+                            sign_x = 1.0 if ((int(rect.centerx) + int(rect.centery)) & 1) else -1.0
+                        if dy == 0.0:
+                            sign_y = 1.0 if ((int(rect.centerx) - int(rect.centery)) & 1) else -1.0
+                        move_x = int(sign_x * math.ceil(overlap_x))
+                        move_y = int(sign_y * math.ceil(overlap_y))
+                        if float(overlap_x) <= float(overlap_y):
+                            candidates = [(int(move_x), 0), (0, int(move_y))]
+                        else:
+                            candidates = [(0, int(move_y)), (int(move_x), 0)]
+                        moved = False
+                        for mx, my in candidates:
+                            if mx == 0 and my == 0:
+                                continue
+                            test = rect.move(int(mx), int(my))
+                            if not self._collide_rect_world_story_npc(test):
+                                rect = test
+                                moved = True
+                                pushed = True
+                                break
+                        if not moved and candidates:
+                            rect = rect.move(int(candidates[0][0]), int(candidates[0][1]))
+                            pushed = True
+                    if not pushed:
+                        break
+
+                npc["pos"] = pygame.Vector2(float(rect.centerx), float(rect.centery))
+                resolved.append((npc, rect))
+        except Exception:
+            pass
+
+    def _story_bootstrap_traffic(self) -> None:
+        if not bool(getattr(self, "story_enabled", False)):
+            return
+        if not bool(self._story_is_pre_apocalypse()):
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return
+        if not bool(getattr(self, "story_traffic_enabled", True)):
+            return
+        traffic = getattr(self, "story_traffic", None)
+        if not isinstance(traffic, list):
+            self.story_traffic = []
+            traffic = self.story_traffic
+        rng = getattr(self, "story_traffic_rng", None)
+        if not isinstance(rng, random.Random):
+            rng = random.Random(int(getattr(self, "seed", 0)) ^ 0x54B3_9C21)
+            self.story_traffic_rng = rng
+        target = int(max(0, int(getattr(self, "story_traffic_max", 10))))
+        # Spawn slightly fewer initially; updates will top up based on time-of-day.
+        want = int(clamp(int(target), 0, 10))
+        if len(traffic) >= want:
+            return
+        center = getattr(self, "story_origin_tile", None)
+        if not (isinstance(center, tuple) and len(center) == 2):
+            center = self._player_tile()
+        for _ in range(int(want) - int(len(traffic))):
+            actor = self._story_spawn_one_traffic(rng=rng, center_tile=(int(center[0]), int(center[1])), radius=42)
+            if actor is not None:
+                traffic.append(actor)
+
+    def _story_traffic_rect_for_actor(self, actor: dict[str, object]) -> pygame.Rect | None:
+        if not isinstance(actor, dict):
+            return None
+        try:
+            pos = pygame.Vector2(actor.get("pos", pygame.Vector2(0, 0)))
+        except Exception:
+            return None
+        kind = str(actor.get("kind", "car") or "car")
+
+        if kind == "car":
+            mid = str(actor.get("model_id", "beetle") or "beetle")
+            model = self._CAR_MODELS.get(mid) or self._CAR_MODELS.get("rv")
+            if model is None:
+                return None
+            cw, ch = int(model.collider[0]), int(model.collider[1])
+            if cw <= 0 or ch <= 0:
+                return None
+            heading = float(actor.get("heading", 0.0))
+            c = abs(math.cos(float(heading)))
+            s = abs(math.sin(float(heading)))
+            ww = float(cw) * c + float(ch) * s
+            hh = float(cw) * s + float(ch) * c
+            w = int(max(2, int(round(float(ww)))))
+            h = int(max(2, int(round(float(hh)))))
+            return pygame.Rect(
+                iround(float(pos.x) - float(w) / 2.0),
+                iround(float(pos.y) - float(h) / 2.0),
+                int(w),
+                int(h),
+            )
+
+        # Two-wheel (bike/moto).
+        mid = str(actor.get("model_id", "bike") or "bike")
+        d = str(actor.get("dir", "right") or "right")
+        try:
+            bw, bh = self._two_wheel_collider_px(mid)
+        except Exception:
+            bw, bh = (16, 10)
+        if d in ("up", "down"):
+            bw, bh = int(bh), int(bw)
+        bw = max(2, int(bw))
+        bh = max(2, int(bh))
+        return pygame.Rect(
+            iround(float(pos.x) - float(bw) / 2.0),
+            iround(float(pos.y) - float(bh) / 2.0),
+            int(bw),
+            int(bh),
+        )
+
+    def _story_spawn_one_traffic(
+        self,
+        *,
+        rng: random.Random,
+        center_tile: tuple[int, int],
+        radius: int,
+    ) -> dict[str, object] | None:
+        if not isinstance(rng, random.Random):
+            rng = random.Random(int(getattr(self, "seed", 0)) ^ 0x54B3_9C21)
+        radius = int(max(6, int(radius)))
+        ts = float(self.TILE_SIZE)
+        cx, cy = int(center_tile[0]), int(center_tile[1])
+
+        try:
+            car_pool = [mid for mid in self._CAR_MODELS.keys() if str(mid) not in ("rv",)]
+        except Exception:
+            car_pool = ["beetle"]
+        if not car_pool:
+            car_pool = ["beetle"]
+        bike_pool = ["bike", "bike_lady", "bike_mountain", "bike_auto"]
+        moto_pool = ["moto", "moto_lux", "moto_long"]
+
+        def road_axis_options(tx: int, ty: int) -> list[str]:
+            # "h" => along X (left/right) for road_y; "v" => along Y (up/down) for road_x.
+            ox = False
+            oy = False
+            try:
+                ox = bool(getattr(self.world, "_is_road_x")(int(tx)))
+            except Exception:
+                ox = False
+            try:
+                oy = bool(getattr(self.world, "_is_road_y")(int(ty)))
+            except Exception:
+                oy = False
+            axes: list[str] = []
+            if oy:
+                axes.append("h")
+            if ox:
+                axes.append("v")
+            if not axes and bool(getattr(self.world, "is_road")(int(tx), int(ty))):
+                axes = ["h", "v"]
+            return axes
+
+        traffic = getattr(self, "story_traffic", None)
+        if not isinstance(traffic, list):
+            traffic = []
+
+        for _ in range(110):
+            tx = int(cx + rng.randint(-radius, radius))
+            ty = int(cy + rng.randint(-radius, radius))
+            try:
+                if not bool(self.world.is_road(int(tx), int(ty))):
+                    continue
+            except Exception:
+                continue
+            try:
+                if self._peek_building_at_tile(int(tx), int(ty)) is not None:
+                    continue
+            except Exception:
+                pass
+            try:
+                tid = int(self.world.peek_tile(int(tx), int(ty)))
+                if bool(self._tile_solid(int(tid))):
+                    continue
+            except Exception:
+                pass
+
+            axes = road_axis_options(int(tx), int(ty))
+            if not axes:
+                continue
+            axis = str(rng.choice(axes))
+            if axis == "h":
+                d = str(rng.choice(["left", "right"]))
+                lane_axis = 0
+                lane_line = int(ty)
+            else:
+                d = str(rng.choice(["up", "down"]))
+                lane_axis = 1
+                lane_line = int(tx)
+
+            lane_offset = int(rng.choice([-2, -1, 1, 2]))
+            px = (float(tx) + 0.5) * ts
+            py = (float(ty) + 0.5) * ts
+            if lane_axis == 0:
+                py += float(lane_offset)
+            else:
+                px += float(lane_offset)
+            pos = pygame.Vector2(float(px), float(py))
+
+            too_close = False
+            for a in traffic:
+                if not isinstance(a, dict):
+                    continue
+                try:
+                    ap = pygame.Vector2(a.get("pos", pygame.Vector2(0, 0)))
+                    if float((ap - pos).length_squared()) < float((ts * 5.0) ** 2):
+                        too_close = True
+                        break
+                except Exception:
+                    continue
+            if too_close:
+                continue
+
+            roll = float(rng.random())
+            kind = "car"
+            model_id = str(rng.choice(car_pool))
+            if roll < 0.28:
+                kind = "bike"
+                model_id = str(rng.choice(bike_pool))
+            elif roll < 0.42:
+                kind = "moto"
+                model_id = str(rng.choice(moto_pool))
+
+            actor: dict[str, object] = {
+                "kind": str(kind),
+                "model_id": str(model_id),
+                "pos": pygame.Vector2(pos),
+                "dir": str(d),
+                "lane_axis": int(lane_axis),
+                "lane_line": int(lane_line),
+                "lane_offset": int(lane_offset),
+                "speed": float(rng.uniform(56.0, 86.0) if kind == "car" else rng.uniform(46.0, 70.0)),
+                "anim": float(rng.random() * 10.0),
+                "turn_cd": float(rng.uniform(0.0, 1.2)),
+                "rng": random.Random(int(rng.randrange(0, 2**31 - 1)) ^ 0x1A2B_3C4D),
+            }
+
+            if kind == "car":
+                # Heading in radians; 0 means "right". We rotate by -deg in draw.
+                heading = 0.0
+                if d == "left":
+                    heading = math.pi
+                elif d == "down":
+                    heading = math.pi / 2.0
+                elif d == "up":
+                    heading = -math.pi / 2.0
+                actor["heading"] = float(heading)
+                actor["steer_state"] = 0
+                actor["frame"] = int(rng.randrange(0, 2))
+                # One "convertible + 装逼男" in the flow.
+                if float(rng.random()) < 0.12:
+                    av = SurvivalAvatar(
+                        gender=0,
+                        height=1,
+                        face=int(rng.randrange(0, len(SURVIVAL_FACE_OPTIONS))),
+                        eyes=int(rng.randrange(0, len(SURVIVAL_EYE_OPTIONS))),
+                        hair=int(rng.randrange(0, len(SURVIVAL_HAIR_OPTIONS))),
+                        nose=int(rng.randrange(0, len(SURVIVAL_NOSE_OPTIONS))),
+                        skin=int(rng.randrange(0, len(SURVIVAL_SKIN_OPTIONS))),
+                        hair_color=int(rng.randrange(0, len(SURVIVAL_HAIR_COLOR_OPTIONS))),
+                        eye_color=int(rng.randrange(0, len(SURVIVAL_EYE_COLOR_OPTIONS))),
+                        mouth=int(rng.randrange(0, len(SURVIVAL_MOUTH_OPTIONS))),
+                        beard=int(rng.choice([0, 0, 1, 2])),
+                        makeup=0,
+                        accessory=1,  # glasses
+                        outfit=11,  # 黑西装
+                    )
+                    av.clamp_all()
+                    actor["driver_style"] = "brag"
+                    actor["driver_avatar"] = av
+
+            if kind in ("bike", "moto"):
+                try:
+                    g = int(rng.randrange(0, len(SURVIVAL_GENDER_OPTIONS)))
+                except Exception:
+                    g = 0
+                av = SurvivalAvatar(
+                    gender=int(g),
+                    height=int(rng.randrange(0, len(SURVIVAL_HEIGHT_OPTIONS))),
+                    face=int(rng.randrange(0, len(SURVIVAL_FACE_OPTIONS))),
+                    eyes=int(rng.randrange(0, len(SURVIVAL_EYE_OPTIONS))),
+                    hair=int(rng.randrange(0, len(SURVIVAL_HAIR_OPTIONS))),
+                    nose=int(rng.randrange(0, len(SURVIVAL_NOSE_OPTIONS))),
+                    skin=int(rng.randrange(0, len(SURVIVAL_SKIN_OPTIONS))),
+                    hair_color=int(rng.randrange(0, len(SURVIVAL_HAIR_COLOR_OPTIONS))),
+                    eye_color=int(rng.randrange(0, len(SURVIVAL_EYE_COLOR_OPTIONS))),
+                    mouth=int(rng.randrange(0, len(SURVIVAL_MOUTH_OPTIONS))),
+                    beard=(int(rng.choice([0, 0, 1, 1, 2, 3])) if int(g) == 0 else 0),
+                    makeup=(int(rng.choice([0, 1, 2])) if int(g) != 0 else 0),
+                    accessory=(int(rng.choice([0, 0, 1, 2, 3])) if int(g) != 0 else int(rng.choice([0, 0, 1]))),
+                    outfit=int(rng.randrange(0, len(SURVIVAL_OUTFIT_OPTIONS))),
+                )
+                av.clamp_all()
+                actor["rider_avatar"] = av
+                actor["rider_frames"] = HardcoreSurvivalState.build_avatar_cyclist_frames(av)
+                actor["frame"] = int(rng.randrange(0, 2))
+
+            return actor
+        return None
+
+    def _story_update_traffic(self, dt_time: float) -> None:
+        if not bool(getattr(self, "story_enabled", False)):
+            return
+        if not bool(self._story_is_pre_apocalypse()):
+            return
+        if not bool(getattr(self, "story_traffic_enabled", True)):
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return
+        traffic = getattr(self, "story_traffic", None)
+        if not isinstance(traffic, list):
+            self.story_traffic = []
+            traffic = self.story_traffic
+        if not traffic:
+            self._story_bootstrap_traffic()
+
+        rng = getattr(self, "story_traffic_rng", None)
+        if not isinstance(rng, random.Random):
+            rng = random.Random(int(getattr(self, "seed", 0)) ^ 0x54B3_9C21)
+            self.story_traffic_rng = rng
+
+        dt_time = float(max(0.0, dt_time))
+        if dt_time <= 1e-6:
+            return
+        if dt_time > 0.25:
+            dt_time = 0.25
+
+        tday = float(self._time_of_day())
+        max_n = int(max(0, int(getattr(self, "story_traffic_max", 10))))
+        target = 4 if tday >= 0.85 or tday <= 0.18 else max_n
+        target = int(clamp(int(target), 0, int(max_n)))
+
+        center = self._player_tile()
+        while len(traffic) < int(target) and len(traffic) < int(max_n):
+            actor = self._story_spawn_one_traffic(rng=rng, center_tile=(int(center[0]), int(center[1])), radius=55)
+            if actor is None:
+                break
+            traffic.append(actor)
+
+        # Cull extras gently (keep variety).
+        if len(traffic) > int(target):
+            drop = int(len(traffic) - int(target))
+            if drop > 0:
+                rng.shuffle(traffic)
+                del traffic[:drop]
+
+        ppos = pygame.Vector2(self.player.pos)
+        max_dist2 = float((float(self.TILE_SIZE) * 95.0) ** 2)
+
+        for a in traffic:
+            if not isinstance(a, dict):
+                continue
+            try:
+                pos = pygame.Vector2(a.get("pos", pygame.Vector2(0, 0)))
+            except Exception:
+                continue
+            prev_pos = pygame.Vector2(pos)
+            d = str(a.get("dir", "right") or "right")
+            prev_dir = str(d)
+            kind = str(a.get("kind", "car") or "car")
+            speed = float(a.get("speed", 60.0))
+            lane_axis = int(a.get("lane_axis", 0))
+            lane_line = int(a.get("lane_line", 0))
+            lane_offset = int(a.get("lane_offset", 0))
+            prev_lane_axis = int(lane_axis)
+            prev_lane_line = int(lane_line)
+            turn_cd = float(a.get("turn_cd", 0.0))
+            prng = a.get("rng", None)
+            if not isinstance(prng, random.Random):
+                prng = random.Random(int(rng.randrange(0, 2**31 - 1)) ^ 0x1A2B_3C4D)
+                a["rng"] = prng
+
+            # If the actor is too far away (or off-road), respawn it near the player.
+            try:
+                if float((pos - ppos).length_squared()) > float(max_dist2):
+                    raise RuntimeError("respawn_far")
+                tx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                ty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                if not bool(self.world.is_road(int(tx), int(ty))):
+                    raise RuntimeError("respawn_offroad")
+                if self._peek_building_at_tile(int(tx), int(ty)) is not None:
+                    raise RuntimeError("respawn_building")
+            except Exception:
+                new = self._story_spawn_one_traffic(rng=rng, center_tile=(int(center[0]), int(center[1])), radius=55)
+                if isinstance(new, dict):
+                    a.clear()
+                    a.update(new)
+                continue
+
+            prev_trect = None
+            try:
+                prev_actor = {
+                    "kind": str(kind),
+                    "model_id": str(a.get("model_id", "")),
+                    "pos": pygame.Vector2(prev_pos),
+                    "dir": str(prev_dir),
+                    "heading": float(a.get("heading", 0.0)),
+                }
+                prev_trect = self._story_traffic_rect_for_actor(prev_actor)
+            except Exception:
+                prev_trect = None
+
+            # Movement.
+            dv = pygame.Vector2(0, 0)
+            if d == "left":
+                dv.x = -1
+            elif d == "right":
+                dv.x = 1
+            elif d == "up":
+                dv.y = -1
+            else:
+                dv.y = 1
+            pos += dv * float(speed) * float(dt_time)
+
+            # Keep the actor on its lane center.
+            if lane_axis == 0:
+                pos.y = (float(lane_line) + 0.5) * float(self.TILE_SIZE) + float(lane_offset)
+            else:
+                pos.x = (float(lane_line) + 0.5) * float(self.TILE_SIZE) + float(lane_offset)
+
+            # Animate.
+            a["anim"] = float(a.get("anim", 0.0)) + float(dt_time) * (4.0 if kind == "car" else 6.0)
+            a["frame"] = int(a.get("frame", 0))
+            if kind in ("bike", "moto"):
+                a["frame"] = int(a.get("anim", 0.0)) % 2
+            else:
+                a["frame"] = int(a.get("frame", 0)) % 2
+
+            # Intersection turning (adds life; keeps it "orderly" by staying on roads).
+            turn_cd = float(max(0.0, float(turn_cd) - float(dt_time)))
+            if turn_cd <= 0.0:
+                try:
+                    tx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                    ty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                    on_x = bool(getattr(self.world, "_is_road_x")(int(tx)))
+                    on_y = bool(getattr(self.world, "_is_road_y")(int(ty)))
+                    at_junction = bool(on_x and on_y)
+                except Exception:
+                    at_junction = False
+                    tx, ty = 0, 0
+                if at_junction and float(prng.random()) < 0.16:
+                    if lane_axis == 0:
+                        # Turn into vertical.
+                        nd = "up" if float(prng.random()) < 0.5 else "down"
+                        a["dir"] = str(nd)
+                        a["lane_axis"] = 1
+                        a["lane_line"] = int(tx)
+                        lane_axis = 1
+                        lane_line = int(tx)
+                        d = str(nd)
+                        if kind == "car":
+                            a["heading"] = -math.pi / 2.0 if nd == "up" else math.pi / 2.0
+                    else:
+                        # Turn into horizontal.
+                        nd = "left" if float(prng.random()) < 0.5 else "right"
+                        a["dir"] = str(nd)
+                        a["lane_axis"] = 0
+                        a["lane_line"] = int(ty)
+                        lane_axis = 0
+                        lane_line = int(ty)
+                        d = str(nd)
+                        if kind == "car":
+                            a["heading"] = math.pi if nd == "left" else 0.0
+                    # Snap to junction center so rotation doesn't "swim".
+                    pos.update((float(tx) + 0.5) * float(self.TILE_SIZE), (float(ty) + 0.5) * float(self.TILE_SIZE))
+                    if lane_axis == 0:
+                        pos.y += float(lane_offset)
+                    else:
+                        pos.x += float(lane_offset)
+                    turn_cd = float(prng.uniform(0.9, 1.6))
+
+            # Collision with humans: traffic should not clip through the player/NPCs.
+            try:
+                test_actor = {
+                    "kind": str(kind),
+                    "model_id": str(a.get("model_id", "")),
+                    "pos": pygame.Vector2(pos),
+                    "dir": str(d),
+                    "heading": float(a.get("heading", 0.0)),
+                }
+                trect = self._story_traffic_rect_for_actor(test_actor)
+            except Exception:
+                trect = None
+
+            blocked = False
+            if isinstance(trect, pygame.Rect):
+                try:
+                    move_step = float((pygame.Vector2(pos) - pygame.Vector2(prev_pos)).length())
+                except Exception:
+                    move_step = 0.0
+                use_sweep = bool(move_step > 6.0 and isinstance(prev_trect, pygame.Rect))
+
+                def hits(target: pygame.Rect) -> bool:
+                    if not isinstance(trect, pygame.Rect):
+                        return False
+                    try:
+                        if trect.colliderect(target):
+                            return True
+                    except Exception:
+                        return True
+                    if bool(use_sweep) and isinstance(prev_trect, pygame.Rect):
+                        try:
+                            if not prev_trect.colliderect(target) and prev_trect.union(trect).colliderect(target):
+                                return True
+                        except Exception:
+                            return True
+                    return False
+
+                # Active player (on foot or mounted).
+                try:
+                    m = getattr(self, "mount", None)
+                except Exception:
+                    m = None
+
+                prect = None
+                if m == "bike":
+                    try:
+                        mid_b = str(getattr(self.bike, "model_id", "bike"))
+                        bw, bh = self._two_wheel_collider_px(mid_b)
+                    except Exception:
+                        bw, bh = (14, 10)
+                    bd = str(getattr(self, "bike_dir", "right") or "right")
+                    if bd in ("up", "down"):
+                        bw, bh = int(bh), int(bw)
+                    try:
+                        bpos = pygame.Vector2(getattr(self.bike, "pos", pygame.Vector2(self.player.pos)))
+                    except Exception:
+                        bpos = pygame.Vector2(self.player.pos)
+                    prect = pygame.Rect(
+                        iround(float(bpos.x) - float(bw) / 2.0),
+                        iround(float(bpos.y) - float(bh) / 2.0),
+                        int(max(2, int(bw))),
+                        int(max(2, int(bh))),
+                    )
+                elif m == "rv":
+                    try:
+                        rpos = pygame.Vector2(getattr(self.rv, "pos", pygame.Vector2(self.player.pos)))
+                    except Exception:
+                        rpos = pygame.Vector2(self.player.pos)
+                    try:
+                        mid_rv = str(getattr(self.rv, "model_id", "rv"))
+                        model = self._CAR_MODELS.get(mid_rv) or self._CAR_MODELS.get("rv")
+                    except Exception:
+                        model = None
+                    try:
+                        cw = int(max(2, int(getattr(self.rv, "w", 0))))
+                        ch = int(max(2, int(getattr(self.rv, "h", 0))))
+                        dc = getattr(model, "drive_collider", None) if model is not None else None
+                        if isinstance(dc, tuple) and len(dc) == 2:
+                            dcw, dch = int(dc[0]), int(dc[1])
+                            if dcw > 0 and dch > 0:
+                                cw = int(max(2, min(int(cw), int(dcw))))
+                                ch = int(max(2, min(int(ch), int(dch))))
+                        heading = float(getattr(self.rv, "heading", 0.0))
+                        c = abs(float(math.cos(float(heading))))
+                        s = abs(float(math.sin(float(heading))))
+                        ratio = float(s / max(1e-6, c))
+                        axis = int(getattr(self, "_rv_drive_axis", 0))
+                        if axis == 0:
+                            if ratio > 1.18:
+                                axis = 1
+                        else:
+                            if ratio < 0.85:
+                                axis = 0
+                        vw, vh = (int(ch), int(cw)) if axis == 1 else (int(cw), int(ch))
+                        prect = pygame.Rect(
+                            iround(float(rpos.x) - float(vw) / 2.0),
+                            iround(float(rpos.y) - float(vh) / 2.0),
+                            int(vw),
+                            int(vh),
+                        )
+                    except Exception:
+                        try:
+                            prect = self._rv_collider_rect_at(rpos)
+                        except Exception:
+                            prect = None
+                else:
+                    try:
+                        prect = self.player.rect_at()
+                    except Exception:
+                        prect = None
+
+                if isinstance(prect, pygame.Rect) and hits(prect):
+                    blocked = True
+
+                # Player-owned parked vehicles also block traffic.
+                if not blocked and m != "rv":
+                    try:
+                        if hits(self._rv_collider_rect_at()):
+                            blocked = True
+                    except Exception:
+                        pass
+                if not blocked and m != "bike":
+                    try:
+                        mid_b = str(getattr(self.bike, "model_id", "bike"))
+                        bw, bh = self._two_wheel_collider_px(mid_b)
+                    except Exception:
+                        bw, bh = (14, 10)
+                    bd = str(getattr(self, "bike_dir", "right") or "right")
+                    if bd in ("up", "down"):
+                        bw, bh = int(bh), int(bw)
+                    try:
+                        bpos = pygame.Vector2(getattr(self.bike, "pos", pygame.Vector2(0, 0)))
+                    except Exception:
+                        bpos = pygame.Vector2(0, 0)
+                    brect = pygame.Rect(
+                        iround(float(bpos.x) - float(bw) / 2.0),
+                        iround(float(bpos.y) - float(bh) / 2.0),
+                        int(max(2, int(bw))),
+                        int(max(2, int(bh))),
+                    )
+                    if hits(brect):
+                        blocked = True
+
+                # Story NPCs.
+                if not blocked:
+                    npcs = getattr(self, "npcs", None)
+                    if isinstance(npcs, list) and npcs:
+                        npc_w, npc_h = self._story_npc_collider_wh()
+                        for npc in npcs:
+                            if not isinstance(npc, dict):
+                                continue
+                            try:
+                                npos = pygame.Vector2(npc.get("pos", pygame.Vector2(0, 0)))
+                            except Exception:
+                                continue
+                            nrect = pygame.Rect(
+                                iround(float(npos.x) - float(npc_w) / 2.0),
+                                iround(float(npos.y) - float(npc_h) / 2.0),
+                                int(npc_w),
+                                int(npc_h),
+                            )
+                            if hits(nrect):
+                                blocked = True
+                                break
+
+            if blocked:
+                # Bounce back along the previous lane direction to keep motion stable.
+                pos = pygame.Vector2(prev_pos)
+                lane_axis = int(prev_lane_axis)
+                lane_line = int(prev_lane_line)
+                d = str(prev_dir)
+                if lane_axis == 0:
+                    d = "left" if d == "right" else "right"
+                else:
+                    d = "up" if d == "down" else "down"
+                a["dir"] = str(d)
+                a["lane_axis"] = int(lane_axis)
+                a["lane_line"] = int(lane_line)
+                if kind == "car":
+                    if d == "left":
+                        a["heading"] = math.pi
+                    elif d == "right":
+                        a["heading"] = 0.0
+                    elif d == "up":
+                        a["heading"] = -math.pi / 2.0
+                    else:
+                        a["heading"] = math.pi / 2.0
+                turn_cd = float(max(float(turn_cd), float(prng.uniform(0.7, 1.4))))
+                # Re-snap to lane after restoration.
+                if lane_axis == 0:
+                    pos.y = (float(lane_line) + 0.5) * float(self.TILE_SIZE) + float(lane_offset)
+                else:
+                    pos.x = (float(lane_line) + 0.5) * float(self.TILE_SIZE) + float(lane_offset)
+
+            a["turn_cd"] = float(turn_cd)
+            a["pos"] = pygame.Vector2(pos)
+
+    def _draw_story_traffic(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        if not bool(getattr(self, "story_enabled", False)):
+            return
+        if not bool(self._story_is_pre_apocalypse()):
+            return
+        if not bool(getattr(self, "story_traffic_enabled", True)):
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return
+        traffic = getattr(self, "story_traffic", None)
+        if not isinstance(traffic, list) or not traffic:
+            return
+
+        ts = int(self.TILE_SIZE)
+        draw_list: list[dict[str, object]] = [a for a in traffic if isinstance(a, dict)]
+        draw_list.sort(key=lambda a: float(getattr(a.get("pos", pygame.Vector2(0, 0)), "y", 0.0)))
+
+        # Cache for "convertible + head" bases (before rotation).
+        cache = getattr(self, "_TRAFFIC_CAR_BASE", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._TRAFFIC_CAR_BASE = cache
+
+        for a in draw_list:
+            try:
+                pos = pygame.Vector2(a.get("pos", pygame.Vector2(0, 0)))
+            except Exception:
+                continue
+            sx = iround(float(pos.x) - float(cam_x))
+            sy = iround(float(pos.y) - float(cam_y))
+            if sx < -120 or sx > INTERNAL_W + 120 or sy < -120 or sy > INTERNAL_H + 120:
+                continue
+            kind = str(a.get("kind", "car") or "car")
+            mid = str(a.get("model_id", "beetle") or "beetle")
+            frame = int(a.get("frame", 0)) % 2
+
+            if kind == "car":
+                steer_state = int(a.get("steer_state", 0))
+                base = self._CAR_BASE.get((mid, int(steer_state), int(frame)))
+                shadow_base = self._CAR_SHADOW.get((mid, int(steer_state), int(frame)))
+                if base is None:
+                    base = self._CAR_BASE.get(("schoolbus", 0, 0))
+                    shadow_base = self._CAR_SHADOW.get(("schoolbus", 0, 0))
+                if base is None:
+                    continue
+
+                driver_style = str(a.get("driver_style", "") or "")
+                if driver_style == "brag":
+                    key = (mid, int(steer_state), int(frame), "brag")
+                    cached = cache.get(key)
+                    if isinstance(cached, pygame.Surface):
+                        base2 = cached
+                    else:
+                        base2 = base.copy()
+                        try:
+                            av = a.get("driver_avatar", None)
+                            if not isinstance(av, SurvivalAvatar):
+                                av = SurvivalAvatar(gender=0, accessory=1, outfit=11)
+                            cols = HardcoreSurvivalState._avatar_colors(av)
+                            hair = tuple(cols.get("hair", (30, 30, 34)))
+                            skin = tuple(cols.get("skin", (220, 190, 160)))
+                        except Exception:
+                            hair = (30, 30, 34)
+                            skin = (220, 190, 160)
+                        outline = (10, 10, 12)
+                        glass = (40, 40, 50)
+                        w = int(base2.get_width())
+                        h = int(base2.get_height())
+                        cx = int(w // 2)
+                        cy = int(h // 2) - 2
+                        # Head + sunglasses.
+                        pygame.draw.rect(base2, hair, pygame.Rect(cx - 2, cy - 3, 4, 2))
+                        pygame.draw.rect(base2, skin, pygame.Rect(cx - 2, cy - 1, 4, 3))
+                        pygame.draw.rect(base2, glass, pygame.Rect(cx - 2, cy, 4, 1))
+                        pygame.draw.rect(base2, outline, pygame.Rect(cx - 3, cy - 3, 6, 5), 1)
+                        cache[key] = base2
+                    base = base2
+
+                deg = -math.degrees(float(a.get("heading", 0.0)))
+                spr = rotate_pixel_sprite(base, deg, step_deg=5.0)
+                rect = spr.get_rect(center=(int(sx), int(sy)))
+                if shadow_base is not None:
+                    sh = rotate_pixel_sprite(shadow_base, deg, step_deg=5.0)
+                    srect = sh.get_rect(center=(rect.centerx + 2, rect.centery + 6))
+                    surface.blit(sh, srect)
+                surface.blit(spr, rect)
+                continue
+
+            # Two-wheel traffic (bike/moto) with rider.
+            d = str(a.get("dir", "right") or "right")
+            model = self._TWO_WHEEL_FRAMES.get(mid) or self._TWO_WHEEL_FRAMES.get("bike") or {}
+            frames = model.get(d) or model.get("right") or self._BIKE_FRAMES.get("right", [])
+            if not frames:
+                continue
+            spr = frames[min(int(frame), len(frames) - 1)]
+            _cw, ch = self._two_wheel_collider_px(mid)
+            ground_y = int(sy + int(ch) // 2)
+            rect = spr.get_rect()
+            baseline_y = int(self._sprite_baseline_y(spr))
+            rect.centerx = int(sx)
+            rect.bottom = int(int(ground_y) + int(rect.h - baseline_y))
+            shadow = self._two_wheel_shadow_rect(rect, d, ground_y=int(ground_y))
+            sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
+            pygame.draw.ellipse(sh, (0, 0, 0, 120), sh.get_rect())
+            surface.blit(sh, shadow.topleft)
+            surface.blit(spr, rect)
+
+            rider = None
+            rf = a.get("rider_frames", None)
+            if isinstance(rf, dict):
+                try:
+                    rlist = rf.get(d) or rf.get("right")
+                    if isinstance(rlist, list) and rlist:
+                        rider = rlist[int(frame) % len(rlist)]
+                except Exception:
+                    rider = None
+            if rider is not None:
+                rrect = rider.get_rect()
+                seat_from_ground = 4 if d in ("up", "down") else 3
+                if str(mid).startswith("moto"):
+                    seat_from_ground = max(2, int(seat_from_ground) - 1)
+                rrect.midbottom = (rect.centerx, int(int(ground_y) - int(seat_from_ground)))
+                surface.blit(rider, rrect)
+
+    def _story_set_npc_hostile(self, npc_id: str, *, seconds: float = 10.0) -> None:
+        npc_id = str(npc_id or "").strip()
+        if not npc_id:
+            return
+        seconds = float(max(0.0, float(seconds)))
+        npcs = getattr(self, "npcs", None)
+        if not isinstance(npcs, list):
+            return
+        for npc in npcs:
+            if not isinstance(npc, dict):
+                continue
+            if str(npc.get("id", "")) != npc_id:
+                continue
+            npc["hostile_left"] = float(max(float(npc.get("hostile_left", 0.0) or 0.0), float(seconds)))
+            npc["attack_left"] = 0.0
+            npc["stay_left"] = 0.0
+            npc["goal_left"] = 0.0
+            npc["stuck"] = 0.0
+            npc["action"] = ""
+            npc["path_pts"] = []
+            npc["path_i"] = 0
+            break
 
     def _story_nearest_npc(self, *, radius_px: float = 18.0) -> dict[str, object] | None:
         if not bool(getattr(self, "story_enabled", False)):
@@ -24113,6 +25445,9 @@ class HardcoreSurvivalState(State):
         npc = self._story_nearest_npc(radius_px=20.0)
         if npc is None:
             return False
+        if float(npc.get("hostile_left", 0.0) or 0.0) > 0.0:
+            self._set_hint("他现在不想聊天，只想动手。", seconds=1.0)
+            return True
         script = str(npc.get("script", "") or "")
         if not script:
             self._set_hint("这个人现在不想说话", seconds=1.0)
@@ -24167,6 +25502,10 @@ class HardcoreSurvivalState(State):
                 rate = 1.6
             elif action in ("guard_scan", "flex"):
                 rate = 2.2
+            elif action in ("bruce_guard",):
+                rate = 3.0
+            elif action in ("bruce_punch",):
+                rate = 7.0
             frame = int(phase * float(rate)) % 2
             key = (str(action), str(direction), int(frame))
             spr = cache.get(key)
@@ -24260,6 +25599,65 @@ class HardcoreSurvivalState(State):
                 px(int(x), int(y), skin)
                 px(int(x), int(y + 1), skin)
                 px(int(x - 1 if str(direction) != "left" else x + 1), int(y), outline)
+            elif action in ("bruce_guard", "bruce_punch"):
+                # 李小龙式：侧身架势 + 快拳（用像素叠加表现）。
+                is_punch = bool(str(action) == "bruce_punch")
+                wind = bool(is_punch and int(frame) == 0)
+                jab = bool(is_punch and int(frame) == 1)
+                hi = phone_hi
+
+                def sx(x: int) -> int:
+                    x = int(x)
+                    return mirror_x(x) if str(direction) == "left" else x
+
+                if str(direction) in ("left", "right"):
+                    # Guard hand near face.
+                    px(sx(8), 4, skin)
+                    px(sx(9), 4, skin)
+                    px(sx(8), 5, outline)
+                    # Rear hand near chest.
+                    px(sx(7), 7, skin)
+                    px(sx(7), 8, skin)
+                    px(sx(6), 7, outline)
+                    if wind:
+                        # Wind-up: pull the lead fist back slightly.
+                        px(sx(9), 6, skin)
+                        px(sx(9), 5, outline)
+                        px(sx(10), 6, outline)
+                    if jab:
+                        y = 7
+                        # Thicker arm extension (2px high).
+                        for xx in range(8, 11):
+                            px(sx(xx), int(y), skin)
+                            px(sx(xx), int(y - 1), skin)
+                        # Fist (2x2).
+                        px(sx(11), int(y), skin)
+                        px(sx(11), int(y - 1), skin)
+                        # Outline to separate from the body.
+                        px(sx(11), int(y - 2), outline)
+                        px(sx(11), int(y + 1), outline)
+                        px(sx(10), int(y - 2), outline)
+                        px(sx(10), int(y + 1), outline)
+                        # Motion lines.
+                        px(sx(9), int(y - 3), hi)
+                        px(sx(10), int(y - 3), hi)
+                        px(sx(10), int(y - 2), hi)
+                else:
+                    # Up/Down: punch to the side so it's visible.
+                    y = 6 if str(direction) == "up" else 9
+                    px(6, int(y), skin)
+                    px(6, int(y - 1), outline)
+                    px(5, int(y), outline)
+                    if wind:
+                        px(7, int(y), skin)
+                        px(7, int(y - 1), outline)
+                    if jab:
+                        for xx in range(7, 11):
+                            px(int(xx), int(y), skin)
+                        px(10, int(y - 1), outline)
+                        px(10, int(y + 1), outline)
+                        px(9, int(y - 1), hi)
+                        px(8, int(y - 1), hi)
 
             cache[key] = out
             return out
@@ -24320,6 +25718,14 @@ class HardcoreSurvivalState(State):
             else:
                 base = fr[0]
                 spr = pose_sprite_for_npc(npc, base, direction=str(d)) if not bool(moving) else base
+
+            # Some actions (e.g. combat stance) must be visible even while moving.
+            try:
+                act = str(npc.get("action", "") or "")
+                if act in ("bruce_guard", "bruce_punch"):
+                    spr = pose_sprite_for_npc(npc, spr, direction=str(d))
+            except Exception:
+                pass
 
             rect = spr.get_rect()
             rect.midbottom = (int(sx), iround(float(sy) + float(getattr(self.player, "h", 12)) / 2.0))
@@ -36367,6 +37773,7 @@ class HardcoreSurvivalState(State):
         # Include a small off-screen margin so facade extrusions (face_h) don't pop at screen edges.
         self._draw_building_facades(surface, cam_x, cam_y_draw, start_tx - 3, end_tx + 3, start_ty - 3, end_ty + 3)
         self._draw_vehicle_props(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
+        self._draw_story_traffic(surface, cam_x, cam_y_draw)
         self._draw_world_props(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         self._draw_world_items(surface, cam_x, cam_y_draw, start_tx, end_tx, start_ty, end_ty)
         # Corpses are "on the ground": draw them under vehicles so they don't appear on top of the RV.

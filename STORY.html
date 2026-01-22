@@ -202,6 +202,21 @@
         <p class="muted">地图要点：前 3 天 NPC 有完整“上下班/吃饭/回家”日程，灾难爆发后日程崩塌，改为“避难/逃亡/求生”。</p>
       </div>
 
+      <div class="panel">
+        <h3>末日前“秩序井然”的街道感（已落地到游戏）</h3>
+        <ul>
+          <li>道路会有<b>汽车 / 自行车 / 摩托</b>来来回回跑，夜间自动减少车流。</li>
+          <li>路口会小概率<b>转弯</b>，整体保持在道路上运动，不乱钻建筑。</li>
+          <li>随机出现一辆<b>敞篷小车“装逼男”</b>：头会漏出来（带墨镜），一眼就能看到在路上装。</li>
+        </ul>
+        <h3>NPC 通勤与碰撞（已落地到游戏）</h3>
+        <ul>
+          <li>NPC 在“上班时间/下班时间”会从<b>家 ↔ 工作地点</b>走一条“走到路上 → 沿路走 → 下路进店”的通勤路线。</li>
+          <li>NPC 之间有<b>碰撞体积</b>（软分离），不会再一坨重叠站在一起。</li>
+          <li>部分 NPC 对话可触发<b>打架</b>（目前：肌肉男/小混混），会扣血并影响士气。</li>
+        </ul>
+      </div>
+
       <h2>3) 时间线总览（灾难前 3 天）</h2>
       <div class="panel">
         <table>
@@ -271,7 +286,9 @@
 
       <h2>5) NPC 名单（第一批：灾难前三天可遇到）</h2>
       <div class="panel">
-        <p class="muted">说明：名字可后续替换为随机库；此处用“好记的外号”方便你快速对齐角色定位。</p>
+        <p class="muted">
+          说明：名字可后续替换为随机库；此处用“好记的外号”方便你快速对齐角色定位。当前版本已落地：老周/小林/阿乔/娜娜/绿茶姐/肌肉男/小混混 + 健身房 POI + 道路交通。
+        </p>
         <table>
           <thead>
             <tr>
@@ -284,28 +301,28 @@
           </thead>
           <tbody>
             <tr>
-              <td><b>老周</b><span class="tag">保安</span></td>
+              <td><b>老周</b><span class="tag">保安</span><span class="tag good">已实现</span></td>
               <td>湖景小区门岗</td>
               <td>嘴碎但可靠、爱面子、讲规矩</td>
               <td>D-3 到 D-1 正常值班；D0 起可能拉人封楼</td>
               <td>给你“门闩/门链”折扣；灾后会来敲门求水（看你前期关系）</td>
             </tr>
             <tr>
-              <td><b>小林</b><span class="tag">同事</span></td>
+              <td><b>小林</b><span class="tag">同事</span><span class="tag good">已实现</span></td>
               <td>物流园</td>
               <td>实干派、信息灵通、胆子小</td>
               <td>D-3 提醒你“别去医院”；D-2 受伤请假</td>
               <td>给你仓库钥匙线索；灾后可能变成求助者或被感染</td>
             </tr>
             <tr>
-              <td><b>阿乔</b><span class="tag">白月光</span></td>
+              <td><b>阿乔</b><span class="tag">白月光</span><span class="tag good">已实现</span></td>
               <td>商业街咖啡店</td>
               <td>温柔克制、聪明、对你有旧好感</td>
               <td>D-3 你可偶遇；D-2 她开始囤货；D-1 她要你帮忙送药</td>
               <td>“送药任务”决定她后续命运；也决定你灾后是否有可靠同盟</td>
             </tr>
             <tr>
-              <td><b>娜娜</b><span class="tag">网红</span></td>
+              <td><b>娜娜</b><span class="tag">网红</span><span class="tag good">已实现</span></td>
               <td>商业街/广场</td>
               <td>外向、爱拍视频、胆大但缺常识</td>
               <td>D-2 开直播“抢购潮”；D-1 因直播被人围堵</td>
@@ -326,18 +343,25 @@
               <td>灾后若你帮助她，她会教你“简易夹板/换药流程”</td>
             </tr>
             <tr>
-              <td><b>“绿茶姐”</b><span class="tag">邻居</span></td>
+              <td><b>“绿茶姐”</b><span class="tag">邻居</span><span class="tag good">已实现</span></td>
               <td>同楼层/小区</td>
               <td>表面热情、目的性强、擅长拿捏</td>
               <td>D-3 借充电宝；D-2 旁敲侧击你囤了啥；D-1 说要去外地</td>
               <td class="bad">灾后敲门“喊你名字诱你开门”（需要你已输入姓名 + 她知道你名字）</td>
             </tr>
             <tr>
-              <td><b>肌肉男</b><span class="tag">“男朋友”</span></td>
-              <td>绿茶姐同行</td>
+              <td><b>肌肉男</b><span class="tag">“男朋友”</span><span class="tag good">已实现</span></td>
+              <td>健身房/小区附近</td>
               <td>强势、冲动、武力威胁</td>
-              <td>D-2 在小区出现；D-1 半夜吵架</td>
-              <td class="bad">灾后作为“冲门”执行者；门链/顶门可大幅降低风险</td>
+              <td>白天健身房出没，晚上回小区；对话可触发打架</td>
+              <td class="bad">灾后作为“冲门”执行者；门链/顶门可大幅降低风险；末日前也可能动手</td>
+            </tr>
+            <tr>
+              <td><b>小混混</b><span class="tag">街头</span><span class="tag good">已实现</span></td>
+              <td>小区门口/路口</td>
+              <td>嘴贱、爱找事、欺软怕硬</td>
+              <td>白天游荡，见人就“借路费”；对话可触发打架</td>
+              <td class="bad">前期就能体验“人心险恶”：你不一定死于尸变，也可能死于嘴硬</td>
             </tr>
             <tr>
               <td><b>小栀</b><span class="tag">善良妹子</span></td>
@@ -521,4 +545,3 @@
     </div>
   </body>
 </html>
-
