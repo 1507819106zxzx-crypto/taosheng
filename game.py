@@ -2622,6 +2622,13 @@ class SurvivalCreateState(State):
                         self.avatar.beard = 1  # 胡茬
                     if int(getattr(self.avatar, "accessory", 0)) == 3:
                         self.avatar.accessory = 0
+                    # Make "男" read clearly (avoid keeping very feminine defaults).
+                    if int(getattr(self.avatar, "hair", 0)) in (4, 5, 6, 7):
+                        self.avatar.hair = 0  # 短发
+                    if int(getattr(self.avatar, "mouth", 0)) == 1:
+                        self.avatar.mouth = 0  # 自然
+                    if int(getattr(self.avatar, "outfit", 0)) in (6, 15):
+                        self.avatar.outfit = 0  # 夹克蓝
             except Exception:
                 pass
         self._dirty = True
@@ -5715,7 +5722,7 @@ class HardcoreSurvivalState(State):
         "W..BBBBB..SSSSW,,,O,,,W",
         "W..BBBBB..SSSSd,,,,,,,W",
         "W..............,,,R,,,W",
-        "W....^^........vvWWWWWD",
+        "W....^^........vv.....D",
         "W....^^........vv.....W",
         "W.....................W",
         "W..KKKKK..TTTT..FFFF..W",
@@ -23192,58 +23199,67 @@ class HardcoreSurvivalState(State):
         pygame.draw.rect(ui, (220, 220, 235, 160), ui.get_rect(), 2, border_radius=10)
         surface.blit(ui, panel.topleft)
 
-        surface.blit(
-            font_t.render(ellipsize(speaker, font_t, int(panel.w - 20)), False, pygame.Color(240, 240, 240)),
-            (panel.x + 10, panel.y + 8),
-        )
         tx = panel.x + 10
         ty = panel.y + 30
         text_bottom = int(ty + len(lines) * (int(font.get_height()) + 2))
-        for ln in lines:
-            surface.blit(font.render(str(ln), False, pygame.Color(230, 230, 240)), (tx, ty))
-            ty += int(font.get_height() + 2)
 
-        # Cursor while typing.
-        if not self._conv_finished() and (int(float(getattr(self, "conv_blink", 0.0)) * 3.0) % 2 == 0):
-            last_ln = str(lines[-1]) if lines else ""
-            cx = tx + max(0, int(font.size(last_ln)[0]))
-            cy = ty - int(font.get_height() + 2)
-            surface.blit(font.render("|", False, pygame.Color(240, 220, 140)), (cx, cy))
+        # Always clip to the panel so long glyphs/options never bleed outside.
+        prev_clip0 = surface.get_clip()
+        surface.set_clip(panel)
+        try:
+            surface.blit(
+                font_t.render(ellipsize(speaker, font_t, int(panel.w - 20)), False, pygame.Color(240, 240, 240)),
+                (panel.x + 10, panel.y + 8),
+            )
+            ty_draw = int(ty)
+            for ln in lines:
+                surface.blit(font.render(str(ln), False, pygame.Color(230, 230, 240)), (tx, ty_draw))
+                ty_draw += int(font.get_height() + 2)
+
+            # Cursor while typing.
+            if not self._conv_finished() and (int(float(getattr(self, "conv_blink", 0.0)) * 3.0) % 2 == 0):
+                last_ln = str(lines[-1]) if lines else ""
+                cx = tx + max(0, int(font.size(last_ln)[0]))
+                cy = int(ty_draw) - int(font.get_height() + 2)
+                surface.blit(font.render("|", False, pygame.Color(240, 220, 140)), (cx, cy))
+        finally:
+            surface.set_clip(prev_clip0)
 
         # Options (buttons).
         self.conv_option_rects = []
         if options:
             avail_h = int(panel.bottom - 8 - (text_bottom + 6))
             max_fit = int((int(avail_h) + int(gap)) // int(btn_h + gap)) if int(btn_h + gap) > 0 else 0
-            show_n = int(min(6, len(options), max(1, max_fit)))
+            show_n = int(min(6, len(options), max_fit)) if int(max_fit) > 0 else 0
 
-            total_h = int(show_n * btn_h + max(0, show_n - 1) * gap)
-            by = int(panel.bottom - 8 - total_h)
-            by = int(max(by, int(text_bottom + 6)))
-            bx = int(panel.x + 10)
-            bw = int(panel.w - 20)
+            if show_n > 0:
+                total_h = int(show_n * btn_h + max(0, show_n - 1) * gap)
+                by = int(panel.bottom - 8 - total_h)
+                by = int(max(by, int(text_bottom + 6)))
+                bx = int(panel.x + 10)
+                bw = int(panel.w - 20)
 
-            mouse = self.app.screen_to_internal(pygame.mouse.get_pos())
-            mx, my = (int(mouse[0]), int(mouse[1])) if mouse is not None else (-999, -999)
+                mouse = self.app.screen_to_internal(pygame.mouse.get_pos())
+                mx, my = (int(mouse[0]), int(mouse[1])) if mouse is not None else (-999, -999)
 
-            for i, opt in enumerate(options[: int(show_n)]):
-                label = str(opt.get("label", f"选项{i+1}")) if isinstance(opt, dict) else f"选项{i+1}"
-                r = pygame.Rect(int(bx), int(by + i * (btn_h + gap)), int(bw), int(btn_h))
-                hot = r.collidepoint(mx, my)
-                selected = int(getattr(self, "conv_choice", 0)) == int(i)
-                bg = (55, 55, 70) if hot or selected else (30, 30, 38)
-                border = (235, 210, 90) if selected else (140, 140, 160)
-                pygame.draw.rect(surface, bg, r, border_radius=6)
-                pygame.draw.rect(surface, border, r, 2 if selected else 1, border_radius=6)
-                tip = f"{i+1}. {label}" if len(options) <= 9 else str(label)
-                tip = ellipsize(tip, font, int(r.w - 16))
-                prev_clip = surface.get_clip()
-                surface.set_clip(r.inflate(-6, 0))
-                try:
-                    draw_text(surface, font, tip, (r.left + 8, r.centery - 1), pygame.Color(240, 240, 240), anchor="topleft")
-                finally:
-                    surface.set_clip(prev_clip)
-                self.conv_option_rects.append((r, int(i)))
+                for i, opt in enumerate(options[: int(show_n)]):
+                    label = str(opt.get("label", f"选项{i+1}")) if isinstance(opt, dict) else f"选项{i+1}"
+                    r = pygame.Rect(int(bx), int(by + i * (btn_h + gap)), int(bw), int(btn_h))
+                    hot = r.collidepoint(mx, my)
+                    selected = int(getattr(self, "conv_choice", 0)) == int(i)
+                    bg = (55, 55, 70) if hot or selected else (30, 30, 38)
+                    border = (235, 210, 90) if selected else (140, 140, 160)
+                    pygame.draw.rect(surface, bg, r, border_radius=6)
+                    pygame.draw.rect(surface, border, r, 2 if selected else 1, border_radius=6)
+                    tip = f"{i+1}. {label}" if len(options) <= 9 else str(label)
+                    tip = ellipsize(tip, font, int(r.w - 16))
+                    prev_clip = surface.get_clip()
+                    surface.set_clip(r.inflate(-6, 0))
+                    try:
+                        draw_text(surface, font, tip, (r.left + 8, r.centery - 1), pygame.Color(240, 240, 240), anchor="topleft")
+                    finally:
+                        surface.set_clip(prev_clip)
+                    self.conv_option_rects.append((r, int(i)))
 
     def _story_world_day(self) -> int:
         return int(self.world_time_s / max(1e-6, float(self.DAY_LENGTH_S))) + 1
