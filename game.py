@@ -2369,6 +2369,7 @@ SURVIVAL_SKIN_OPTIONS = ("白皙", "小麦", "健康", "黝黑")
 SURVIVAL_HAIR_COLOR_OPTIONS = ("黑", "棕", "金", "银", "红", "蓝")
 SURVIVAL_EYE_COLOR_OPTIONS = ("黑", "棕", "蓝", "绿", "红")
 SURVIVAL_MOUTH_OPTIONS = ("自然", "微笑", "撇嘴", "冷酷")
+SURVIVAL_BEARD_OPTIONS = ("无", "胡茬", "小胡子", "络腮胡")
 SURVIVAL_MAKEUP_OPTIONS = ("无", "淡妆", "口红", "浓妆")
 SURVIVAL_ACCESSORY_OPTIONS = ("无", "眼镜", "口罩", "耳饰")
 SURVIVAL_OUTFIT_OPTIONS = (
@@ -2403,6 +2404,7 @@ class SurvivalAvatar:
     hair_color: int = 0
     eye_color: int = 0
     mouth: int = 0
+    beard: int = 0
     makeup: int = 0
     accessory: int = 0
     outfit: int = 0
@@ -2418,6 +2420,7 @@ class SurvivalAvatar:
         self.hair_color = int(self.hair_color) % len(SURVIVAL_HAIR_COLOR_OPTIONS)
         self.eye_color = int(self.eye_color) % len(SURVIVAL_EYE_COLOR_OPTIONS)
         self.mouth = int(self.mouth) % len(SURVIVAL_MOUTH_OPTIONS)
+        self.beard = int(self.beard) % len(SURVIVAL_BEARD_OPTIONS)
         self.makeup = int(self.makeup) % len(SURVIVAL_MAKEUP_OPTIONS)
         self.accessory = int(self.accessory) % len(SURVIVAL_ACCESSORY_OPTIONS)
         self.outfit = int(self.outfit) % len(SURVIVAL_OUTFIT_OPTIONS)
@@ -2573,6 +2576,7 @@ class SurvivalCreateState(State):
             ("发色", "hair_color", SURVIVAL_HAIR_COLOR_OPTIONS),
             ("鼻子", "nose", SURVIVAL_NOSE_OPTIONS),
             ("嘴型", "mouth", SURVIVAL_MOUTH_OPTIONS),
+            ("胡子", "beard", SURVIVAL_BEARD_OPTIONS),
             ("妆容", "makeup", SURVIVAL_MAKEUP_OPTIONS),
             ("饰品", "accessory", SURVIVAL_ACCESSORY_OPTIONS),
             ("衣服", "outfit", SURVIVAL_OUTFIT_OPTIONS),
@@ -2600,6 +2604,7 @@ class SurvivalCreateState(State):
                 g = int(getattr(self.avatar, "gender", 0)) % len(SURVIVAL_GENDER_OPTIONS)
                 # Make "女" immediately read differently by nudging a few defaults.
                 if g != 0:
+                    self.avatar.beard = 0
                     if int(getattr(self.avatar, "hair", 0)) in (0, 1):
                         self.avatar.hair = 4  # 马尾
                     if int(getattr(self.avatar, "mouth", 0)) == 0:
@@ -2613,6 +2618,8 @@ class SurvivalCreateState(State):
                 else:
                     # Male defaults: keep it clean.
                     self.avatar.makeup = 0
+                    if int(getattr(self.avatar, "beard", 0)) == 0:
+                        self.avatar.beard = 1  # 胡茬
                     if int(getattr(self.avatar, "accessory", 0)) == 3:
                         self.avatar.accessory = 0
             except Exception:
@@ -3738,6 +3745,7 @@ class HardcoreSurvivalState(State):
         eye = cols["eye"]
         outline = (10, 10, 12)
         skin_shade = (max(0, skin[0] - 45), max(0, skin[1] - 45), max(0, skin[2] - 45))
+        beard_col = (max(0, hair[0] - 32), max(0, hair[1] - 32), max(0, hair[2] - 32))
 
         step = int(step) % 6
         if idle:
@@ -3750,6 +3758,7 @@ class HardcoreSurvivalState(State):
         hair_kind = int(avatar.hair)
         nose_kind = int(avatar.nose)
         mouth_kind = int(getattr(avatar, "mouth", 0))
+        beard_kind = int(getattr(avatar, "beard", 0))
         makeup_kind = int(getattr(avatar, "makeup", 0))
         accessory_kind = int(getattr(avatar, "accessory", 0))
         outfit_kind = int(avatar.outfit)
@@ -3815,6 +3824,11 @@ class HardcoreSurvivalState(State):
                 surf.set_at((5, 3), outline)
                 surf.set_at((7, 3), outline)
 
+            # Masculine cue: simple eyebrows (unless already "angry").
+            if int(gender) == 0 and int(eye_kind) != 2:
+                surf.set_at((5, 2), outline)
+                surf.set_at((7, 2), outline)
+
             if nose_kind == 1:  # dot
                 surf.set_at((5, 4), skin_shade)
             elif nose_kind == 2:  # line
@@ -3825,6 +3839,12 @@ class HardcoreSurvivalState(State):
             if int(gender) != 0:
                 surf.set_at((4, 3), outline)
                 surf.set_at((8, 3), outline)
+
+            # Beard/stubble (male only). Keep it subtle so it doesn't fight the mouth pixels.
+            if int(gender) == 0 and int(beard_kind) > 0:
+                jaw = skin_shade if int(beard_kind) == 1 else beard_col
+                surf.set_at((4, 4), jaw)
+                surf.set_at((8, 4), jaw)
 
             # Mouth.
             if mouth_kind == 1:  # smile
@@ -3901,6 +3921,9 @@ class HardcoreSurvivalState(State):
             else:
                 surf.set_at((8, 3), eye)
 
+            if int(gender) == 0 and int(eye_kind) != 2:
+                surf.set_at((8, 2), outline)
+
             if nose_kind == 1:
                 surf.set_at((7, 4), skin_shade)
             elif nose_kind == 2:
@@ -3917,6 +3940,18 @@ class HardcoreSurvivalState(State):
                 surf.set_at((9, 5), lip)
             elif mouth_kind == 3:
                 surf.set_at((9, 4), outline)
+
+            if int(gender) == 0 and int(beard_kind) > 0:
+                jaw = skin_shade if int(beard_kind) == 1 else beard_col
+                if int(beard_kind) == 2:
+                    surf.set_at((8, 4), jaw)  # tiny moustache hint
+                else:
+                    surf.set_at((8, 5), jaw)
+                    if int(mouth_kind) != 2:
+                        surf.set_at((9, 5), jaw)
+                    if int(beard_kind) >= 3:
+                        surf.set_at((7, 4), jaw)
+                        surf.set_at((8, 4), jaw)
 
             if int(makeup_kind) >= 1:
                 surf.set_at((6, 4), blush)
@@ -20957,6 +20992,37 @@ class HardcoreSurvivalState(State):
                 pass
         return hits
 
+    def _collide_rect_world_story_npc(self, rect: pygame.Rect) -> list[pygame.Rect]:
+        # Story NPCs should not walk "into" cutaway-roof buildings: those tiles are
+        # often non-solid floors that get rendered as walls when the player is outside,
+        # which looks like NPCs are climbing facades.
+        hits = list(self._collide_rect_world(rect))
+        try:
+            left = int(math.floor(rect.left / self.TILE_SIZE))
+            right = int(math.floor((rect.right - 1) / self.TILE_SIZE))
+            top = int(math.floor(rect.top / self.TILE_SIZE))
+            bottom = int(math.floor((rect.bottom - 1) / self.TILE_SIZE))
+            for ty in range(int(top), int(bottom) + 1):
+                for tx in range(int(left), int(right) + 1):
+                    try:
+                        if self._peek_building_at_tile(int(tx), int(ty)) is None:
+                            continue
+                    except Exception:
+                        continue
+                    # Avoid duplicates for already-solid tiles.
+                    try:
+                        tid = int(self.world.peek_tile(int(tx), int(ty)))
+                        if bool(self._tile_solid(int(tid))):
+                            continue
+                    except Exception:
+                        pass
+                    tile_rect = pygame.Rect(int(tx) * int(self.TILE_SIZE), int(ty) * int(self.TILE_SIZE), int(self.TILE_SIZE), int(self.TILE_SIZE))
+                    if rect.colliderect(tile_rect):
+                        hits.append(tile_rect)
+        except Exception:
+            pass
+        return hits
+
     def _move_with_collisions(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float) -> pygame.Vector2:
         rect = self.player.rect_at(pos)
         dx = float(vel.x * dt)
@@ -20980,10 +21046,22 @@ class HardcoreSurvivalState(State):
 
         return pygame.Vector2(rect.centerx, rect.centery)
 
-    def _move_box(self, pos: pygame.Vector2, vel: pygame.Vector2, dt: float, *, w: int, h: int) -> pygame.Vector2:
+    def _move_box(
+        self,
+        pos: pygame.Vector2,
+        vel: pygame.Vector2,
+        dt: float,
+        *,
+        w: int,
+        h: int,
+        collide_fn: Callable[[pygame.Rect], list[pygame.Rect]] | None = None,
+    ) -> pygame.Vector2:
         # Use float movement (sub-pixel accumulation) then resolve collisions
         # with an int rect. This keeps pixel-art rendering crisp while allowing
         # slow entities (e.g., zombies) to actually move.
+        collide: Callable[[pygame.Rect], list[pygame.Rect]]
+        collide = collide_fn if callable(collide_fn) else self._collide_rect_world
+
         w = int(w)
         h = int(h)
         p = pygame.Vector2(pos)
@@ -21006,7 +21084,7 @@ class HardcoreSurvivalState(State):
             r = pygame.Rect(r)
             axis_penalty = int(clamp(int(self.TILE_SIZE) // 5, 1, 3))
             for _ in range(10):
-                hits = self._collide_rect_world(r)
+                hits = collide(r)
                 if not hits:
                     break
                 best: tuple[int, int, int, int, int] | None = None  # score, absd, prio, ox, oy
@@ -21040,7 +21118,7 @@ class HardcoreSurvivalState(State):
             axis = str(axis)
             r = pygame.Rect(r)
             for _ in range(10):
-                hits = self._collide_rect_world(r)
+                hits = collide(r)
                 if not hits:
                     break
                 best: tuple[int, int] | None = None
@@ -21104,7 +21182,7 @@ class HardcoreSurvivalState(State):
         # If we ever end up slightly inside a wall (rounding edge-case), push out
         # in the shortest direction. This prevents large "snap" corrections later.
         cur = rect_at(float(p.x), float(p.y))
-        if self._collide_rect_world(cur):
+        if collide(cur):
             pref = None
             try:
                 if abs(float(vel.x)) >= abs(float(vel.y)) and abs(float(vel.x)) > 1e-6:
@@ -21115,7 +21193,7 @@ class HardcoreSurvivalState(State):
                 pref = None
             if pref in ("x", "y"):
                 cur2 = depenetrate_axis(cur, axis=str(pref))
-                cur = cur2 if not self._collide_rect_world(cur2) else depenetrate(cur, prefer_axis=pref)
+                cur = cur2 if not collide(cur2) else depenetrate(cur, prefer_axis=pref)
             else:
                 cur = depenetrate(cur, prefer_axis=pref)
             p.update(float(cur.centerx), float(cur.centery))
@@ -21134,12 +21212,12 @@ class HardcoreSurvivalState(State):
                 prev = rect_at(float(p.x), float(p.y))
                 p.x += float(dx)
                 rect = rect_at(float(p.x), float(p.y))
-                hits = self._collide_rect_world(rect)
+                hits = collide(rect)
                 if hits:
                     hits_block = filter_hits_axis(hits, rect, axis="x")
                     if not hits_block:
                         rect2 = depenetrate_axis(rect, axis="y")
-                        if not self._collide_rect_world(rect2):
+                        if not collide(rect2):
                             rect = rect2
                             p.y = float(rect.centery)
                         p.x = float(rect.centerx)
@@ -21171,7 +21249,7 @@ class HardcoreSurvivalState(State):
                             for sy in cands:
                                 test = pygame.Rect(base)
                                 test.y += int(sy)
-                                if not self._collide_rect_world(test):
+                                if not collide(test):
                                     rect = test
                                     corrected = True
                                     break
@@ -21182,7 +21260,7 @@ class HardcoreSurvivalState(State):
                         # sliding along the top/bottom walls), prefer that so horizontal motion
                         # doesn't get cancelled at 1px corner overlaps.
                         rect2 = depenetrate_axis(rect, axis="y")
-                        if abs(int(rect2.y) - int(rect.y)) <= int(nudge_max) and not self._collide_rect_world(rect2):
+                        if abs(int(rect2.y) - int(rect.y)) <= int(nudge_max) and not collide(rect2):
                             rect = rect2
                             corrected = True
                             depen_fixed = True
@@ -21205,7 +21283,7 @@ class HardcoreSurvivalState(State):
                                     abs(float(vel.y)) < 1e-6
                                     and abs(int(rect2.y) - int(rect.y)) <= int(nudge_max)
                                     and rect2.topleft != rect.topleft
-                                    and not self._collide_rect_world(rect2)
+                                    and not collide(rect2)
                                 ):
                                     rect = rect2
                                     depen_fixed = True
@@ -21221,13 +21299,13 @@ class HardcoreSurvivalState(State):
                                     abs(float(vel.y)) < 1e-6
                                     and abs(int(rect2.y) - int(rect.y)) <= int(nudge_max)
                                     and rect2.topleft != rect.topleft
-                                    and not self._collide_rect_world(rect2)
+                                    and not collide(rect2)
                                 ):
                                     rect = rect2
                                     depen_fixed = True
                                 else:
                                     rect = pygame.Rect(prev)
-                        if self._collide_rect_world(rect):
+                        if collide(rect):
                             rect2 = depenetrate_axis(rect, axis="y")
                             if abs(int(rect2.y) - int(rect.y)) <= int(nudge_max) and rect2.topleft != rect.topleft:
                                 rect = rect2
@@ -21242,12 +21320,12 @@ class HardcoreSurvivalState(State):
                 prev = rect_at(float(p.x), float(p.y))
                 p.y += float(dy)
                 rect = rect_at(float(p.x), float(p.y))
-                hits = self._collide_rect_world(rect)
+                hits = collide(rect)
                 if hits:
                     hits_block = filter_hits_axis(hits, rect, axis="y")
                     if not hits_block:
                         rect2 = depenetrate_axis(rect, axis="x")
-                        if not self._collide_rect_world(rect2):
+                        if not collide(rect2):
                             rect = rect2
                             p.x = float(rect.centerx)
                         p.y = float(rect.centery)
@@ -21277,7 +21355,7 @@ class HardcoreSurvivalState(State):
                             for sx in cands:
                                 test = pygame.Rect(base)
                                 test.x += int(sx)
-                                if not self._collide_rect_world(test):
+                                if not collide(test):
                                     rect = test
                                     corrected = True
                                     break
@@ -21291,7 +21369,7 @@ class HardcoreSurvivalState(State):
                         # Mirror of the horizontal case: if we can clear the collision by
                         # nudging in X, do so to avoid 1px corner lockups.
                         rect2 = depenetrate_axis(rect, axis="x")
-                        if abs(int(rect2.x) - int(rect.x)) <= int(nudge_max) and not self._collide_rect_world(rect2):
+                        if abs(int(rect2.x) - int(rect.x)) <= int(nudge_max) and not collide(rect2):
                             rect = rect2
                             corrected = True
                             depen_fixed = True
@@ -21308,7 +21386,7 @@ class HardcoreSurvivalState(State):
                                 abs(float(vel.x)) < 1e-6
                                 and abs(int(rect2.x) - int(rect.x)) <= int(nudge_max)
                                 and rect2.topleft != rect.topleft
-                                and not self._collide_rect_world(rect2)
+                                and not collide(rect2)
                             ):
                                 rect = rect2
                                 depen_fixed = True
@@ -21324,13 +21402,13 @@ class HardcoreSurvivalState(State):
                                 abs(float(vel.x)) < 1e-6
                                 and abs(int(rect2.x) - int(rect.x)) <= int(nudge_max)
                                 and rect2.topleft != rect.topleft
-                                and not self._collide_rect_world(rect2)
+                                and not collide(rect2)
                             ):
                                 rect = rect2
                                 depen_fixed = True
                             else:
                                 rect = pygame.Rect(prev)
-                    if self._collide_rect_world(rect):
+                    if collide(rect):
                         rect2 = depenetrate_axis(rect, axis="x")
                         if abs(int(rect2.x) - int(rect.x)) <= int(nudge_max) and rect2.topleft != rect.topleft:
                             rect = rect2
@@ -21342,7 +21420,7 @@ class HardcoreSurvivalState(State):
 
             # Final safety: never return a penetrated position (prevents "贴墙卡住").
             final = rect_at(float(p.x), float(p.y))
-            if self._collide_rect_world(final):
+            if collide(final):
                 # Avoid large depenetration "snaps" at outside corners: only allow
                 # tiny corrective pushes. Otherwise, revert this sub-step.
                 max_fix = int(max(1, int(nudge_max)))
@@ -21350,19 +21428,19 @@ class HardcoreSurvivalState(State):
 
                 if abs(float(vel.y)) < 1e-6 and abs(float(vel.x)) > 1e-6:
                     cand = depenetrate_axis(final, axis="y")
-                    if abs(int(cand.y) - int(final.y)) <= max_fix and not self._collide_rect_world(cand):
+                    if abs(int(cand.y) - int(final.y)) <= max_fix and not collide(cand):
                         fixed = cand
                 elif abs(float(vel.x)) < 1e-6 and abs(float(vel.y)) > 1e-6:
                     cand = depenetrate_axis(final, axis="x")
-                    if abs(int(cand.x) - int(final.x)) <= max_fix and not self._collide_rect_world(cand):
+                    if abs(int(cand.x) - int(final.x)) <= max_fix and not collide(cand):
                         fixed = cand
                 else:
                     cand = depenetrate_axis(final, axis="x")
-                    if abs(int(cand.x) - int(final.x)) <= max_fix and not self._collide_rect_world(cand):
+                    if abs(int(cand.x) - int(final.x)) <= max_fix and not collide(cand):
                         fixed = cand
                     else:
                         cand = depenetrate_axis(final, axis="y")
-                        if abs(int(cand.y) - int(final.y)) <= max_fix and not self._collide_rect_world(cand):
+                        if abs(int(cand.y) - int(final.y)) <= max_fix and not collide(cand):
                             fixed = cand
 
                 if fixed is not None:
@@ -23297,6 +23375,7 @@ class HardcoreSurvivalState(State):
                 hair_color=random.randrange(0, len(SURVIVAL_HAIR_COLOR_OPTIONS)),
                 eye_color=random.randrange(0, len(SURVIVAL_EYE_COLOR_OPTIONS)),
                 mouth=random.randrange(0, len(SURVIVAL_MOUTH_OPTIONS)),
+                beard=(random.choice([0, 0, 1, 1, 2, 3]) if g == 0 else 0),
                 makeup=(random.choice([0, 1, 2]) if g != 0 else 0),
                 accessory=(random.choice([0, 0, 1, 2, 3]) if g != 0 else random.choice([0, 0, 1])),
                 outfit=int(outfit),
@@ -23669,14 +23748,58 @@ class HardcoreSurvivalState(State):
                 except Exception:
                     vel = pygame.Vector2(0, 0)
 
-            new_pos = self._move_box(pygame.Vector2(pos), pygame.Vector2(vel), float(dt_time), w=int(npc_w), h=int(npc_h))
-            moved = pygame.Vector2(new_pos) - pygame.Vector2(pos)
+            prev_pos = pygame.Vector2(pos)
+            new_pos = self._move_box(
+                pygame.Vector2(pos),
+                pygame.Vector2(vel),
+                float(dt_time),
+                w=int(npc_w),
+                h=int(npc_h),
+                collide_fn=self._collide_rect_world_story_npc,
+            )
+
+            # Anti-jitter like the player: don't let collision resolution move the NPC
+            # opposite to its intended axis direction (prevents "stuck shaking").
+            try:
+                prev_rect = pygame.Rect(
+                    iround(float(prev_pos.x) - float(npc_w) / 2.0),
+                    iround(float(prev_pos.y) - float(npc_h) / 2.0),
+                    int(npc_w),
+                    int(npc_h),
+                )
+                if not self._collide_rect_world_story_npc(prev_rect):
+                    dx = float(new_pos.x) - float(prev_pos.x)
+                    dy = float(new_pos.y) - float(prev_pos.y)
+                    vx = float(getattr(vel, "x", 0.0))
+                    vy = float(getattr(vel, "y", 0.0))
+                    if vx > 1e-6 and dx < -1e-6:
+                        new_pos.x = float(prev_pos.x)
+                    elif vx < -1e-6 and dx > 1e-6:
+                        new_pos.x = float(prev_pos.x)
+                    if vy > 1e-6 and dy < -1e-6:
+                        new_pos.y = float(prev_pos.y)
+                    elif vy < -1e-6 and dy > 1e-6:
+                        new_pos.y = float(prev_pos.y)
+            except Exception:
+                pass
+
+            moved = pygame.Vector2(new_pos) - pygame.Vector2(prev_pos)
             npc_vel = moved / float(dt_time) if dt_time > 0.0 else pygame.Vector2(0, 0)
 
-            npc["pos"] = pygame.Vector2(new_pos)
-            npc["vel"] = pygame.Vector2(npc_vel)
-            npc["goal"] = pygame.Vector2(goal)
-            npc["goal_left"] = float(goal_left)
+            # Safety: story NPCs should never end up inside building footprints (facades).
+            try:
+                ntx = int(math.floor(float(new_pos.x) / float(self.TILE_SIZE)))
+                nty = int(math.floor(float(new_pos.y) / float(self.TILE_SIZE)))
+                if self._peek_building_at_tile(int(ntx), int(nty)) is not None:
+                    sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18)
+                    new_pos = tile_center(int(sx), int(sy))
+                    moved = pygame.Vector2(0, 0)
+                    npc_vel = pygame.Vector2(0, 0)
+                    goal = pygame.Vector2(new_pos)
+                    goal_left = 0.0
+                    stuck_t = 0.0
+            except Exception:
+                pass
 
             # Stuck detection: if we're trying to move but can't, re-roll goals faster.
             want_move = float(d.length_squared()) > float((self.TILE_SIZE * 0.65) ** 2)
@@ -23685,9 +23808,23 @@ class HardcoreSurvivalState(State):
                 stuck_t = float(stuck_t) + float(dt_time)
             else:
                 stuck_t = max(0.0, float(stuck_t) - float(dt_time) * 1.8)
-            npc["stuck"] = float(stuck_t)
+            if float(stuck_t) > 2.40:
+                # Hard recovery: if an NPC gets wedged, snap it back to its anchor area.
+                sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18)
+                new_pos = tile_center(int(sx), int(sy))
+                moved = pygame.Vector2(0, 0)
+                npc_vel = pygame.Vector2(0, 0)
+                goal = pygame.Vector2(new_pos)
+                goal_left = 0.0
+                stuck_t = 0.0
             if float(stuck_t) > 1.20:
-                npc["goal_left"] = 0.0
+                goal_left = 0.0
+
+            npc["pos"] = pygame.Vector2(new_pos)
+            npc["vel"] = pygame.Vector2(npc_vel)
+            npc["goal"] = pygame.Vector2(goal)
+            npc["goal_left"] = float(goal_left)
+            npc["stuck"] = float(stuck_t)
 
             moving = npc_vel.length_squared() > 1.0
             if moving:
@@ -24198,8 +24335,30 @@ class HardcoreSurvivalState(State):
             bubble_border = (220, 220, 235, 140)
             bubble_hi = (240, 220, 140, 20)
 
+            def ellipsize(text: str, max_w: int) -> str:
+                text = str(text)
+                max_w = int(max_w)
+                if max_w <= 0 or font.size(text)[0] <= max_w:
+                    return text
+                suffix = "…"
+                lo = 0
+                hi = len(text)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    cand = text[:mid].rstrip() + suffix
+                    if font.size(cand)[0] <= max_w:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                return text[: max(0, lo - 1)].rstrip() + suffix
+
             content_w = max(1, max(int(font.size(str(ln))[0]) for ln in drawn))
-            bubble_w = int(clamp(int(content_w + pad_x * 2), 80, INTERNAL_W - 12))
+            tag_title = str(title) if title and title != "提示" else ""
+            tag_w = int(font.size(tag_title)[0]) if tag_title else 0
+            tip_text = "空格/Enter" if self._dialog_finished() else ""
+            tip_w = int(font.size(tip_text)[0]) if tip_text else 0
+            need_w = int(max(int(content_w), int(tag_w), int(tip_w) + 8))
+            bubble_w = int(clamp(int(need_w + pad_x * 2), 96, INTERNAL_W - 12))
             bubble_h = int(clamp(int(len(drawn) * (font.get_height() + line_gap) + pad_y * 2), 36, 120))
 
             anchor = getattr(self, "_last_player_screen_rect", None)
@@ -24249,7 +24408,7 @@ class HardcoreSurvivalState(State):
                 bubble_surf.blit(font.render("|", False, pygame.Color(240, 220, 140)), (cx, cy))
 
             if self._dialog_finished():
-                tip = "空格/Enter"
+                tip = ellipsize("空格/Enter", int(bubble_w - 16))
                 bubble_surf.blit(
                     font.render(tip, False, pygame.Color(170, 170, 180)),
                     (bubble_w - 6 - font.size(tip)[0], bubble_h - 6 - font.get_height()),
@@ -24257,7 +24416,7 @@ class HardcoreSurvivalState(State):
 
             # Optional tiny title tag.
             if title and title != "提示":
-                tag = font.render(str(title), False, pygame.Color(240, 220, 140))
+                tag = font.render(ellipsize(str(title), int(bubble_w - pad_x * 2)), False, pygame.Color(240, 220, 140))
                 bubble_surf.blit(tag, (pad_x, 2))
 
             surface.blit(bubble_surf, out.topleft)
