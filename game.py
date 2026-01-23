@@ -9312,6 +9312,41 @@ class HardcoreSurvivalState(State):
                 cars[:] = [c for c in cars if keep_vehicle_at(float(c.pos.x), float(c.pos.y))]
                 bikes[:] = [b for b in bikes if keep_vehicle_at(float(b.pos.x), float(b.pos.y))]
 
+            # Safety: avoid parked vehicles blocking building entrances (door tiles).
+            # (Parked vehicles are centered on a tile; if that tile is next to a door, the
+            # collider can overlap the doorway and make the building feel "sealed".)
+            if cars or bikes:
+                try:
+                    chunk_size = int(self.state.CHUNK_SIZE)
+                    t_doors = {
+                        int(self.state.T_DOOR),
+                        int(self.state.T_DOOR_BROKEN),
+                        int(self.state.T_DOOR_HOME),
+                    }
+                    door_clear: set[tuple[int, int]] = set()
+                    for ly in range(chunk_size):
+                        row = int(ly) * int(chunk_size)
+                        for lx in range(chunk_size):
+                            if int(tiles[int(row + int(lx))]) not in t_doors:
+                                continue
+                            for oy in (-1, 0, 1):
+                                for ox in (-1, 0, 1):
+                                    door_clear.add((int(lx) + int(ox), int(ly) + int(oy)))
+                    if door_clear:
+                        tile_size = float(self.state.TILE_SIZE)
+
+                        def keep_near_door(px: float, py: float) -> bool:
+                            tx = int(math.floor(float(px) / tile_size))
+                            ty = int(math.floor(float(py) / tile_size))
+                            lx = int(tx - base_tx)
+                            ly = int(ty - base_ty)
+                            return (int(lx), int(ly)) not in door_clear
+
+                        cars[:] = [c for c in cars if keep_near_door(float(c.pos.x), float(c.pos.y))]
+                        bikes[:] = [b for b in bikes if keep_near_door(float(b.pos.x), float(b.pos.y))]
+                except Exception:
+                    pass
+
             # Safety: avoid world items spawning on solid tiles (walls/water/facades).
             if items:
                 ts = float(self.state.TILE_SIZE)
@@ -23590,16 +23625,25 @@ class HardcoreSurvivalState(State):
         stx, sty = self._player_tile()
         self.story_origin_tile = (int(stx), int(sty))
 
-        def find_open_tile_near(tx: int, ty: int, *, max_r: int = 8) -> tuple[int, int]:
+        def find_open_tile_near(
+            tx: int,
+            ty: int,
+            *,
+            max_r: int = 8,
+            avoid_tiles: set[tuple[int, int]] | None = None,
+        ) -> tuple[int, int]:
             tx = int(tx)
             ty = int(ty)
             max_r = int(max(0, max_r))
+            avoid = avoid_tiles if isinstance(avoid_tiles, set) else None
             for avoid_roads in (True, False):
                 for r in range(0, max_r + 1):
                     for dy in range(-r, r + 1):
                         for dx in range(-r, r + 1):
                             nx = int(tx + dx)
                             ny = int(ty + dy)
+                            if avoid is not None and (int(nx), int(ny)) in avoid:
+                                continue
                             # Keep story NPCs/POIs outdoors (avoid being "on the facade").
                             try:
                                 if self._peek_building_at_tile(int(nx), int(ny)) is not None:
@@ -23845,6 +23889,9 @@ class HardcoreSurvivalState(State):
                 tid_out = int(self.world.get_tile(int(out_tx), int(out_ty)))
                 if bool(self._tile_solid(int(tid_out))):
                     return None
+                # Don't open directly onto roads/highways (traffic can block the door).
+                if int(tid_out) in (int(self.T_ROAD), int(self.T_HIGHWAY)):
+                    return None
 
                 return (int(tx0), int(ty0), int(office_w), int(office_h))
 
@@ -24017,6 +24064,55 @@ class HardcoreSurvivalState(State):
                 # Office furniture layout (desks/chairs/shelves). Also sets workstation info.
                 stamp_office_layout(btx0=int(tx0), bty0=int(ty0), bw=int(bw), bh=int(bh), door=(int(door_tx), int(door_ty)))
 
+                # Keep the office entrance clear: no parked vehicles (and don't allow story NPCs
+                # to spawn right on the doorstep).
+                try:
+                    clear_tiles: set[tuple[int, int]] = set()
+                    for oy in range(-1, 7):
+                        for ox in range(-3, 4):
+                            clear_tiles.add((int(door_tx) + int(ox), int(door_ty) + int(oy)))
+                    self.story_office_entrance_clear = set(clear_tiles)
+
+                    # Remove parked vehicles whose anchor tile is in the clear zone.
+                    by_chunk: dict[tuple[int, int], set[tuple[int, int]]] = {}
+                    for txc, tyc in clear_tiles:
+                        ccx = int(txc) // int(self.CHUNK_SIZE)
+                        ccy = int(tyc) // int(self.CHUNK_SIZE)
+                        by_chunk.setdefault((int(ccx), int(ccy)), set()).add((int(txc), int(tyc)))
+
+                    ts = float(self.TILE_SIZE)
+
+                    def anchor_tile(pos: object) -> tuple[int, int]:
+                        try:
+                            p = pygame.Vector2(pos)
+                        except Exception:
+                            p = pygame.Vector2(0, 0)
+                        return int(math.floor(float(p.x) / ts)), int(math.floor(float(p.y) / ts))
+
+                    for (ccx, ccy), tiles_set in by_chunk.items():
+                        cch = self.world.get_chunk(int(ccx), int(ccy))
+                        try:
+                            if isinstance(getattr(cch, "cars", None), list) and cch.cars:
+                                cch.cars[:] = [v for v in cch.cars if anchor_tile(getattr(v, "pos", pygame.Vector2(0, 0))) not in tiles_set]
+                        except Exception:
+                            pass
+                        try:
+                            if isinstance(getattr(cch, "bikes", None), list) and cch.bikes:
+                                cch.bikes[:] = [v for v in cch.bikes if anchor_tile(getattr(v, "pos", pygame.Vector2(0, 0))) not in tiles_set]
+                        except Exception:
+                            pass
+
+                    # Coworker anchor tile near the office (but not at the entrance).
+                    try:
+                        seed_tx = int(door_tx) + 6
+                        seed_ty = int(door_ty) + 5
+                        self.story_work_meet_tile = find_open_tile_near(int(seed_tx), int(seed_ty), max_r=18, avoid_tiles=clear_tiles)
+                    except Exception:
+                        self.story_work_meet_tile = None
+                except Exception:
+                    self.story_office_entrance_clear = set()
+                    self.story_work_meet_tile = None
+
                 # Add the building record so roof/cutaway works.
                 try:
                     roof_var = int((int(tx0) * 31 + int(ty0) * 17 + int(getattr(self, "seed", 0))) & 0xFF)
@@ -24030,10 +24126,14 @@ class HardcoreSurvivalState(State):
                 self.story_office_key = None
                 self.story_workstation_tile = None
                 self.story_office_player_pc_tiles = set()
+                self.story_office_entrance_clear = set()
+                self.story_work_meet_tile = None
         except Exception:
             self.story_office_key = None
             self.story_workstation_tile = None
             self.story_office_player_pc_tiles = set()
+            self.story_office_entrance_clear = set()
+            self.story_work_meet_tile = None
 
         try:
             gate_x0 = int(getattr(self.world, "compound_gate_x0", 0))
@@ -24146,18 +24246,20 @@ class HardcoreSurvivalState(State):
             script: str = "",
         ) -> None:
             # Clamp to walkable tiles so NPCs don't spawn/anchor inside walls/furniture.
+            avoid = getattr(self, "story_office_entrance_clear", None)
+            avoid = avoid if isinstance(avoid, set) else None
             try:
-                tile = find_open_tile_near(int(tile[0]), int(tile[1]), max_r=10)
+                tile = find_open_tile_near(int(tile[0]), int(tile[1]), max_r=10, avoid_tiles=avoid)
             except Exception:
                 pass
             if isinstance(home, tuple) and len(home) == 2:
                 try:
-                    home = find_open_tile_near(int(home[0]), int(home[1]), max_r=10)
+                    home = find_open_tile_near(int(home[0]), int(home[1]), max_r=10, avoid_tiles=avoid)
                 except Exception:
                     pass
             if isinstance(work, tuple) and len(work) == 2:
                 try:
-                    work = find_open_tile_near(int(work[0]), int(work[1]), max_r=10)
+                    work = find_open_tile_near(int(work[0]), int(work[1]), max_r=10, avoid_tiles=avoid)
                 except Exception:
                     pass
 
@@ -24204,7 +24306,19 @@ class HardcoreSurvivalState(State):
         home_tx, home_ty = (int(home_door[0]), int(home_door[1])) if isinstance(home_door, tuple) and len(home_door) == 2 else (int(stx), int(sty))
 
         add_npc("zhou_guard", "老周", tile=(int(gate_tx), int(gate_ty) - 1), home=(int(gate_tx), int(gate_ty) - 1), work=(int(gate_tx), int(gate_ty) - 1), gender=0, outfit=1, speed=0.0, script="npc_guard_zhou")
-        add_npc("lin_coworker", "小林", tile=(int(work_tx), int(work_ty)), home=(int(home_tx), int(home_ty) - 2), work=(int(work_tx), int(work_ty)), gender=0, outfit=1, script="npc_coworker_lin")
+        meet = getattr(self, "story_work_meet_tile", None)
+        if not (isinstance(meet, tuple) and len(meet) == 2):
+            meet = (int(work_tx) + 6, int(work_ty) + 5)
+        add_npc(
+            "lin_coworker",
+            "小林",
+            tile=(int(meet[0]), int(meet[1])),
+            home=(int(home_tx), int(home_ty) - 2),
+            work=(int(meet[0]), int(meet[1])),
+            gender=0,
+            outfit=1,
+            script="npc_coworker_lin",
+        )
         add_npc("qiao_white", "阿乔", tile=(int(cafe_tx), int(cafe_ty)), home=(int(home_tx) + 2, int(home_ty) - 2), work=(int(cafe_tx), int(cafe_ty)), gender=1, outfit=0, script="npc_aqiao")
         add_npc("nana_influencer", "娜娜", tile=(int(cafe_tx) + 2, int(cafe_ty) + 1), home=(int(home_tx) - 2, int(home_ty) - 2), work=(int(cafe_tx) + 2, int(cafe_ty) + 1), gender=1, outfit=6, script="npc_nana")
         add_npc("green_tea", "绿茶姐", tile=(int(home_tx) - 1, int(home_ty) - 1), home=(int(home_tx) - 1, int(home_ty) - 1), work=(int(cafe_tx) - 2, int(cafe_ty) + 2), gender=1, outfit=6, script="npc_green_tea")
