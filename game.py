@@ -23745,6 +23745,13 @@ class HardcoreSurvivalState(State):
                             btx0, bty0, bw, bh, _roof_kind, floors = hit
                             if int(floors) != 1:
                                 continue
+                            # Don't claim special buildings (they have separate interior modes, so the
+                            # "office furniture + staff" would appear missing).
+                            try:
+                                if self._special_building_for_door_tile(int(nx), int(ny)) is not None:
+                                    continue
+                            except Exception:
+                                pass
                             if int(bw) < 9 or int(bh) < 7:
                                 continue
                             # Door must be on the building border.
