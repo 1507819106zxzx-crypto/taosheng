@@ -33649,20 +33649,6 @@ class HardcoreSurvivalState(State):
             px = float(getattr(getattr(self.player, "pos", None), "x", 0.0))
             py = float(getattr(getattr(self.player, "pos", None), "y", 0.0))
 
-        # Use actual per-frame displacement direction (not transient velocity)
-        # so collision corrections don't flip lock direction and cause wobble.
-        dx_f = 0.0
-        dy_f = 0.0
-        prev_float = getattr(self, '_player_pixel_lock_prev_world_xy', None)
-        if isinstance(prev_float, tuple) and len(prev_float) == 2:
-            try:
-                dx_f = float(px) - float(prev_float[0])
-                dy_f = float(py) - float(prev_float[1])
-            except Exception:
-                dx_f = 0.0
-                dy_f = 0.0
-        self._player_pixel_lock_prev_world_xy = (float(px), float(py))
-
         prev = getattr(self, '_player_pixel_lock_world_xy', None)
         prev_x = None
         prev_y = None
@@ -33674,29 +33660,79 @@ class HardcoreSurvivalState(State):
                 prev_x = None
                 prev_y = None
 
-        # Use iround (round-half-away-from-zero) instead of Python's round()
-        # (banker's rounding) so the camera and collision rects always agree on
-        # which integer pixel a .5 boundary belongs to.
-        ix = iround(float(px))
-        iy = iround(float(py))
+        prev_float = getattr(self, '_player_pixel_lock_prev_world_xy', None)
+        dx_f = 0.0
+        dy_f = 0.0
+        if isinstance(prev_float, tuple) and len(prev_float) == 2:
+            try:
+                dx_f = float(px) - float(prev_float[0])
+                dy_f = float(py) - float(prev_float[1])
+            except Exception:
+                dx_f = 0.0
+                dy_f = 0.0
+        self._player_pixel_lock_prev_world_xy = (float(px), float(py))
 
-        # Directional monotonic clamp: once moving on an axis, integer lock only
-        # advances in that direction until actual displacement flips.
-        if prev_x is not None:
-            if dx_f > 1e-6:
-                ix = max(int(ix), int(prev_x))
-            elif dx_f < -1e-6:
-                ix = min(int(ix), int(prev_x))
-            elif abs(float(px) - float(prev_x)) < 0.5:
-                ix = int(prev_x)
-        if prev_y is not None:
-            if dy_f > 1e-6:
-                iy = max(int(iy), int(prev_y))
-            elif dy_f < -1e-6:
-                iy = min(int(iy), int(prev_y))
-            elif abs(float(py) - float(prev_y)) < 0.5:
-                iy = int(prev_y)
+        # Teleport / respawn / big correction: snap lock and clear residual.
+        if prev_x is None or prev_y is None or abs(float(dx_f)) > 20.0 or abs(float(dy_f)) > 20.0:
+            ix = int(iround(float(px)))
+            iy = int(iround(float(py)))
+            self._player_pixel_lock_residual_xy = (0.0, 0.0)
+            return int(ix), int(iy)
 
+        # Tiny opposite-direction jitter from collision resolution can create
+        # visible up-left/down-right wobble. Ignore very small reverse drift.
+        try:
+            ivx = float(getattr(self.player.vel, "x", 0.0))
+            ivy = float(getattr(self.player.vel, "y", 0.0))
+        except Exception:
+            ivx = 0.0
+            ivy = 0.0
+        if abs(float(ivx)) > 1e-4 and (float(dx_f) * float(ivx)) < 0.0 and abs(float(dx_f)) < 0.35:
+            dx_f = 0.0
+        if abs(float(ivy)) > 1e-4 and (float(dy_f) * float(ivy)) < 0.0 and abs(float(dy_f)) < 0.35:
+            dy_f = 0.0
+
+        # Pixel-step integrator: convert float displacement to integer camera
+        # steps using residual accumulation. This gives stable, evenly-spaced
+        # diagonal stepping (much less perceived shake than absolute re-rounding).
+        rx = 0.0
+        ry = 0.0
+        residual = getattr(self, '_player_pixel_lock_residual_xy', None)
+        if isinstance(residual, tuple) and len(residual) == 2:
+            try:
+                rx = float(residual[0])
+                ry = float(residual[1])
+            except Exception:
+                rx = 0.0
+                ry = 0.0
+
+        rx = float(rx) + float(dx_f)
+        ry = float(ry) + float(dy_f)
+
+        # Whole-pixel steps for this frame.
+        if float(rx) >= 0.0:
+            sx = int(math.floor(float(rx)))
+        else:
+            sx = int(math.ceil(float(rx)))
+        if float(ry) >= 0.0:
+            sy = int(math.floor(float(ry)))
+        else:
+            sy = int(math.ceil(float(ry)))
+
+        rx = float(rx) - float(sx)
+        ry = float(ry) - float(sy)
+        self._player_pixel_lock_residual_xy = (float(rx), float(ry))
+
+        ix = int(prev_x) + int(sx)
+        iy = int(prev_y) + int(sy)
+
+        # Keep lock close to true position to avoid long-term drift.
+        min_x = int(math.floor(float(px))) - 1
+        max_x = int(math.ceil(float(px))) + 1
+        min_y = int(math.floor(float(py))) - 1
+        max_y = int(math.ceil(float(py))) + 1
+        ix = int(clamp(int(ix), int(min_x), int(max_x)))
+        iy = int(clamp(int(iy), int(min_y), int(max_y)))
         return int(ix), int(iy)
 
     def _compute_aim_dir(self) -> pygame.Vector2:
