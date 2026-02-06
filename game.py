@@ -21227,6 +21227,24 @@ class HardcoreSurvivalState(State):
             pass
         return hits
 
+    def _story_npc_is_indoor_tile(self, tx: int, ty: int) -> bool:
+        tx = int(tx)
+        ty = int(ty)
+        try:
+            hit = self._peek_building_at_tile(int(tx), int(ty))
+        except Exception:
+            hit = None
+        if hit is None:
+            return False
+        try:
+            btx0, bty0, bw, bh = int(hit[0]), int(hit[1]), int(hit[2]), int(hit[3])
+            # Treat outer border/wall belt as not-indoor for pathing guards.
+            if int(tx) in (int(btx0), int(btx0) + int(bw) - 1) or int(ty) in (int(bty0), int(bty0) + int(bh) - 1):
+                return False
+        except Exception:
+            pass
+        return True
+
     def _story_npc_collider_wh(self) -> tuple[int, int]:
         # Keep story NPC collision volume aligned with the player's footprint so
         # crowds/brawls feel solid (avoid "ghosting" through NPCs).
@@ -24511,6 +24529,7 @@ class HardcoreSurvivalState(State):
             *,
             max_r: int = 6,
             avoid_roads: bool = False,
+            allow_inside: bool = False,
         ) -> tuple[int, int]:
             tx = int(tx)
             ty = int(ty)
@@ -24520,25 +24539,26 @@ class HardcoreSurvivalState(State):
                     for dx in range(-r, r + 1):
                         nx = int(tx + dx)
                         ny = int(ty + dy)
-                        try:
-                            if self._peek_building_at_tile(int(nx), int(ny)) is not None:
-                                continue
-                        except Exception:
-                            pass
+                        if not bool(allow_inside):
+                            try:
+                                if bool(self._story_npc_is_indoor_tile(int(nx), int(ny))):
+                                    continue
+                            except Exception:
+                                pass
                         tid = int(self.world.peek_tile(int(nx), int(ny)))
                         if bool(avoid_roads) and bool(is_road_tid(int(tid))):
                             continue
                         if not bool(self._tile_solid(int(tid))):
                             return int(nx), int(ny)
             if bool(avoid_roads):
-                return find_open_tile_near(int(tx), int(ty), max_r=int(max_r), avoid_roads=False)
+                return find_open_tile_near(int(tx), int(ty), max_r=int(max_r), avoid_roads=False, allow_inside=bool(allow_inside))
             return int(tx), int(ty)
 
         def is_open_outdoor_tile(tx: int, ty: int) -> bool:
             tx = int(tx)
             ty = int(ty)
             try:
-                if self._peek_building_at_tile(int(tx), int(ty)) is not None:
+                if bool(self._story_npc_is_indoor_tile(int(tx), int(ty))):
                     return False
             except Exception:
                 pass
@@ -24619,7 +24639,7 @@ class HardcoreSurvivalState(State):
                 nx = int(nx)
                 ny = int(ny)
                 try:
-                    if self._peek_building_at_tile(int(nx), int(ny)) is not None:
+                    if bool(self._story_npc_is_indoor_tile(int(nx), int(ny))):
                         continue
                 except Exception:
                     pass
@@ -24948,8 +24968,8 @@ class HardcoreSurvivalState(State):
                 hx, hy = find_open_tile_near(int(home[0]), int(home[1]), max_r=8, avoid_roads=True)
                 wx, wy = find_open_tile_near(int(work[0]), int(work[1]), max_r=8, avoid_roads=True)
             else:
-                hx, hy = int(home[0]), int(home[1])
-                wx, wy = int(work[0]), int(work[1])
+                hx, hy = find_open_tile_near(int(home[0]), int(home[1]), max_r=8, avoid_roads=True, allow_inside=True)
+                wx, wy = find_open_tile_near(int(work[0]), int(work[1]), max_r=8, avoid_roads=True, allow_inside=True)
             home = (int(hx), int(hy))
             work = (int(wx), int(wy))
             npc["home"] = home
@@ -25075,7 +25095,7 @@ class HardcoreSurvivalState(State):
                     try:
                         ntx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
                         nty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
-                        if self._peek_building_at_tile(int(ntx), int(nty)) is not None:
+                        if bool(self._story_npc_is_indoor_tile(int(ntx), int(nty))):
                             sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
                             pos = tile_center(int(sx), int(sy))
                             npc["pos"] = pygame.Vector2(pos)
@@ -25192,11 +25212,12 @@ class HardcoreSurvivalState(State):
                             continue
                         if abs(int(tx) - int(ax)) > int(radius) or abs(int(ty) - int(ay)) > int(radius):
                             continue
-                        try:
-                            if self._peek_building_at_tile(int(tx), int(ty)) is not None:
-                                continue
-                        except Exception:
-                            pass
+                        if not bool(allow_inside):
+                            try:
+                                if bool(self._story_npc_is_indoor_tile(int(tx), int(ty))):
+                                    continue
+                            except Exception:
+                                pass
                         tid = int(self.world.peek_tile(int(tx), int(ty)))
                         if bool(self._tile_solid(int(tid))):
                             continue
@@ -25278,7 +25299,7 @@ class HardcoreSurvivalState(State):
                 if not bool(allow_inside):
                     ntx = int(math.floor(float(new_pos.x) / float(self.TILE_SIZE)))
                     nty = int(math.floor(float(new_pos.y) / float(self.TILE_SIZE)))
-                    if self._peek_building_at_tile(int(ntx), int(nty)) is not None:
+                    if bool(self._story_npc_is_indoor_tile(int(ntx), int(nty))):
                         sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
                         new_pos = tile_center(int(sx), int(sy))
                         moved = pygame.Vector2(0, 0)
@@ -29300,6 +29321,7 @@ class HardcoreSurvivalState(State):
         return True
 
     def _try_unlock_near_door_world(self) -> bool:
+        self._ensure_home_highrise_world_setup_for_player()
         if getattr(self, "mount", None) is not None:
             return False
         if (
@@ -29487,6 +29509,7 @@ class HardcoreSurvivalState(State):
 
     def _interact_primary(self) -> None:
         # Primary interact key on the world map: stairs/pickup (doors are walk-into).
+        self._ensure_home_highrise_world_setup_for_player()
         if str(getattr(self, "player_pose", "")) == "sleep" and str(getattr(self, "player_pose_space", "")) == "world":
             self._clear_player_pose()
             self._set_hint("醒来", seconds=0.8)
@@ -29527,7 +29550,58 @@ class HardcoreSurvivalState(State):
             return
         self._try_pickup(quiet=False)
 
+    def _ensure_home_highrise_world_setup_for_player(self) -> None:
+        # Lazy-init home high-rise layout only when the player is in the same
+        # building footprint. Avoids startup reveal while restoring home doors.
+        if bool(getattr(self, "_home_highrise_world_setup_done", False)):
+            return
+        if (
+            bool(getattr(self, "hr_interior", False))
+            or bool(getattr(self, "house_interior", False))
+            or bool(getattr(self, "sch_interior", False))
+        ):
+            return
+
+        home = getattr(self, "home_highrise_door", None)
+        if not (isinstance(home, tuple) and len(home) == 2):
+            return
+        try:
+            hx, hy = int(home[0]), int(home[1])
+        except Exception:
+            return
+
+        found_home = self._multi_house_at(int(hx), int(hy))
+        if found_home is None:
+            return
+        _home_chunk, home_mh = found_home
+
+        try:
+            tx, ty = self._player_tile()
+        except Exception:
+            return
+        found_cur = self._multi_house_at(int(tx), int(ty))
+        if found_cur is None:
+            return
+        _cur_chunk, cur_mh = found_cur
+
+        home_key = (
+            int(getattr(home_mh, "tx0", 0)),
+            int(getattr(home_mh, "ty0", 0)),
+            int(getattr(home_mh, "w", 0)),
+            int(getattr(home_mh, "h", 0)),
+        )
+        cur_key = (
+            int(getattr(cur_mh, "tx0", 0)),
+            int(getattr(cur_mh, "ty0", 0)),
+            int(getattr(cur_mh, "w", 0)),
+            int(getattr(cur_mh, "h", 0)),
+        )
+        if tuple(cur_key) != tuple(home_key):
+            return
+        self._setup_home_highrise_world()
+
     def _player_in_home_world_building(self) -> bool:
+        self._ensure_home_highrise_world_setup_for_player()
         home_key = getattr(self, "home_highrise_world_key", None)
         if not (isinstance(home_key, tuple) and len(home_key) == 4):
             return False
@@ -30350,6 +30424,7 @@ class HardcoreSurvivalState(State):
         tiles[int(my) * int(w) + int(mx)] = int(tile_id)
 
     def _toggle_door_lock(self) -> None:
+        self._ensure_home_highrise_world_setup_for_player()
         if getattr(self, "mount", None) is not None:
             self._set_hint("下车再锁门", seconds=1.1)
             return
@@ -32014,6 +32089,7 @@ class HardcoreSurvivalState(State):
         return True
 
     def _try_use_multi_house_stairs(self) -> bool:
+        self._ensure_home_highrise_world_setup_for_player()
         tx, ty = self._player_tile()
         candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
         chosen: tuple[int, int, int] | None = None
@@ -33483,10 +33559,7 @@ class HardcoreSurvivalState(State):
 
     def _compute_player_pixel_lock_world_xy(self) -> tuple[int, int]:
         # Integer world coords used for pixel-locked camera/render/aim.
-        # NOTE: Pure floor/floor keeps the camera stable (no axis "wobble") at the
-        # cost of occasional 1-frame stalls on slow diagonals. This is preferable
-        # for the current pixel-locked renderer because it avoids the more
-        # noticeable up-left/down-right shake reported by players.
+        # Keep this deterministic and monotonic to avoid diagonal jitter.
         try:
             px = float(self.player.pos.x)
             py = float(self.player.pos.y)
@@ -33512,26 +33585,27 @@ class HardcoreSurvivalState(State):
                 prev_x = None
                 prev_y = None
 
-        eps = 1e-4
+        # Use nearest-int baseline so axis behavior is symmetric.
+        ix = int(round(float(px)))
+        iy = int(round(float(py)))
 
-        def quantize_axis(v: float, vel: float, prev_i: int | None) -> int:
-            if vel > 1e-4:
-                q = int(math.floor(float(v) + float(eps)))
-                if prev_i is not None and q < int(prev_i):
-                    q = int(prev_i)
-                return int(q)
-            if vel < -1e-4:
-                q = int(math.ceil(float(v) - float(eps))) - 1
-                if prev_i is not None and q > int(prev_i):
-                    q = int(prev_i)
-                return int(q)
-            base = int(math.floor(float(v)))
-            if prev_i is not None and abs(float(v) - float(prev_i)) < 0.95:
-                return int(prev_i)
-            return int(base)
+        # Directional monotonic clamp: once moving on an axis, integer lock only
+        # advances in that direction until velocity meaningfully flips.
+        if prev_x is not None:
+            if vx > 1e-4:
+                ix = max(int(ix), int(prev_x))
+            elif vx < -1e-4:
+                ix = min(int(ix), int(prev_x))
+            elif abs(float(px) - float(prev_x)) < 0.5:
+                ix = int(prev_x)
+        if prev_y is not None:
+            if vy > 1e-4:
+                iy = max(int(iy), int(prev_y))
+            elif vy < -1e-4:
+                iy = min(int(iy), int(prev_y))
+            elif abs(float(py) - float(prev_y)) < 0.5:
+                iy = int(prev_y)
 
-        ix = quantize_axis(float(px), float(vx), prev_x)
-        iy = quantize_axis(float(py), float(vy), prev_y)
         return int(ix), int(iy)
 
     def _compute_aim_dir(self) -> pygame.Vector2:
@@ -38564,6 +38638,11 @@ class HardcoreSurvivalState(State):
                 forced_floor = 1
                 forced_floors = 1
 
+        # Global inside key is authoritative for cutaway/slicing scope.
+        inside_key_global = getattr(self, "_inside_building_key", None)
+        if not (isinstance(inside_key_global, tuple) and len(inside_key_global) == 4):
+            inside_key_global = None
+
         # If the player is inside a multi-floor building, slice its facade to the current floor.
         inside_mh: tuple[int, int, int, int] | None = None
         inside_mh_floor = 1
@@ -38669,12 +38748,24 @@ class HardcoreSurvivalState(State):
                         if forced_mh is not None and (int(tx0), int(ty0), int(w), int(h)) == forced_mh:
                             slice_floor = int(forced_floor)
                             slice_floors = int(forced_floors)
-                    if inside_mh is not None and int(style) in (1, 6):
+                    if (
+                        inside_mh is not None
+                        and int(style) in (1, 6)
+                        and inside_key_global is not None
+                        and (int(tx0), int(ty0), int(w), int(h)) == tuple(inside_key_global)
+                    ):
                         itx0, ity0, iw, ih = inside_mh
                         if (int(itx0), int(ity0), int(iw), int(ih)) == (int(tx0), int(ty0), int(w), int(h)):
                             slice_floor = int(inside_mh_floor)
                             slice_floors = int(inside_mh_floors)
-                    if slice_floor is None and inside_building is not None and int(style) in (1, 6) and int(inside_building_floors) > 1:
+                    if (
+                        slice_floor is None
+                        and inside_building is not None
+                        and int(style) in (1, 6)
+                        and int(inside_building_floors) > 1
+                        and inside_key_global is not None
+                        and (int(tx0), int(ty0), int(w), int(h)) == tuple(inside_key_global)
+                    ):
                         btx0, bty0, bw, bh = inside_building
                         if (int(btx0), int(bty0), int(bw), int(bh)) == (int(tx0), int(ty0), int(w), int(h)):
                             slice_floor = 1
@@ -40211,23 +40302,26 @@ class HardcoreSurvivalState(State):
                                     int(floor_slice_h),
                                 )
 
-            # Stabilize inside-building detection across frames.
-            # If we were inside a building last frame and we're still within its
-            # footprint, keep that building as "inside" even if the current tile
-            # classification briefly fails (prevents nearby buildings' facades
-            # popping/disappearing when entering houses).
+            # Stabilize inside-building detection across frames, but only for a
+            # very short miss to avoid dragging cutaway state onto neighboring buildings.
             try:
                 if isinstance(prev_inside_key, tuple) and len(prev_inside_key) == 4:
-                    bx0, by0, bw, bh = (
-                        int(prev_inside_key[0]),
-                        int(prev_inside_key[1]),
-                        int(prev_inside_key[2]),
-                        int(prev_inside_key[3]),
-                    )
-                    if int(bw) > 0 and int(bh) > 0 and int(bx0) <= int(ptx) < int(bx0) + int(bw) and int(by0) <= int(pty) < int(by0) + int(bh):
-                        self._inside_building_key = (int(bx0), int(by0), int(bw), int(bh))
+                    if self._inside_building_key is None:
+                        miss_n = int(getattr(self, "_inside_building_miss_frames", 0) or 0) + 1
+                        self._inside_building_miss_frames = int(miss_n)
+                        if int(miss_n) <= 1:
+                            bx0, by0, bw, bh = (
+                                int(prev_inside_key[0]),
+                                int(prev_inside_key[1]),
+                                int(prev_inside_key[2]),
+                                int(prev_inside_key[3]),
+                            )
+                            if int(bw) > 0 and int(bh) > 0 and int(bx0) <= int(ptx) < int(bx0) + int(bw) and int(by0) <= int(pty) < int(by0) + int(bh):
+                                self._inside_building_key = (int(bx0), int(by0), int(bw), int(bh))
+                    else:
+                        self._inside_building_miss_frames = 0
             except Exception:
-                pass
+                self._inside_building_miss_frames = 0
         except Exception:
             self._inside_highrise_draw_mask = None
             self._inside_highrise_floor_overlay = None
