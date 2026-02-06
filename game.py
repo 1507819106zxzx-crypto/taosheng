@@ -744,6 +744,10 @@ class GameConfig:
     scale: int = 2
     fullscreen: bool = True
     show_grid: bool = True
+    # Movement: when True, diagonal movement is normalized so it isn't faster,
+    # but this can introduce visible pixel-step jitter at low speeds (e.g. 60px/s).
+    # When False, diagonal uses raw 8-way input for smoother pixel stepping.
+    normalize_diagonal: bool = False
     # Lighting (tile radius + intensity/opacity scale).
     lamp_world_radius_tiles: int = 3
     lamp_world_intensity: float = 1.0
@@ -760,6 +764,7 @@ class GameConfig:
                 scale=int(data.get("scale", 2)),
                 fullscreen=bool(data.get("fullscreen", True)),
                 show_grid=bool(data.get("show_grid", True)),
+                normalize_diagonal=bool(data.get("normalize_diagonal", False)),
                 lamp_world_radius_tiles=int(data.get("lamp_world_radius_tiles", 5)),
                 lamp_world_intensity=float(data.get("lamp_world_intensity", 1.0)),
                 lamp_world_halo=float(data.get("lamp_world_halo", data.get("lamp_world_opacity", 0.35))),
@@ -777,6 +782,7 @@ class GameConfig:
                     "scale": int(self.scale),
                     "fullscreen": bool(self.fullscreen),
                     "show_grid": bool(self.show_grid),
+                    "normalize_diagonal": bool(self.normalize_diagonal),
                     "lamp_world_radius_tiles": int(self.lamp_world_radius_tiles),
                     "lamp_world_intensity": float(self.lamp_world_intensity),
                     "lamp_world_halo": float(self.lamp_world_halo),
@@ -13144,6 +13150,19 @@ class HardcoreSurvivalState(State):
             if event.key in (pygame.K_F3,):
                 self._debug = not self._debug
                 return
+            if event.key in (pygame.K_F6,):
+                cfg = getattr(self.app, "config", None)
+                if cfg is not None:
+                    cfg.normalize_diagonal = not bool(getattr(cfg, "normalize_diagonal", False))
+                    try:
+                        cfg.save()
+                    except Exception:
+                        pass
+                    if bool(getattr(cfg, "normalize_diagonal", False)):
+                        self._set_hint("斜向归一化：开（不加速，但更抖）", seconds=1.2)
+                    else:
+                        self._set_hint("斜向归一化：关（更顺，但斜向更快）", seconds=1.2)
+                return
 
     def _inv_clear_ui_state(self) -> None:
         self._inv_hover_idx = None
@@ -22369,9 +22388,12 @@ class HardcoreSurvivalState(State):
             if self.mount != "rv":
                 self.player.facing = pygame.Vector2(move.x, move.y)
 
+        cfg = getattr(self.app, "config", None)
+        normalize_diag = bool(getattr(cfg, "normalize_diagonal", False)) if cfg is not None else False
+
         if getattr(self, "sch_interior", False):
             base_speed = 60.0
-            self.sch_int_vel = move * base_speed
+            self.sch_int_vel = (move if bool(normalize_diag) else move_raw) * base_speed
             self.player_sprinting = False
             if self.sch_int_vel.length_squared() > 0.1:
                 self.sch_int_facing = pygame.Vector2(self.sch_int_vel).normalize()
@@ -22393,7 +22415,7 @@ class HardcoreSurvivalState(State):
 
         if getattr(self, "house_interior", False):
             base_speed = 60.0
-            self.house_int_vel = move * base_speed
+            self.house_int_vel = (move if bool(normalize_diag) else move_raw) * base_speed
             self.player_sprinting = False
             if self.house_int_vel.length_squared() > 0.1:
                 self.house_int_facing = pygame.Vector2(self.house_int_vel).normalize()
@@ -22456,7 +22478,10 @@ class HardcoreSurvivalState(State):
                                     move = diff.normalize()
                                     base_speed = 56.0
 
-            self.hr_int_vel = move * base_speed
+            hr_move = move
+            if (not bool(normalize_diag)) and move_raw.length_squared() > 0.001:
+                hr_move = move_raw
+            self.hr_int_vel = hr_move * base_speed
             self.player_sprinting = False
             if self.hr_int_vel.length_squared() > 0.1:
                 self.hr_int_facing = pygame.Vector2(self.hr_int_vel).normalize()
@@ -22834,7 +22859,7 @@ class HardcoreSurvivalState(State):
             # Keep raw 8-way input (no normalization) so cardinal walking stays 
             # pixel-perfect, but normalize diagonal movement so斜向不会更快。 
             move_vel = pygame.Vector2(move_raw) 
-            if abs(float(move_raw.x)) > 1e-6 and abs(float(move_raw.y)) > 1e-6: 
+            if bool(normalize_diag) and abs(float(move_raw.x)) > 1e-6 and abs(float(move_raw.y)) > 1e-6: 
                 move_vel = pygame.Vector2(move) 
             self.player.vel = move_vel * speed 
 

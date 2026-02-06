@@ -2,6 +2,7 @@
   "scale": 2,
   "fullscreen": true,
   "show_grid": false,
+  "normalize_diagonal": false,
   "lamp_world_radius_tiles": 3,
   "lamp_world_intensity": 1.0,
   "lamp_world_halo": 0.35,
