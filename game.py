@@ -33585,9 +33585,11 @@ class HardcoreSurvivalState(State):
                 prev_x = None
                 prev_y = None
 
-        # Use nearest-int baseline so axis behavior is symmetric.
-        ix = int(round(float(px)))
-        iy = int(round(float(py)))
+        # Use iround (round-half-away-from-zero) instead of Python's round()
+        # (banker's rounding) so the camera and collision rects always agree on
+        # which integer pixel a .5 boundary belongs to.
+        ix = iround(float(px))
+        iy = iround(float(py))
 
         # Directional monotonic clamp: once moving on an axis, integer lock only
         # advances in that direction until velocity meaningfully flips.
@@ -33605,6 +33607,26 @@ class HardcoreSurvivalState(State):
                 iy = min(int(iy), int(prev_y))
             elif abs(float(py) - float(prev_y)) < 0.5:
                 iy = int(prev_y)
+
+        # Diagonal axis synchronization: when one axis crosses an integer
+        # boundary this frame but the other stalls, nudge the stalled axis
+        # forward if the player's float position has progressed enough toward
+        # the next pixel.  This turns the visible 1-pixel "staircase" pattern
+        # into smoother diagonal scrolling (most noticeable on upper-left).
+        if prev_x is not None and prev_y is not None:
+            if abs(vx) > 1e-4 and abs(vy) > 1e-4:
+                dx = ix - prev_x
+                dy = iy - prev_y
+                if dx != 0 and dy == 0:
+                    sign_y = 1 if vy > 0 else -1
+                    progress_y = (py - float(prev_y)) * float(sign_y)
+                    if progress_y >= 0.4:
+                        iy = int(prev_y) + sign_y
+                elif dy != 0 and dx == 0:
+                    sign_x = 1 if vx > 0 else -1
+                    progress_x = (px - float(prev_x)) * float(sign_x)
+                    if progress_x >= 0.4:
+                        ix = int(prev_x) + sign_x
 
         return int(ix), int(iy)
 
