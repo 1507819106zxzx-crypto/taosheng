@@ -12712,7 +12712,6 @@ class HardcoreSurvivalState(State):
         except Exception:
             pass
         self._set_hint(f"你的家：{self.home_highrise_room}", seconds=2.0)
-        self._setup_home_highrise_world()
 
         # Ensure the starter vehicles don't spawn "inside" a building.
         def vehicle_clear(p: pygame.Vector2, w: int, h: int) -> bool:
@@ -24296,6 +24295,11 @@ class HardcoreSurvivalState(State):
                      "pose_cache": {},
                  }
              )
+            try:
+                self.npcs[-1]['spawn_fade_left'] = 0.24
+                self.npcs[-1]['spawn_fade_total'] = 0.24
+            except Exception:
+                pass
 
         # Key NPCs around the core POIs.
         gate_tx, gate_ty = tuple(getattr(self, "story_gate_tile", (stx, sty)))
@@ -24897,6 +24901,14 @@ class HardcoreSurvivalState(State):
             npc_id = str(npc.get("id", "") or "")
             speed = float(npc.get("speed", 28.0))
             stuck_t = float(npc.get("stuck", 0.0))
+
+            fade_left = 0.0
+            try:
+                fade_left = float(npc.get('spawn_fade_left', 0.0) or 0.0)
+            except Exception:
+                fade_left = 0.0
+            if fade_left > 0.0:
+                npc['spawn_fade_left'] = float(max(0.0, float(fade_left) - float(dt_time)))
 
             # Stable per-NPC RNG.
             rng = npc.get("rng", None)
@@ -25601,12 +25613,20 @@ class HardcoreSurvivalState(State):
         rng: random.Random,
         center_tile: tuple[int, int],
         radius: int,
+        offscreen_only: bool = True,
     ) -> dict[str, object] | None:
         if not isinstance(rng, random.Random):
             rng = random.Random(int(getattr(self, "seed", 0)) ^ 0x54B3_9C21)
         radius = int(max(6, int(radius)))
         ts = float(self.TILE_SIZE)
         cx, cy = int(center_tile[0]), int(center_tile[1])
+        center_world = pygame.Vector2((float(cx) + 0.5) * ts, (float(cy) + 0.5) * ts)
+        view_r = float(math.hypot(float(INTERNAL_W) * 0.5, float(INTERNAL_H) * 0.5))
+        spawn_min_dist = 0.0
+        if bool(offscreen_only):
+            max_possible = float(max(ts * 2.0, float(radius) * ts * 0.9))
+            spawn_min_dist = float(min(float(view_r + ts * 3.0), float(max_possible)))
+        spawn_min_dist2 = float(spawn_min_dist * spawn_min_dist)
 
         try:
             car_pool = [mid for mid in self._CAR_MODELS.keys() if str(mid) not in ("rv", "police")]
@@ -25684,6 +25704,9 @@ class HardcoreSurvivalState(State):
                 px += float(lane_offset)
             pos = pygame.Vector2(float(px), float(py))
 
+            if float(spawn_min_dist2) > 0.0 and float((pos - center_world).length_squared()) < float(spawn_min_dist2):
+                continue
+
             too_close = False
             for a in traffic:
                 if not isinstance(a, dict):
@@ -25721,6 +25744,8 @@ class HardcoreSurvivalState(State):
                 "turn_cd": float(rng.uniform(0.0, 1.2)),
                 "rng": random.Random(int(rng.randrange(0, 2**31 - 1)) ^ 0x1A2B_3C4D),
             }
+            actor['spawn_fade_left'] = 0.24
+            actor['spawn_fade_total'] = 0.24
 
             if kind == "car":
                 # Heading in radians; 0 means "right". We rotate by -deg in draw.
@@ -25882,6 +25907,44 @@ class HardcoreSurvivalState(State):
             if not isinstance(prng, random.Random):
                 prng = random.Random(int(rng.randrange(0, 2**31 - 1)) ^ 0x1A2B_3C4D)
                 a["rng"] = prng
+
+            fade_left = 0.0
+            try:
+                fade_left = float(a.get('spawn_fade_left', 0.0) or 0.0)
+            except Exception:
+                fade_left = 0.0
+            if fade_left > 0.0:
+                a['spawn_fade_left'] = float(max(0.0, float(fade_left) - float(dt_time)))
+
+            need_reseed = False
+            try:
+                if float((pos - ppos).length_squared()) > float(max_dist2):
+                    need_reseed = True
+                tx_chk = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                ty_chk = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                if not bool(self.world.is_road(int(tx_chk), int(ty_chk))):
+                    need_reseed = True
+                if self._peek_building_at_tile(int(tx_chk), int(ty_chk)) is not None:
+                    need_reseed = True
+            except Exception:
+                need_reseed = True
+            if bool(need_reseed):
+                replaced = False
+                for _ in range(6):
+                    new = self._story_spawn_one_traffic(
+                        rng=rng,
+                        center_tile=(int(center[0]), int(center[1])),
+                        radius=70,
+                        offscreen_only=True,
+                    )
+                    if isinstance(new, dict):
+                        a.clear()
+                        a.update(new)
+                        replaced = True
+                        break
+                if not bool(replaced):
+                    a['pos'] = pygame.Vector2(pos)
+                continue
 
             # If the actor is too far away (or off-road), respawn it near the player.
             try:
@@ -26397,6 +26460,16 @@ class HardcoreSurvivalState(State):
             sy = iround(float(pos.y) - float(cam_y))
             if sx < -120 or sx > INTERNAL_W + 120 or sy < -120 or sy > INTERNAL_H + 120:
                 continue
+            draw_alpha = 255
+            try:
+                fade_left = float(a.get('spawn_fade_left', 0.0) or 0.0)
+                fade_total = float(a.get('spawn_fade_total', 0.0) or 0.0)
+                if fade_left > 0.0 and fade_total > 1e-6:
+                    draw_alpha = int(clamp(int(round(255.0 * (1.0 - fade_left / fade_total))), 0, 255))
+            except Exception:
+                draw_alpha = 255
+            if draw_alpha <= 0:
+                continue
             kind = str(a.get("kind", "car") or "car")
             mid = str(a.get("model_id", "beetle") or "beetle")
             frame = int(a.get("frame", 0)) % 2
@@ -26449,8 +26522,18 @@ class HardcoreSurvivalState(State):
                 if shadow_base is not None:
                     sh = rotate_pixel_sprite(shadow_base, deg, step_deg=5.0)
                     srect = sh.get_rect(center=(rect.centerx + 2, rect.centery + 6))
-                    surface.blit(sh, srect)
-                surface.blit(spr, rect)
+                    if int(draw_alpha) >= 255:
+                        surface.blit(sh, srect)
+                    else:
+                        sh2 = sh.copy()
+                        sh2.set_alpha(int(draw_alpha))
+                        surface.blit(sh2, srect)
+                if int(draw_alpha) >= 255:
+                    surface.blit(spr, rect)
+                else:
+                    spr2 = spr.copy()
+                    spr2.set_alpha(int(draw_alpha))
+                    surface.blit(spr2, rect)
                 continue
 
             # Two-wheel traffic (bike/moto) with rider.
@@ -26468,9 +26551,15 @@ class HardcoreSurvivalState(State):
             rect.bottom = int(int(ground_y) + int(rect.h - baseline_y))
             shadow = self._two_wheel_shadow_rect(rect, d, ground_y=int(ground_y))
             sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
-            pygame.draw.ellipse(sh, (0, 0, 0, 120), sh.get_rect())
+            sh_alpha = int(clamp(int(round(120.0 * float(draw_alpha) / 255.0)), 0, 255))
+            pygame.draw.ellipse(sh, (0, 0, 0, sh_alpha), sh.get_rect())
             surface.blit(sh, shadow.topleft)
-            surface.blit(spr, rect)
+            if int(draw_alpha) >= 255:
+                surface.blit(spr, rect)
+            else:
+                spr2 = spr.copy()
+                spr2.set_alpha(int(draw_alpha))
+                surface.blit(spr2, rect)
 
             rider = None
             rf = a.get("rider_frames", None)
@@ -26487,7 +26576,12 @@ class HardcoreSurvivalState(State):
                 if str(mid).startswith("moto"):
                     seat_from_ground = max(2, int(seat_from_ground) - 1)
                 rrect.midbottom = (rect.centerx, int(int(ground_y) - int(seat_from_ground)))
-                surface.blit(rider, rrect)
+                if int(draw_alpha) >= 255:
+                    surface.blit(rider, rrect)
+                else:
+                    rider2 = rider.copy()
+                    rider2.set_alpha(int(draw_alpha))
+                    surface.blit(rider2, rrect)
 
     def _story_set_npc_hostile(self, npc_id: str, *, seconds: float = 10.0) -> None:
         npc_id = str(npc_id or "").strip()
@@ -26925,8 +27019,30 @@ class HardcoreSurvivalState(State):
 
             shadow = pygame.Rect(0, 0, max(6, rect.w - 4), 4)
             shadow.center = (int(rect.centerx), int(rect.bottom - 2))
-            pygame.draw.ellipse(surface, (0, 0, 0), shadow)
-            surface.blit(spr, rect)
+            draw_alpha = 255
+            try:
+                fade_left = float(npc.get('spawn_fade_left', 0.0) or 0.0)
+                fade_total = float(npc.get('spawn_fade_total', 0.0) or 0.0)
+                if fade_left > 0.0 and fade_total > 1e-6:
+                    draw_alpha = int(clamp(int(round(255.0 * (1.0 - fade_left / fade_total))), 0, 255))
+            except Exception:
+                draw_alpha = 255
+            if draw_alpha <= 0:
+                continue
+            if int(draw_alpha) >= 255:
+                pygame.draw.ellipse(surface, (0, 0, 0), shadow)
+                surface.blit(spr, rect)
+            else:
+                sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
+                sh_alpha = int(clamp(int(round(120.0 * float(draw_alpha) / 255.0)), 0, 255))
+                pygame.draw.ellipse(sh, (0, 0, 0, sh_alpha), sh.get_rect())
+                surface.blit(sh, shadow.topleft)
+                spr2 = spr.copy()
+                spr2.set_alpha(int(draw_alpha))
+                surface.blit(spr2, rect)
+
+            if int(draw_alpha) < 210:
+                continue
 
             # Name tag when close (avoids clutter).
             try:
@@ -27318,6 +27434,11 @@ class HardcoreSurvivalState(State):
                     "pose_cache": {},
                 }
             )
+            try:
+                npcs[-1]['spawn_fade_left'] = 0.24
+                npcs[-1]['spawn_fade_total'] = 0.24
+            except Exception:
+                pass
 
         def reachable_in_building(
             bkey: tuple[int, int, int, int],
@@ -27677,9 +27798,18 @@ class HardcoreSurvivalState(State):
             ptx, pty = self._player_tile()
             tx_best = None
             ty_best = None
+            player_center = pygame.Vector2((float(ptx) + 0.5) * float(self.TILE_SIZE), (float(pty) + 0.5) * float(self.TILE_SIZE))
+            view_r = float(math.hypot(float(INTERNAL_W) * 0.5, float(INTERNAL_H) * 0.5))
+            max_spawn_r = float(22.0 * float(self.TILE_SIZE))
+            min_spawn_dist = float(min(float(view_r + float(self.TILE_SIZE) * 2.0), float(max_spawn_r * 0.85)))
+            min_spawn_dist2 = float(min_spawn_dist * min_spawn_dist)
             for _ in range(140):
                 tx = int(ptx + rng.randint(-22, 22))
                 ty = int(pty + rng.randint(-22, 22))
+                wx = (float(tx) + 0.5) * float(self.TILE_SIZE)
+                wy = (float(ty) + 0.5) * float(self.TILE_SIZE)
+                if float((pygame.Vector2(wx, wy) - player_center).length_squared()) < float(min_spawn_dist2):
+                    continue
                 if abs(int(tx) - int(ptx)) < 10 and abs(int(ty) - int(pty)) < 10:
                     continue
                 try:
@@ -27763,6 +27893,11 @@ class HardcoreSurvivalState(State):
                     "attack_anim_left": 0.0,
                 }
             )
+            try:
+                npcs[-1]['spawn_fade_left'] = 0.24
+                npcs[-1]['spawn_fade_total'] = 0.24
+            except Exception:
+                pass
             spawn_left = 0.6
             self.crime_spawn_left = float(spawn_left)
 
@@ -33359,8 +33494,44 @@ class HardcoreSurvivalState(State):
             px = float(getattr(getattr(self.player, "pos", None), "x", 0.0))
             py = float(getattr(getattr(self.player, "pos", None), "y", 0.0))
 
-        ix = int(math.floor(px))
-        iy = int(math.floor(py))
+        try:
+            vx = float(getattr(self.player.vel, 'x', 0.0))
+            vy = float(getattr(self.player.vel, 'y', 0.0))
+        except Exception:
+            vx = 0.0
+            vy = 0.0
+
+        prev = getattr(self, '_player_pixel_lock_world_xy', None)
+        prev_x = None
+        prev_y = None
+        if isinstance(prev, tuple) and len(prev) == 2:
+            try:
+                prev_x = int(prev[0])
+                prev_y = int(prev[1])
+            except Exception:
+                prev_x = None
+                prev_y = None
+
+        eps = 1e-4
+
+        def quantize_axis(v: float, vel: float, prev_i: int | None) -> int:
+            if vel > 1e-4:
+                q = int(math.floor(float(v) + float(eps)))
+                if prev_i is not None and q < int(prev_i):
+                    q = int(prev_i)
+                return int(q)
+            if vel < -1e-4:
+                q = int(math.ceil(float(v) - float(eps))) - 1
+                if prev_i is not None and q > int(prev_i):
+                    q = int(prev_i)
+                return int(q)
+            base = int(math.floor(float(v)))
+            if prev_i is not None and abs(float(v) - float(prev_i)) < 0.95:
+                return int(prev_i)
+            return int(base)
+
+        ix = quantize_axis(float(px), float(vx), prev_x)
+        iy = quantize_axis(float(py), float(vy), prev_y)
         return int(ix), int(iy)
 
     def _compute_aim_dir(self) -> pygame.Vector2:
