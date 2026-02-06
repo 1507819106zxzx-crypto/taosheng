@@ -33567,12 +33567,19 @@ class HardcoreSurvivalState(State):
             px = float(getattr(getattr(self.player, "pos", None), "x", 0.0))
             py = float(getattr(getattr(self.player, "pos", None), "y", 0.0))
 
-        try:
-            vx = float(getattr(self.player.vel, 'x', 0.0))
-            vy = float(getattr(self.player.vel, 'y', 0.0))
-        except Exception:
-            vx = 0.0
-            vy = 0.0
+        # Use actual per-frame displacement direction (not transient velocity)
+        # so collision corrections don't flip lock direction and cause wobble.
+        dx_f = 0.0
+        dy_f = 0.0
+        prev_float = getattr(self, '_player_pixel_lock_prev_world_xy', None)
+        if isinstance(prev_float, tuple) and len(prev_float) == 2:
+            try:
+                dx_f = float(px) - float(prev_float[0])
+                dy_f = float(py) - float(prev_float[1])
+            except Exception:
+                dx_f = 0.0
+                dy_f = 0.0
+        self._player_pixel_lock_prev_world_xy = (float(px), float(py))
 
         prev = getattr(self, '_player_pixel_lock_world_xy', None)
         prev_x = None
@@ -33592,41 +33599,21 @@ class HardcoreSurvivalState(State):
         iy = iround(float(py))
 
         # Directional monotonic clamp: once moving on an axis, integer lock only
-        # advances in that direction until velocity meaningfully flips.
+        # advances in that direction until actual displacement flips.
         if prev_x is not None:
-            if vx > 1e-4:
+            if dx_f > 1e-6:
                 ix = max(int(ix), int(prev_x))
-            elif vx < -1e-4:
+            elif dx_f < -1e-6:
                 ix = min(int(ix), int(prev_x))
             elif abs(float(px) - float(prev_x)) < 0.5:
                 ix = int(prev_x)
         if prev_y is not None:
-            if vy > 1e-4:
+            if dy_f > 1e-6:
                 iy = max(int(iy), int(prev_y))
-            elif vy < -1e-4:
+            elif dy_f < -1e-6:
                 iy = min(int(iy), int(prev_y))
             elif abs(float(py) - float(prev_y)) < 0.5:
                 iy = int(prev_y)
-
-        # Diagonal axis synchronization: when one axis crosses an integer
-        # boundary this frame but the other stalls, nudge the stalled axis
-        # forward if the player's float position has progressed enough toward
-        # the next pixel.  This turns the visible 1-pixel "staircase" pattern
-        # into smoother diagonal scrolling (most noticeable on upper-left).
-        if prev_x is not None and prev_y is not None:
-            if abs(vx) > 1e-4 and abs(vy) > 1e-4:
-                dx = ix - prev_x
-                dy = iy - prev_y
-                if dx != 0 and dy == 0:
-                    sign_y = 1 if vy > 0 else -1
-                    progress_y = (py - float(prev_y)) * float(sign_y)
-                    if progress_y >= 0.4:
-                        iy = int(prev_y) + sign_y
-                elif dy != 0 and dx == 0:
-                    sign_x = 1 if vx > 0 else -1
-                    progress_x = (px - float(prev_x)) * float(sign_x)
-                    if progress_x >= 0.4:
-                        ix = int(prev_x) + sign_x
 
         return int(ix), int(iy)
 
