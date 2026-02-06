@@ -12746,6 +12746,14 @@ class HardcoreSurvivalState(State):
 
         self.rv.pos = find_clear_vehicle_pos(pygame.Vector2(self.rv.pos), w=int(self.rv.w), h=int(self.rv.h))
         self.bike.pos = find_clear_vehicle_pos(pygame.Vector2(self.bike.pos), w=int(self.bike.w), h=int(self.bike.h))
+
+        # Spawn safety net: ensure the player never starts overlapped with the
+        # RV/bike/building colliders (which can feel like "stuck in RV").
+        try:
+            self._ensure_player_spawn_clear()
+        except Exception:
+            pass
+
         spawn_chunk.items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(self.player.pos) + pygame.Vector2(18, 0), item_id="pistol", qty=1))
         spawn_chunk.items.append(HardcoreSurvivalState._WorldItem(pos=pygame.Vector2(self.player.pos) + pygame.Vector2(18, 10), item_id="ammo_9mm", qty=24))
         # Default start: spring morning (season is derived from day index).
@@ -13449,6 +13457,80 @@ class HardcoreSurvivalState(State):
         w, h = self._two_wheel_collider_px(mid)
         self.bike.w = int(w)
         self.bike.h = int(h)
+
+    def _ensure_player_spawn_clear(self) -> None:
+        # Try a depenetration pass first (cheap and preserves intended spawn).
+        try:
+            self.player.pos = self._move_box(
+                pygame.Vector2(self.player.pos),
+                pygame.Vector2(0, 0),
+                0.0,
+                w=int(getattr(self.player, "w", 8)),
+                h=int(getattr(self.player, "collider_h", getattr(self.player, "h", 12))),
+                collide_fn=self._collide_rect_world,
+            )
+        except Exception:
+            pass
+
+        try:
+            rect0 = self.player.rect_at(self.player.pos)
+            if not self._collide_rect_world(rect0):
+                return
+        except Exception:
+            return
+
+        # Hard fallback: nearest free tile around current spawn.
+        ts = int(self.TILE_SIZE)
+        if ts <= 0:
+            return
+        try:
+            base_tx = int(math.floor(float(self.player.pos.x) / float(ts)))
+            base_ty = int(math.floor(float(self.player.pos.y) / float(ts)))
+        except Exception:
+            return
+
+        def tile_center(tx: int, ty: int) -> pygame.Vector2:
+            return pygame.Vector2((float(tx) + 0.5) * float(ts), (float(ty) + 0.5) * float(ts))
+
+        def is_free_at(tx: int, ty: int) -> bool:
+            tx = int(tx)
+            ty = int(ty)
+            try:
+                tid = int(self.world.peek_tile(int(tx), int(ty)))
+            except Exception:
+                return False
+            if bool(self._tile_solid(int(tid))):
+                return False
+            p = tile_center(int(tx), int(ty))
+            try:
+                r = self.player.rect_at(p)
+                return len(self._collide_rect_world(r)) == 0
+            except Exception:
+                return False
+
+        best: tuple[int, int] | None = None
+        max_r = 28
+        for r in range(0, int(max_r) + 1):
+            for dy in range(-int(r), int(r) + 1):
+                for dx in range(-int(r), int(r) + 1):
+                    if max(abs(int(dx)), abs(int(dy))) != int(r):
+                        continue
+                    tx = int(base_tx + int(dx))
+                    ty = int(base_ty + int(dy))
+                    if not is_free_at(int(tx), int(ty)):
+                        continue
+                    best = (int(tx), int(ty))
+                    break
+                if best is not None:
+                    break
+            if best is not None:
+                break
+
+        if best is None:
+            return
+        bx, by = best
+        self.player.vel.update(0, 0)
+        self.player.pos.update((float(bx) + 0.5) * float(ts), (float(by) + 0.5) * float(ts))
 
     def _place_spawn_vehicles_safely(self) -> None:
         # Ensure the spawned RV/bike don't start overlapped with buildings/walls,
