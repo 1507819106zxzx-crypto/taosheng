@@ -22922,7 +22922,14 @@ class HardcoreSurvivalState(State):
 
         # Pixel-locked camera follow: track the player's integer world position.
         # Direction-aware rounding avoids visible 1-frame stalls on diagonals.
-        fx, fy = self._compute_player_pixel_lock_world_xy()
+        if self.mount == "rv":
+            fx = iround(float(getattr(getattr(self.rv, "pos", None), "x", 0.0)))
+            fy = iround(float(getattr(getattr(self.rv, "pos", None), "y", 0.0)))
+        elif self.mount == "bike":
+            fx = iround(float(getattr(getattr(self.bike, "pos", None), "x", 0.0)))
+            fy = iround(float(getattr(getattr(self.bike, "pos", None), "y", 0.0)))
+        else:
+            fx, fy = self._compute_player_pixel_lock_world_xy()
         self._player_pixel_lock_world_xy = (int(fx), int(fy))
         self.cam_x = int(fx - int(INTERNAL_W // 2))
         self.cam_y = int(fy - int(INTERNAL_H // 2))
@@ -27761,6 +27768,15 @@ class HardcoreSurvivalState(State):
 
         if int(lvl) <= 0:
             return
+
+        # Prevent police from spawning instantly on the same frame the crime is committed;
+        # gives the player time to read the hint and avoids visible pop-in near the camera.
+        if int(lvl) >= 2 and int(prev_lvl) < 2:
+            try:
+                cur_spawn = float(getattr(self, "crime_spawn_left", 0.0) or 0.0)
+            except Exception:
+                cur_spawn = 0.0
+            self.crime_spawn_left = float(max(float(cur_spawn), 1.0))
         if int(lvl) >= 2 and int(prev_lvl) < 2:
             self._set_hint(f"犯罪等级 {lvl}：警察出动！", seconds=1.2)
             return
@@ -27927,13 +27943,17 @@ class HardcoreSurvivalState(State):
             tx_best = None
             ty_best = None
             player_center = pygame.Vector2((float(ptx) + 0.5) * float(self.TILE_SIZE), (float(pty) + 0.5) * float(self.TILE_SIZE))
+            ts = float(self.TILE_SIZE)
             view_r = float(math.hypot(float(INTERNAL_W) * 0.5, float(INTERNAL_H) * 0.5))
-            max_spawn_r = float(22.0 * float(self.TILE_SIZE))
-            min_spawn_dist = float(min(float(view_r + float(self.TILE_SIZE) * 2.0), float(max_spawn_r * 0.85)))
+            # Spawn outside the current view so cops "walk in" instead of popping in.
+            radius_tiles = int(max(26, int(math.ceil((float(view_r) + float(ts) * 6.0) / max(1e-6, float(ts))))))
+            radius_tiles = int(clamp(int(radius_tiles), 26, 90))
+            max_possible = float(max(float(ts) * 2.0, float(radius_tiles) * float(ts) * 0.9))
+            min_spawn_dist = float(min(float(view_r + float(ts) * 3.0), float(max_possible)))
             min_spawn_dist2 = float(min_spawn_dist * min_spawn_dist)
-            for _ in range(140):
-                tx = int(ptx + rng.randint(-22, 22))
-                ty = int(pty + rng.randint(-22, 22))
+            for _ in range(220):
+                tx = int(ptx + rng.randint(-int(radius_tiles), int(radius_tiles)))
+                ty = int(pty + rng.randint(-int(radius_tiles), int(radius_tiles)))
                 wx = (float(tx) + 0.5) * float(self.TILE_SIZE)
                 wy = (float(ty) + 0.5) * float(self.TILE_SIZE)
                 if float((pygame.Vector2(wx, wy) - player_center).length_squared()) < float(min_spawn_dist2):
@@ -37967,7 +37987,7 @@ class HardcoreSurvivalState(State):
         deg = -math.degrees(float(self.rv.heading))
         spr = rotate_pixel_sprite(base, deg, step_deg=5.0)
 
-        rect = spr.get_rect(center=(int(round(rvp.x)), int(round(rvp.y))))
+        rect = spr.get_rect(center=(iround(float(rvp.x)), iround(float(rvp.y))))
         if shadow_base is not None:
             shadow = rotate_pixel_sprite(shadow_base, deg, step_deg=5.0)        
             srect = shadow.get_rect(center=(rect.centerx + 2, rect.centery + 6))
