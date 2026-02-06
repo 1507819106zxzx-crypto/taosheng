@@ -4824,7 +4824,7 @@ class HardcoreSurvivalState(State):
         ),
         "beetle": _CarModel(
             id="beetle",
-            name="甲壳虫(风格)",
+            name="圆圆小车(风格)",
             sprite_size=(32, 22),
             collider=(22, 14),
             wheelbase=18.0,
@@ -4836,7 +4836,7 @@ class HardcoreSurvivalState(State):
         ),
         "porsche": _CarModel(
             id="porsche",
-            name="保时捷(风格)",
+            name="流线跑车(风格)",
             sprite_size=(36, 18),
             collider=(26, 12),
             wheelbase=20.0,
@@ -4872,7 +4872,7 @@ class HardcoreSurvivalState(State):
         ),
         "lamborghini": _CarModel(
             id="lamborghini",
-            name="兰博基尼(风格)",
+            name="尖角超跑(风格)",
             sprite_size=(36, 18),
             collider=(26, 12),
             wheelbase=20.0,
@@ -4884,7 +4884,7 @@ class HardcoreSurvivalState(State):
         ),
         "mercedes": _CarModel(
             id="mercedes",
-            name="奔驰(风格)",
+            name="奔奔(风格)",
             sprite_size=(38, 18),
             collider=(28, 12),
             wheelbase=22.0,
@@ -27776,7 +27776,7 @@ class HardcoreSurvivalState(State):
                 cur_spawn = float(getattr(self, "crime_spawn_left", 0.0) or 0.0)
             except Exception:
                 cur_spawn = 0.0
-            self.crime_spawn_left = float(max(float(cur_spawn), 1.0))
+            self.crime_spawn_left = float(max(float(cur_spawn), 2.0))
         if int(lvl) >= 2 and int(prev_lvl) < 2:
             self._set_hint(f"犯罪等级 {lvl}：警察出动！", seconds=1.2)
             return
@@ -27897,14 +27897,48 @@ class HardcoreSurvivalState(State):
             if bool(blocked) or float(spawn_left) > 0.0:
                 return
             center = self._player_tile()
+            ts = float(self.TILE_SIZE)
+            view_r = float(math.hypot(float(INTERNAL_W) * 0.5, float(INTERNAL_H) * 0.5))
+            # Spawn farther than just offscreen to avoid sudden police pop-in near the camera edge.
+            desired_min_dist = float(view_r + ts * 10.0)
+            desired_min_dist2 = float(desired_min_dist * desired_min_dist)
+            center_world = pygame.Vector2((float(center[0]) + 0.5) * ts, (float(center[1]) + 0.5) * ts)
+
+            try:
+                cam_x = float(getattr(self, "cam_x", 0))
+                cam_y = float(getattr(self, "cam_y", 0))
+            except Exception:
+                cam_x, cam_y = 0.0, 0.0
+            cam_margin = float(ts * 4.0)
+
             actor = None
-            for _ in range(60):
-                cand = self._story_spawn_one_traffic(rng=rng, center_tile=(int(center[0]), int(center[1])), radius=70)
-                if isinstance(cand, dict):
-                    if str(cand.get("kind", "")) == "car":
-                        actor = cand
-                        break
+            for _ in range(140):
+                cand = self._story_spawn_one_traffic(
+                    rng=rng,
+                    center_tile=(int(center[0]), int(center[1])),
+                    radius=90,
+                )
+                if not isinstance(cand, dict):
+                    continue
+                try:
+                    pos = pygame.Vector2(cand.get("pos", pygame.Vector2(0, 0)))
+                except Exception:
+                    pos = pygame.Vector2(0, 0)
+
+                if (
+                    float(pos.x) >= float(cam_x) - float(cam_margin)
+                    and float(pos.x) <= float(cam_x) + float(INTERNAL_W) + float(cam_margin)
+                    and float(pos.y) >= float(cam_y) - float(cam_margin)
+                    and float(pos.y) <= float(cam_y) + float(INTERNAL_H) + float(cam_margin)
+                ):
+                    continue
+                if float((pos - center_world).length_squared()) < float(desired_min_dist2):
+                    continue
+
+                if str(cand.get("kind", "")) == "car":
                     actor = cand
+                    break
+                actor = cand
             if not isinstance(actor, dict):
                 return
             d = str(actor.get("dir", "right") or "right")
@@ -27928,7 +27962,7 @@ class HardcoreSurvivalState(State):
             for k in ("driver_style", "driver_avatar", "rider_avatar", "rider_frames"):
                 actor.pop(k, None)
             traffic.append(actor)
-            spawn_left = 0.7
+            spawn_left = 1.2
             self.crime_spawn_left = float(spawn_left)
 
         def spawn_police_npc(*, role: str) -> None:
@@ -27946,19 +27980,20 @@ class HardcoreSurvivalState(State):
             ts = float(self.TILE_SIZE)
             view_r = float(math.hypot(float(INTERNAL_W) * 0.5, float(INTERNAL_H) * 0.5))
             # Spawn outside the current view so cops "walk in" instead of popping in.
-            radius_tiles = int(max(26, int(math.ceil((float(view_r) + float(ts) * 6.0) / max(1e-6, float(ts))))))
+            # Use a generous extra margin so they don't immediately pop in at the camera edge.
+            radius_tiles = int(max(26, int(math.ceil((float(view_r) + float(ts) * 14.0) / max(1e-6, float(ts))))))
             radius_tiles = int(clamp(int(radius_tiles), 26, 90))
             max_possible = float(max(float(ts) * 2.0, float(radius_tiles) * float(ts) * 0.9))
-            min_spawn_dist = float(min(float(view_r + float(ts) * 3.0), float(max_possible)))
+            min_spawn_dist = float(min(float(view_r + float(ts) * 10.0), float(max_possible)))
             min_spawn_dist2 = float(min_spawn_dist * min_spawn_dist)
-            for _ in range(220):
+            for _ in range(320):
                 tx = int(ptx + rng.randint(-int(radius_tiles), int(radius_tiles)))
                 ty = int(pty + rng.randint(-int(radius_tiles), int(radius_tiles)))
                 wx = (float(tx) + 0.5) * float(self.TILE_SIZE)
                 wy = (float(ty) + 0.5) * float(self.TILE_SIZE)
                 if float((pygame.Vector2(wx, wy) - player_center).length_squared()) < float(min_spawn_dist2):
                     continue
-                if abs(int(tx) - int(ptx)) < 10 and abs(int(ty) - int(pty)) < 10:
+                if abs(int(tx) - int(ptx)) < 14 and abs(int(ty) - int(pty)) < 14:
                     continue
                 try:
                     if self._peek_building_at_tile(int(tx), int(ty)) is not None:
@@ -28046,7 +28081,7 @@ class HardcoreSurvivalState(State):
                 npcs[-1]['spawn_fade_total'] = 0.24
             except Exception:
                 pass
-            spawn_left = 0.6
+            spawn_left = 1.0
             self.crime_spawn_left = float(spawn_left)
 
         # Keep police NPCs hostile while wanted is active.
