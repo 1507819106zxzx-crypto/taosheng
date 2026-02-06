@@ -33719,6 +33719,38 @@ class HardcoreSurvivalState(State):
         else:
             sy = int(math.ceil(float(ry)))
 
+        # On slow normalized diagonals (e.g., 1px/frame cardinals -> 0.707px/frame
+        # diagonals), X/Y residuals stay phase-locked and produce occasional
+        # (0,0) frames. That "full-frame stall" reads as camera shake/stutter.
+        #
+        # Break the tie by advancing *one* axis on such frames (alternating axes),
+        # borrowing from the residual so long-term average speed stays correct.
+        try:
+            diag = abs(float(dx_f)) > 1e-6 and abs(float(dy_f)) > 1e-6
+            slow = abs(float(dx_f)) < 1.05 and abs(float(dy_f)) < 1.05
+            if diag and slow and int(sx) == 0 and int(sy) == 0:
+                # Only do this when we're "close enough" to a step; avoids
+                # large negative residual spikes at very low speeds.
+                if abs(float(rx)) >= 0.55 and abs(float(ry)) >= 0.55:
+                    phase = int(getattr(self, "_player_pixel_lock_diag_phase", 0))
+                    # Pick the axis with larger residual magnitude; if equal,
+                    # alternate for symmetry.
+                    if abs(float(rx)) > abs(float(ry)) + 1e-6:
+                        choose_x = True
+                    elif abs(float(ry)) > abs(float(rx)) + 1e-6:
+                        choose_x = False
+                    else:
+                        choose_x = (int(phase) % 2) == 0
+                    if choose_x:
+                        sx = 1 if float(rx) > 0.0 else -1
+                        sy = 0
+                    else:
+                        sx = 0
+                        sy = 1 if float(ry) > 0.0 else -1
+                    self._player_pixel_lock_diag_phase = int(phase) + 1
+        except Exception:
+            pass
+
         rx = float(rx) - float(sx)
         ry = float(ry) - float(sy)
         self._player_pixel_lock_residual_xy = (float(rx), float(ry))
