@@ -25357,6 +25357,11 @@ class HardcoreSurvivalState(State):
             vel = pygame.Vector2(0, 0)
             if d.length_squared() > 1.0:
                 try:
+                    axis_pref = 0
+                    try:
+                        axis_pref = int(npc.get("axis", 0))
+                    except Exception:
+                        axis_pref = 0
                     # Match player: speed is affected by terrain + weather.
                     try:
                         tx_u = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
@@ -25365,7 +25370,15 @@ class HardcoreSurvivalState(State):
                         sp = float(speed) * float(self._tile_slow(tile_under)) * float(self._weather_move_mult())
                     except Exception:
                         sp = float(speed)
-                    vel = d.normalize() * float(sp)
+                    if float(stuck_t) > 0.25 and abs(float(d.x)) > 0.5 and abs(float(d.y)) > 0.5:
+                        # While stuck, walk axis-by-axis to slide around corners instead of
+                        # continuously pushing into the same diagonal collision.
+                        if int(axis_pref) == 0:
+                            vel.x = float(sp) if float(d.x) >= 0.0 else -float(sp)
+                        else:
+                            vel.y = float(sp) if float(d.y) >= 0.0 else -float(sp)
+                    else:
+                        vel = d.normalize() * float(sp)
                 except Exception:
                     vel = pygame.Vector2(0, 0)
 
@@ -25425,12 +25438,21 @@ class HardcoreSurvivalState(State):
                 pass
 
             # Stuck detection: if we're trying to move but can't, re-roll goals faster.
+            stuck_prev = float(stuck_t)
             want_move = float(d.length_squared()) > float((self.TILE_SIZE * 0.65) ** 2)
             barely = float(moved.length_squared()) < 0.20
             if bool(want_move and barely):
                 stuck_t = float(stuck_t) + float(dt_time)
             else:
                 stuck_t = max(0.0, float(stuck_t) - float(dt_time) * 1.8)
+            # While stuck, alternate axis preference periodically so NPCs can route around corners.
+            try:
+                axis_pref = int(npc.get("axis", 0))
+            except Exception:
+                axis_pref = 0
+            if bool(want_move and barely) and int(stuck_t // 0.35) != int(stuck_prev // 0.35):
+                axis_pref = 1 - int(axis_pref)
+            npc["axis"] = int(axis_pref)
             # Don't let NPCs remain stuck on road tiles (looks like "standing in traffic").
             if float(stuck_t) > 0.45:
                 try:
@@ -26270,6 +26292,47 @@ class HardcoreSurvivalState(State):
                         except Exception:
                             return True
                     return False
+
+                # World collision: traffic should never clip into building footprints/walls.
+                if not blocked:
+                    try:
+                        ts = float(self.TILE_SIZE)
+                        left_t = int(math.floor(float(trect.left) / float(ts)))
+                        right_t = int(math.floor(float(trect.right - 1) / float(ts)))
+                        top_t = int(math.floor(float(trect.top) / float(ts)))
+                        bottom_t = int(math.floor(float(trect.bottom - 1) / float(ts)))
+                        for tty in range(int(top_t), int(bottom_t) + 1):
+                            for ttx in range(int(left_t), int(right_t) + 1):
+                                try:
+                                    if self._peek_building_at_tile(int(ttx), int(tty)) is not None:
+                                        blocked = True
+                                        break
+                                except Exception:
+                                    pass
+                                try:
+                                    tile = int(self.world.peek_tile(int(ttx), int(tty), default=int(self.T_GRASS)))
+                                except Exception:
+                                    tile = int(self.T_GRASS)
+                                if tile in (
+                                    int(self.T_FLOOR),
+                                    int(self.T_DOOR),
+                                    int(self.T_DOOR_HOME),
+                                    int(self.T_DOOR_LOCKED),
+                                    int(self.T_DOOR_HOME_LOCKED),
+                                    int(self.T_DOOR_BROKEN),
+                                    int(self.T_ELEVATOR),
+                                    int(self.T_STAIRS_UP),
+                                    int(self.T_STAIRS_DOWN),
+                                ):
+                                    blocked = True
+                                    break
+                                if bool(self._tile_solid(int(tile))):
+                                    blocked = True
+                                    break
+                            if blocked:
+                                break
+                    except Exception:
+                        pass
 
                 # Active player (on foot or mounted).
                 try:
@@ -41740,6 +41803,48 @@ class HardcoreSurvivalState(State):
 
         map_x0 = panel.left + pad
         map_y0 = panel.top + pad + label_h
+        map_rect = pygame.Rect(int(map_x0), int(map_y0), int(map_px), int(map_px))
+        edge_label_rects: list[pygame.Rect] = []
+
+        def draw_edge_label(*, text: str, cx: int, cy: int, px: float, py: float, color: pygame.Color) -> None:
+            text = str(text or "")
+            if not text:
+                return
+            try:
+                tw, th = self.app.font_s.size(text)
+            except Exception:
+                tw, th = (max(6, int(len(text) * 6)), 10)
+            tw = int(max(4, int(tw)))
+            th = int(max(6, int(th)))
+            pad_x = 2
+            pad_y = 1
+            step = int(max(8, int(th) + 2))
+            for k in (0, 1, -1, 2, -2, 3, -3):
+                ox = int(round(float(px) * float(step) * float(k)))
+                oy = int(round(float(py) * float(step) * float(k)))
+                x = int(cx) + int(ox)
+                y = int(cy) + int(oy)
+                r = pygame.Rect(int(x - tw // 2 - pad_x), int(y - th // 2 - pad_y), int(tw + pad_x * 2), int(th + pad_y * 2))
+                if r.left < int(map_rect.left):
+                    r.left = int(map_rect.left)
+                if r.top < int(map_rect.top):
+                    r.top = int(map_rect.top)
+                if r.right > int(map_rect.right):
+                    r.right = int(map_rect.right)
+                if r.bottom > int(map_rect.bottom):
+                    r.bottom = int(map_rect.bottom)
+                if any(r.colliderect(prev) for prev in edge_label_rects):
+                    continue
+                draw_text(surface, self.app.font_s, text, (int(r.centerx), int(r.centery)), color, anchor="center")
+                edge_label_rects.append(pygame.Rect(r))
+                return
+            # Fallback: draw clamped (may overlap).
+            try:
+                x2 = int(clamp(int(cx), int(map_rect.left + 2), int(map_rect.right - 2)))
+                y2 = int(clamp(int(cy), int(map_rect.top + 2), int(map_rect.bottom - 2)))
+            except Exception:
+                x2, y2 = int(cx), int(cy)
+            draw_text(surface, self.app.font_s, text, (int(x2), int(y2)), color, anchor="center")
         if isinstance(cached_scaled, pygame.Surface):
             surface.blit(cached_scaled, (map_x0, map_y0))
 
@@ -41842,7 +41947,7 @@ class HardcoreSurvivalState(State):
                 pygame.draw.polygon(surface, (0, 0, 0), [tip, left, right], 1)
                 lx = int(round(base_x + px * 5.0))
                 ly = int(round(base_y + py * 5.0))
-                draw_text(surface, self.app.font_s, "家", (lx, ly), pygame.Color(240, 240, 244), anchor="center")
+                draw_edge_label(text="家", cx=int(lx), cy=int(ly), px=float(px), py=float(py), color=pygame.Color(240, 240, 244))
 
         def draw_edge_arrow(
             *,
@@ -41875,7 +41980,7 @@ class HardcoreSurvivalState(State):
             if label:
                 lx = int(round(base_x + px * 5.0))
                 ly = int(round(base_y + py * 5.0))
-                draw_text(surface, self.app.font_s, label, (lx, ly), pygame.Color(240, 240, 240), anchor="center")
+                draw_edge_label(text=str(label), cx=int(lx), cy=int(ly), px=float(px), py=float(py), color=pygame.Color(240, 240, 240))
 
         def draw_edge_poi(*, kind: str, dx_t: int, dy_t: int, color: tuple[int, int, int]) -> None:
             # Arrow + the same POI icon used in the world-map legend.
