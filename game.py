@@ -5789,28 +5789,28 @@ class HardcoreSurvivalState(State):
     # Multi-floor house (2–3 floors) interior.
     _HOUSE_INT_F1_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWW",
-        "WVV...........W,,,,,VVW",
-        "W..BBBBB..SSSSW,,,O,,,W",
-        "W..BBBBB..SSSSd,,,,,,,W",
+        "WVV....VVV....W,,,,,VVW",
+        "V..BBBBB..SSSSW,,,O,,,W",
+        "V..BBBBB..SSSSd,,,,,,,W",
         "W..............,,,R,,,W",
-        "W....^^........vv.....D",
-        "W....^^........vv.....W",
+        "V....^^........vv.....D",
+        "V....^^........vv.....W",
         "W..C.......C..........W",
-        "W..KKKKK..TPTT..FFFF..W",
-        "W..KKKKK..TTTT..FFFF..W",
+        "V..KKKKK..TPTT..FFFF..W",
+        "WVV....VVV....VVV..VVVW",
         "WWWWWWWWWWWWWWWWWWWWWWW",
     ]
     _HOUSE_INT_FLOOR_LAYOUT: list[str] = [
         "WWWWWWWWWWWWWWWWWWWWWWW",
-        "WVV...........W,,,,,VVW",
-        "W......SSSS...W,,,O,,,W",
-        "W..TP..SSSS...d,,,,,,,W",
+        "WVV....VVV....W,,,,,VVW",
+        "V......SSSS...W,,,O,,,W",
+        "V..TP..SSSS...d,,,,,,,W",
         "W..TC..........,,,R,,,W",
-        "W....^^........vvWWWWWW",
-        "W....^^........vv.....W",
+        "V....^^........vvWWWWWW",
+        "V....^^........vv.....W",
         "W.........BBBBB.......W",
-        "W..KKKKK..BBBBB.SSSS..W",
-        "W..KKKKK........SSSS..W",
+        "V..KKKKK..BBBBB.SSSS..W",
+        "WVV....VVV....VVV..VVVW",
         "WWWWWWWWWWWWWWWWWWWWWWW",
     ]
     _HOUSE_INT_W = 23
@@ -18398,10 +18398,10 @@ class HardcoreSurvivalState(State):
             base = self._get_pose_sprite("sit", direction=str(d), frame=0)
             spr = pygame.transform.scale(base, (int(base.get_width()) * scale, int(base.get_height()) * scale))
             shadow = pygame.Rect(0, 0, 18, 7)
-            shadow.center = (sx, sy + 10)
+            shadow.center = (sx, sy + 4)
             pygame.draw.ellipse(surface, (0, 0, 0), shadow)
             rect = spr.get_rect()
-            rect.midbottom = (sx, sy + 14)
+            rect.center = (sx, sy)
             surface.blit(spr, rect)
         else:
             pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
@@ -36378,14 +36378,17 @@ class HardcoreSurvivalState(State):
         tile_id = int(tile_id)
 
         if apply_mask:
-            # When inside a building, hide the outside world so only the
-            # building interior is visible (no terrain/roads/other buildings).
+            # When inside a building, darken the area immediately outside the
+            # building (within 3 tiles) so the door approach area is hidden,
+            # but the broader world remains visible.
             inside_key_dark = getattr(self, "_inside_building_key", None)
             if isinstance(inside_key_dark, tuple) and len(inside_key_dark) == 4:
                 bx0, by0, bw, bh = (int(inside_key_dark[0]), int(inside_key_dark[1]), int(inside_key_dark[2]), int(inside_key_dark[3]))
                 if not (int(bx0) <= int(tx) < int(bx0) + int(bw) and int(by0) <= int(ty) < int(by0) + int(bh)):
-                    surface.fill((10, 10, 14), rect)
-                    return
+                    margin = 3
+                    if (int(bx0) - margin <= int(tx) < int(bx0) + int(bw) + margin and int(by0) - margin <= int(ty) < int(by0) + int(bh) + margin):
+                        surface.fill((10, 10, 14), rect)
+                        return
 
             # High-rise 1F: when the player is inside, hide the non-floor "back"
             # filler area (so it doesn't show up as a black block). We draw it
