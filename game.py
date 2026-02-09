@@ -21397,6 +21397,16 @@ class HardcoreSurvivalState(State):
             pass
         return True
 
+    def _story_npc_on_building_tile(self, tx: int, ty: int) -> bool:
+        """Check if a tile is anywhere on a building footprint (including walls)."""
+        tx = int(tx)
+        ty = int(ty)
+        try:
+            hit = self._peek_building_at_tile(int(tx), int(ty))
+        except Exception:
+            hit = None
+        return hit is not None
+
     def _story_npc_collider_wh(self) -> tuple[int, int]:
         # Keep story NPC collision volume aligned with the player's footprint so
         # crowds/brawls feel solid (avoid "ghosting" through NPCs).
@@ -25473,11 +25483,13 @@ class HardcoreSurvivalState(State):
 
             # Safety: pedestrians shouldn't end up inside building footprints (facades).
             # Staff NPCs (clerks/doctors/office) are intentionally placed indoors.
+            # Check the full building footprint including walls so NPCs don't
+            # get stuck against exterior walls either.
             try:
                 if not bool(allow_inside):
                     ntx = int(math.floor(float(new_pos.x) / float(self.TILE_SIZE)))
                     nty = int(math.floor(float(new_pos.y) / float(self.TILE_SIZE)))
-                    if bool(self._story_npc_is_indoor_tile(int(ntx), int(nty))):
+                    if bool(self._story_npc_on_building_tile(int(ntx), int(nty))):
                         sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
                         new_pos = tile_center(int(sx), int(sy))
                         moved = pygame.Vector2(0, 0)
@@ -25520,12 +25532,12 @@ class HardcoreSurvivalState(State):
                         stuck_t = 0.0
                 except Exception:
                     pass
-            # If stuck inside a building, teleport out immediately.
+            # If stuck inside or against a building, teleport out immediately.
             if float(stuck_t) > 0.35 and not bool(allow_inside):
                 try:
                     ntx = int(math.floor(float(new_pos.x) / float(self.TILE_SIZE)))
                     nty = int(math.floor(float(new_pos.y) / float(self.TILE_SIZE)))
-                    if bool(self._story_npc_is_indoor_tile(int(ntx), int(nty))):
+                    if bool(self._story_npc_on_building_tile(int(ntx), int(nty))):
                         sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
                         new_pos = tile_center(int(sx), int(sy))
                         moved = pygame.Vector2(0, 0)
@@ -36225,8 +36237,9 @@ class HardcoreSurvivalState(State):
 
             # Cutaway-roof buildings: don't reveal interiors unless the player is
             # inside that building. Hide furniture/floor for ALL building types
-            # so interiors are never visible from outside.
-            if not bool(self._tile_solid(int(tile_id))):
+            # so interiors are never visible from outside. Furniture tiles are
+            # solid, so we must check both solid and non-solid interior tiles.
+            if int(tile_id) != int(self.T_WALL):
                 inside_key = getattr(self, "_inside_building_key", None)
                 try:
                     hit = self._peek_building_at_tile(int(tx), int(ty))
@@ -36249,7 +36262,7 @@ class HardcoreSurvivalState(State):
             if isinstance(inside_key, tuple) and len(inside_key) == 4 and isinstance(visible, set) and visible:
                 tx0, ty0, w, h = (int(inside_key[0]), int(inside_key[1]), int(inside_key[2]), int(inside_key[3]))
                 if int(tx0) <= int(tx) < int(tx0) + int(w) and int(ty0) <= int(ty) < int(ty0) + int(h):
-                    if (int(tx), int(ty)) not in visible and not bool(self._tile_solid(int(tile_id))):
+                    if (int(tx), int(ty)) not in visible and int(tile_id) != int(self.T_WALL):
                         # Never mask the outer border so doors/walls read correctly.
                         if int(tx) not in (int(tx0), int(tx0) + int(w) - 1) and int(ty) not in (int(ty0), int(ty0) + int(h) - 1):
                             tile_id = int(self.T_WALL)
@@ -41289,7 +41302,18 @@ class HardcoreSurvivalState(State):
             spr = walk[idx]
         rect = spr.get_rect()
         rect.midbottom = (px, iround(float(p.y) + float(self.player.h) / 2.0))
-        surface.blit(spr, rect)
+        # Draw a 1px dark outline around the player for better visibility.
+        ow, oh = spr.get_size()
+        sil = pygame.Surface((ow + 2, oh + 2), pygame.SRCALPHA)
+        for ox, oy in ((0, 1), (2, 1), (1, 0), (1, 2)):
+            sil.blit(spr, (ox, oy))
+        dark = pygame.Surface(sil.get_size(), pygame.SRCALPHA)
+        dark.fill((10, 10, 12, 255))
+        sil.blit(dark, (0, 0), special_flags=pygame.BLEND_RGB_MIN)
+        sil.blit(spr, (1, 1))
+        orect = sil.get_rect()
+        orect.midbottom = (int(rect.centerx), int(rect.bottom + 1))
+        surface.blit(sil, orect)
         self._last_player_screen_rect = pygame.Rect(rect)
         self._draw_player_back_carry(surface, rect, direction=str(d))
         self._draw_player_held_item(
