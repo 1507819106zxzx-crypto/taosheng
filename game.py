@@ -5795,8 +5795,8 @@ class HardcoreSurvivalState(State):
         "W..............,,,R,,,W",
         "W....^^........vv.....D",
         "W....^^........vv.....W",
-        "W.....................W",
-        "W..KKKKK..TTTT..FFFF..W",
+        "W..C.......C..........W",
+        "W..KKKKK..TPTT..FFFF..W",
         "W..KKKKK..TTTT..FFFF..W",
         "WWWWWWWWWWWWWWWWWWWWWWW",
     ]
@@ -5804,8 +5804,8 @@ class HardcoreSurvivalState(State):
         "WWWWWWWWWWWWWWWWWWWWWWW",
         "WVV...........W,,,,,VVW",
         "W......SSSS...W,,,O,,,W",
-        "W..TT..SSSS...d,,,,,,,W",
-        "W..TT..........,,,R,,,W",
+        "W..TP..SSSS...d,,,,,,,W",
+        "W..TC..........,,,R,,,W",
         "W....^^........vvWWWWWW",
         "W....^^........vv.....W",
         "W.........BBBBB.......W",
@@ -15089,12 +15089,22 @@ class HardcoreSurvivalState(State):
             return
         tx, ty = self._house_int_player_tile()
         candidates = [(tx, ty), (tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+
+        sitting = str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "house"
+
         chosen: tuple[int, int, str] | None = None
         for cx, cy in candidates:
             ch = self._house_int_char_at(cx, cy)
-            if ch in ("D", "^", "v"):
+            if ch in ("D", "^", "v", "C", "P"):
                 chosen = (int(cx), int(cy), str(ch))
                 break
+        # While sitting, prefer P over C so E doesn't just stand up.
+        if sitting and chosen is not None and chosen[2] == "C":
+            for cx, cy in candidates:
+                ch2 = self._house_int_char_at(cx, cy)
+                if ch2 == "P":
+                    chosen = (int(cx), int(cy), str(ch2))
+                    break
         if chosen is None:
             self._set_hint("这里没有可互动", seconds=1.0)
             return
@@ -15107,6 +15117,8 @@ class HardcoreSurvivalState(State):
             if floor > 1:
                 self._set_hint("请先下楼再出去", seconds=1.2)
                 return
+            self._clear_player_pose()
+            self.house_int_gaming = False
             self._house_interior_exit()
             return
 
@@ -15114,6 +15126,8 @@ class HardcoreSurvivalState(State):
             if floor >= max_f:
                 self._set_hint("已经是顶层", seconds=1.2)
                 return
+            self._clear_player_pose()
+            self.house_int_gaming = False
             self._house_set_floor(int(floor + 1), spawn_at="stairs_down")
             self._set_hint(f"上楼：{int(floor + 1)}F", seconds=0.9)
             return
@@ -15122,8 +15136,39 @@ class HardcoreSurvivalState(State):
             if floor <= 1:
                 self._set_hint("已经是一楼", seconds=1.2)
                 return
+            self._clear_player_pose()
+            self.house_int_gaming = False
             self._house_set_floor(int(floor - 1), spawn_at="stairs_up")
             self._set_hint(f"下楼：{int(floor - 1)}F", seconds=0.9)
+            return
+
+        if ch == "C":
+            if sitting:
+                self._clear_player_pose()
+                self.house_int_gaming = False
+                self._set_hint("起身", seconds=0.9)
+                return
+            # Sit down on the chair.
+            tile = int(self._HOUSE_INT_TILE_SIZE)
+            ax = float(_cx + 0.5) * float(tile)
+            ay = float(_cy + 0.5) * float(tile)
+            self._set_player_pose("sit", space="house", anchor=(ax, ay), seconds=0.0)
+            self.house_int_gaming = False
+            self._set_hint("坐下：E互动 | 移动键起身", seconds=1.2)
+            return
+
+        if ch == "P":
+            if not sitting:
+                self._set_hint("坐下再用电脑", seconds=1.0)
+                return
+            gaming = bool(getattr(self, "house_int_gaming", False))
+            if gaming:
+                self.house_int_gaming = False
+                self._set_hint("关闭游戏", seconds=0.9)
+            else:
+                self.house_int_gaming = True
+                self.house_int_gaming_phase = 0.0
+                self._set_hint("开始打游戏 (+士气)", seconds=1.2)
             return
 
         self._set_hint("这里没有可互动", seconds=1.0)
@@ -18165,6 +18210,48 @@ class HardcoreSurvivalState(State):
                         pygame.draw.rect(surface, wood2, pygame.Rect(er.right - 5, er.bottom - 5, 2, 4))
                     continue
 
+                # Chair (single tile)
+                if ch == "C":
+                    # Seat
+                    seat = pygame.Rect(r.x + 3, r.y + 6, r.w - 6, r.h - 8)
+                    pygame.draw.rect(surface, outline, seat.inflate(2, 2))
+                    pygame.draw.rect(surface, wood, seat)
+                    pygame.draw.rect(surface, (min(255, wood[0] + 20), min(255, wood[1] + 20), min(255, wood[2] + 20)), pygame.Rect(seat.x + 1, seat.y + 1, seat.w - 2, 2))
+                    # Back rest
+                    back = pygame.Rect(r.x + 4, r.y + 2, r.w - 8, 4)
+                    pygame.draw.rect(surface, outline, back.inflate(2, 2))
+                    pygame.draw.rect(surface, wood2, back)
+                    # Legs
+                    pygame.draw.rect(surface, outline, pygame.Rect(r.x + 4, r.bottom - 4, 2, 3))
+                    pygame.draw.rect(surface, outline, pygame.Rect(r.right - 6, r.bottom - 4, 2, 3))
+                    continue
+
+                # PC on desk (single tile)
+                if ch == "P":
+                    # Table surface
+                    pygame.draw.rect(surface, outline, r.inflate(-2, -2))
+                    pygame.draw.rect(surface, wood, r.inflate(-4, -4))
+                    top = pygame.Rect(r.x + 4, r.y + 4, r.w - 8, 4)
+                    pygame.draw.rect(surface, wood2, top)
+                    # Monitor
+                    mon = pygame.Rect(r.x + 5, r.y + 3, r.w - 10, r.h - 10)
+                    pygame.draw.rect(surface, outline, mon.inflate(2, 2))
+                    gaming = str(getattr(self, "house_int_gaming", False))
+                    if gaming == "True":
+                        # Screen on - show game colors
+                        phase = int(float(getattr(self, "house_int_gaming_phase", 0.0)) * 3.0) % 3
+                        scr_cols = [(40, 90, 160), (50, 120, 80), (120, 60, 90)]
+                        pygame.draw.rect(surface, scr_cols[phase], mon)
+                        # Scan line
+                        sl_y = mon.y + (int(float(getattr(self, "house_int_gaming_phase", 0.0)) * 8.0) % max(1, mon.h))
+                        pygame.draw.line(surface, (200, 200, 220), (mon.x, sl_y), (mon.right - 1, sl_y), 1)
+                    else:
+                        pygame.draw.rect(surface, (30, 30, 38), mon)
+                        pygame.draw.line(surface, (60, 60, 70), (mon.x + 1, mon.y + 1), (mon.right - 2, mon.y + 1), 1)
+                    # Stand
+                    pygame.draw.rect(surface, outline, pygame.Rect(mon.centerx - 2, mon.bottom, 4, 3))
+                    continue
+
                 # Bathroom door (small door to bathroom)
                 if ch == "d":
                     # Draw wall background first
@@ -18216,8 +18303,80 @@ class HardcoreSurvivalState(State):
                     pygame.draw.rect(surface, steel, head)
                     continue
 
+        # Window daylight: cast warm light from V tiles onto adjacent floor.
+        try:
+            daylight, _tday = self._daylight_amount()
+            if float(daylight) > 0.15:
+                light_alpha = int(round(55.0 * float(daylight)))
+                light_col = (255, 240, 180, int(light_alpha))
+                rows = getattr(self, "house_layout", [])
+                if isinstance(rows, list) and rows:
+                    for wy, row in enumerate(rows):
+                        for wx, ch in enumerate(str(row)):
+                            if ch != "V":
+                                continue
+                            # Determine which direction light falls (inward from wall).
+                            # Top wall (row 0-1): light falls down.
+                            # Bottom wall (row H-1): light falls up.
+                            # Left wall (col 0): light falls right.
+                            # Right wall (col W-1): light falls left.
+                            dirs: list[tuple[int, int]] = []
+                            if wy <= 1:
+                                dirs.append((0, 1))
+                            elif wy >= len(rows) - 2:
+                                dirs.append((0, -1))
+                            if wx <= 1:
+                                dirs.append((1, 0))
+                            elif wx >= len(str(rows[0])) - 2:
+                                dirs.append((-1, 0))
+                            if not dirs:
+                                dirs.append((0, 1))
+                            for ddx, ddy in dirs:
+                                for step in range(1, 4):
+                                    fx = wx + ddx * step
+                                    fy = wy + ddy * step
+                                    if not (0 <= fx < len(str(rows[0])) and 0 <= fy < len(rows)):
+                                        break
+                                    fch = str(rows[fy])[fx] if fx < len(str(rows[fy])) else "W"
+                                    if fch == "W":
+                                        break
+                                    falloff = 1.0 - float(step - 1) / 3.0
+                                    a = int(round(float(light_alpha) * falloff))
+                                    if a <= 0:
+                                        continue
+                                    lr = pygame.Rect(map_x + fx * tile, map_y + fy * tile, tile, tile)
+                                    ls = pygame.Surface((tile, tile), pygame.SRCALPHA)
+                                    ls.fill((255, 240, 180, int(a)))
+                                    surface.blit(ls, lr.topleft)
+        except Exception:
+            pass
+
+        # Update gaming phase if playing games.
+        try:
+            if bool(getattr(self, "house_int_gaming", False)):
+                gp = float(getattr(self, "house_int_gaming_phase", 0.0))
+                gp += float(getattr(self, "_last_dt", 0.016))
+                self.house_int_gaming_phase = float(gp)
+                # Morale boost while gaming.
+                try:
+                    morale = float(getattr(self.player, "morale", 50.0))
+                    morale = float(min(100.0, morale + float(getattr(self, "_last_dt", 0.016)) * 0.8))
+                    self.player.morale = float(morale)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         p = pygame.Vector2(self.house_int_pos)
         speed2 = float(getattr(self, "house_int_vel", pygame.Vector2(0, 0)).length_squared())
+
+        # If player is moving, cancel sit pose and gaming.
+        sitting = str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "house"
+        if sitting and speed2 > 0.5:
+            self._clear_player_pose()
+            self.house_int_gaming = False
+            sitting = False
+
         face = pygame.Vector2(self.house_int_facing)
         if face.length_squared() <= 0.001:
             face = pygame.Vector2(0, 1)
@@ -18225,29 +18384,47 @@ class HardcoreSurvivalState(State):
             d = "down" if face.y >= 0 else "up"
         else:
             d = "right" if face.x >= 0 else "left"
-        pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
-        pf_run = getattr(self, "player_frames_run", None)
-        is_run = bool(getattr(self, "player_sprinting", False))
-        pf = pf_run if (is_run and isinstance(pf_run, dict)) else pf_walk
-        frames = pf.get(d, pf["down"])
-        if speed2 <= 0.2 or len(frames) <= 1:
-            base = frames[0]
-        else:
-            walk = frames[1:]
-            phase = (float(self.house_int_walk_phase) % math.tau) / math.tau
-            idx = int(phase * len(walk)) % len(walk)
-            base = walk[idx]
 
         scale = int(max(1, int(self._HOUSE_INT_SPRITE_SCALE)))
-        spr = pygame.transform.scale(base, (int(base.get_width()) * scale, int(base.get_height()) * scale))
-        sx = int(round(map_x + p.x))
-        sy = int(round(map_y + p.y))
-        shadow = pygame.Rect(0, 0, 14, 6)
-        shadow.center = (sx, sy + 8)
-        pygame.draw.ellipse(surface, (0, 0, 0), shadow)
-        rect = spr.get_rect()
-        rect.midbottom = (sx, sy + 12)
-        surface.blit(spr, rect)
+
+        if sitting:
+            anchor = getattr(self, "player_pose_anchor", None)
+            if isinstance(anchor, tuple) and len(anchor) == 2:
+                sx = int(round(map_x + float(anchor[0])))
+                sy = int(round(map_y + float(anchor[1])))
+            else:
+                sx = int(round(map_x + p.x))
+                sy = int(round(map_y + p.y))
+            base = self._get_pose_sprite("sit", direction=str(d), frame=0)
+            spr = pygame.transform.scale(base, (int(base.get_width()) * scale, int(base.get_height()) * scale))
+            shadow = pygame.Rect(0, 0, 18, 7)
+            shadow.center = (sx, sy + 10)
+            pygame.draw.ellipse(surface, (0, 0, 0), shadow)
+            rect = spr.get_rect()
+            rect.midbottom = (sx, sy + 14)
+            surface.blit(spr, rect)
+        else:
+            pf_walk = getattr(self, "player_frames", self._PLAYER_FRAMES)
+            pf_run = getattr(self, "player_frames_run", None)
+            is_run = bool(getattr(self, "player_sprinting", False))
+            pf = pf_run if (is_run and isinstance(pf_run, dict)) else pf_walk
+            frames = pf.get(d, pf["down"])
+            if speed2 <= 0.2 or len(frames) <= 1:
+                base = frames[0]
+            else:
+                walk = frames[1:]
+                phase = (float(self.house_int_walk_phase) % math.tau) / math.tau
+                idx = int(phase * len(walk)) % len(walk)
+                base = walk[idx]
+            spr = pygame.transform.scale(base, (int(base.get_width()) * scale, int(base.get_height()) * scale))
+            sx = int(round(map_x + p.x))
+            sy = int(round(map_y + p.y))
+            shadow = pygame.Rect(0, 0, 14, 6)
+            shadow.center = (sx, sy + 8)
+            pygame.draw.ellipse(surface, (0, 0, 0), shadow)
+            rect = spr.get_rect()
+            rect.midbottom = (sx, sy + 12)
+            surface.blit(spr, rect)
 
     def _draw_sch_interior_scene(self, surface: pygame.Surface) -> None:
         surface.fill((10, 10, 14))
@@ -36201,6 +36378,15 @@ class HardcoreSurvivalState(State):
         tile_id = int(tile_id)
 
         if apply_mask:
+            # When inside a building, hide the outside world so only the
+            # building interior is visible (no terrain/roads/other buildings).
+            inside_key_dark = getattr(self, "_inside_building_key", None)
+            if isinstance(inside_key_dark, tuple) and len(inside_key_dark) == 4:
+                bx0, by0, bw, bh = (int(inside_key_dark[0]), int(inside_key_dark[1]), int(inside_key_dark[2]), int(inside_key_dark[3]))
+                if not (int(bx0) <= int(tx) < int(bx0) + int(bw) and int(by0) <= int(ty) < int(by0) + int(bh)):
+                    surface.fill((10, 10, 14), rect)
+                    return
+
             # High-rise 1F: when the player is inside, hide the non-floor "back"
             # filler area (so it doesn't show up as a black block). We draw it
             # as whatever is just outside the building's north edge, making it
