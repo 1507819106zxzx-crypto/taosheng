@@ -4094,8 +4094,15 @@ class HardcoreSurvivalState(State):
             if direction == "down":
                 surf.fill(coat, pygame.Rect(3, 5, 6, 6))
                 surf.fill(coat_dark, pygame.Rect(3, 10, 6, 1))
+                # Neck.
+                surf.fill(skin, pygame.Rect(5, 5, 2, 1))
+                # Shoulders.
                 surf.fill(coat, pygame.Rect(2, 6, 1, 3))
                 surf.fill(coat, pygame.Rect(9, 6, 1, 3))
+                # Shoulder highlight.
+                surf.set_at((3, 5), coat_dark)
+                surf.set_at((8, 5), coat_dark)
+                # Hands.
                 surf.fill(skin, pygame.Rect(2, 9, 1, 1))
                 surf.fill(skin, pygame.Rect(9, 9, 1, 1))
 
@@ -4120,8 +4127,14 @@ class HardcoreSurvivalState(State):
             else:
                 surf.fill(coat, pygame.Rect(3, 4, 6, 7))
                 surf.fill(coat_dark, pygame.Rect(4, 6, 4, 4))
+                # Neck.
+                surf.fill(skin, pygame.Rect(5, 4, 2, 1))
+                # Shoulders.
                 surf.fill(coat, pygame.Rect(2, 5, 1, 4))
                 surf.fill(coat, pygame.Rect(9, 5, 1, 4))
+                # Shoulder highlight.
+                surf.set_at((3, 4), coat_dark)
+                surf.set_at((8, 4), coat_dark)
                 surf.fill(hair, pygame.Rect(4, 0, 4, 3))
                 surf.fill(skin, pygame.Rect(5, 3, 2, 1))
                 if hair_kind in (2, 4, 5):  # longer styles
@@ -4198,8 +4211,15 @@ class HardcoreSurvivalState(State):
 
         surf.fill(coat, pygame.Rect(4, 5, 5, 6))
         surf.fill(coat_dark, pygame.Rect(4, 10, 5, 1))
+        # Neck.
+        surf.fill(skin, pygame.Rect(7, 5, 1, 1))
+        # Shoulder highlight.
+        surf.set_at((4, 5), coat_dark)
+        # Arm + hand.
         surf.fill(coat, pygame.Rect(8, 6, 1, 3))
         surf.fill(skin, pygame.Rect(8, 9, 1, 1))
+        # Ear hint (side view).
+        surf.set_at((5, 3), skin_shade)
 
         if outfit_kind == 2:
             surf.fill(coat_dark, pygame.Rect(5, 7, 2, 2))
@@ -10973,6 +10993,37 @@ class HardcoreSurvivalState(State):
                         break
                 if blocked:
                     continue
+
+                # Ensure the door approach area (south side) is not blocked by
+                # existing buildings/walls so the entrance stays reachable.
+                approach_dy = y0 + h  # first row south of the building
+                if approach_dy < int(self.state.CHUNK_SIZE):
+                    approach_blocked = True
+                    for ax in range(x0 + 1, x0 + w - 1):
+                        if approach_dy >= int(self.state.CHUNK_SIZE):
+                            break
+                        at = tiles[idx(int(ax), int(approach_dy))]
+                        if int(at) not in (int(self.state.T_WALL), int(self.state.T_FLOOR), int(self.state.T_DOOR)):
+                            approach_blocked = False
+                            break
+                    if approach_blocked:
+                        continue
+                    # Also check 3 rows south for reserved/wall tiles blocking the path.
+                    for step in range(1, 4):
+                        ay = y0 + h - 1 + step
+                        if ay >= int(self.state.CHUNK_SIZE):
+                            break
+                        wall_count = 0
+                        for ax in range(x0 + 1, x0 + w - 1):
+                            if reserved is not None and (int(ax), int(ay)) in reserved:
+                                wall_count += 1
+                            elif int(tiles[idx(int(ax), int(ay))]) in (int(self.state.T_WALL), int(self.state.T_FLOOR)):
+                                wall_count += 1
+                        if wall_count >= (w - 2):
+                            blocked = True
+                            break
+                    if blocked:
+                        continue
 
                 is_highrise = town_kind in ("高层住宅", "高层住宅大")
                 roof_var_hint: int | None = None
@@ -25450,11 +25501,11 @@ class HardcoreSurvivalState(State):
                 axis_pref = int(npc.get("axis", 0))
             except Exception:
                 axis_pref = 0
-            if bool(want_move and barely) and int(stuck_t // 0.35) != int(stuck_prev // 0.35):
+            if bool(want_move and barely) and int(stuck_t // 0.22) != int(stuck_prev // 0.22):
                 axis_pref = 1 - int(axis_pref)
             npc["axis"] = int(axis_pref)
             # Don't let NPCs remain stuck on road tiles (looks like "standing in traffic").
-            if float(stuck_t) > 0.45:
+            if float(stuck_t) > 0.30:
                 try:
                     ntx = int(math.floor(float(new_pos.x) / float(self.TILE_SIZE)))
                     nty = int(math.floor(float(new_pos.y) / float(self.TILE_SIZE)))
@@ -25469,7 +25520,22 @@ class HardcoreSurvivalState(State):
                         stuck_t = 0.0
                 except Exception:
                     pass
-            if float(stuck_t) > 2.40:
+            # If stuck inside a building, teleport out immediately.
+            if float(stuck_t) > 0.35 and not bool(allow_inside):
+                try:
+                    ntx = int(math.floor(float(new_pos.x) / float(self.TILE_SIZE)))
+                    nty = int(math.floor(float(new_pos.y) / float(self.TILE_SIZE)))
+                    if bool(self._story_npc_is_indoor_tile(int(ntx), int(nty))):
+                        sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
+                        new_pos = tile_center(int(sx), int(sy))
+                        moved = pygame.Vector2(0, 0)
+                        npc_vel = pygame.Vector2(0, 0)
+                        goal = pygame.Vector2(new_pos)
+                        goal_left = 0.0
+                        stuck_t = 0.0
+                except Exception:
+                    pass
+            if float(stuck_t) > 1.20:
                 # Hard recovery: if an NPC gets wedged, snap it back to its anchor area.
                 sx, sy = find_open_tile_near(int(ax), int(ay), max_r=18, avoid_roads=True)
                 new_pos = tile_center(int(sx), int(sy))
@@ -25478,7 +25544,7 @@ class HardcoreSurvivalState(State):
                 goal = pygame.Vector2(new_pos)
                 goal_left = 0.0
                 stuck_t = 0.0
-            if float(stuck_t) > 1.20:
+            if float(stuck_t) > 0.60:
                 goal_left = 0.0
 
             npc["pos"] = pygame.Vector2(new_pos)
@@ -27229,7 +27295,26 @@ class HardcoreSurvivalState(State):
                 continue
             if int(draw_alpha) >= 255:
                 pygame.draw.ellipse(surface, (0, 0, 0), shadow)
-                surface.blit(spr, rect)
+                # Draw a 1px dark outline around the NPC for better visibility.
+                ow, oh = spr.get_size()
+                outline_surf = pygame.Surface((ow + 2, oh + 2), pygame.SRCALPHA)
+                for ox, oy in ((0, 1), (2, 1), (1, 0), (1, 2)):
+                    outline_surf.blit(spr, (ox, oy))
+                outline_surf.fill((10, 10, 12, 0), special_flags=pygame.BLEND_RGBA_MIN)
+                outline_surf.fill((10, 10, 12, 255), special_flags=pygame.BLEND_RGB_MAX)
+                outline_surf.fill((0, 0, 0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+                # Rebuild: stamp silhouette then overlay original.
+                sil = pygame.Surface((ow + 2, oh + 2), pygame.SRCALPHA)
+                for ox, oy in ((0, 1), (2, 1), (1, 0), (1, 2)):
+                    sil.blit(spr, (ox, oy))
+                # Make silhouette dark.
+                dark = pygame.Surface(sil.get_size(), pygame.SRCALPHA)
+                dark.fill((10, 10, 12, 255))
+                sil.blit(dark, (0, 0), special_flags=pygame.BLEND_RGB_MIN)
+                sil.blit(spr, (1, 1))
+                orect = sil.get_rect()
+                orect.midbottom = (int(rect.centerx), int(rect.bottom + 1))
+                surface.blit(sil, orect)
             else:
                 sh = pygame.Surface((shadow.w, shadow.h), pygame.SRCALPHA)
                 sh_alpha = int(clamp(int(round(120.0 * float(draw_alpha) / 255.0)), 0, 255))
@@ -36139,8 +36224,8 @@ class HardcoreSurvivalState(State):
                     pass
 
             # Cutaway-roof buildings: don't reveal interiors unless the player is
-            # inside that building. Use a non-solid test so alternative floor
-            # variants still work (prevents "walk in and disappear" bugs).
+            # inside that building. Hide furniture/floor for ALL building types
+            # so interiors are never visible from outside.
             if not bool(self._tile_solid(int(tile_id))):
                 inside_key = getattr(self, "_inside_building_key", None)
                 try:
@@ -36152,9 +36237,7 @@ class HardcoreSurvivalState(State):
                         elif int(tx) in (int(btx0), int(btx0) + int(bw) - 1) or int(ty) in (int(bty0), int(bty0) + int(bh) - 1):
                             pass
                         else:
-                            style, _var = self._building_roof_style_var(int(roof_kind))
-                            if int(style) == 6 or (int(style) == 1 and int(floors) > 1):
-                                tile_id = int(self.T_WALL)
+                            tile_id = int(self.T_WALL)
                 except Exception:
                     pass
 
@@ -41816,10 +41899,10 @@ class HardcoreSurvivalState(State):
                 tw, th = (max(6, int(len(text) * 6)), 10)
             tw = int(max(4, int(tw)))
             th = int(max(6, int(th)))
-            pad_x = 2
-            pad_y = 1
+            pad_x = 3
+            pad_y = 2
             step = int(max(8, int(th) + 2))
-            for k in (0, 1, -1, 2, -2, 3, -3):
+            for k in (0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6):
                 ox = int(round(float(px) * float(step) * float(k)))
                 oy = int(round(float(py) * float(step) * float(k)))
                 x = int(cx) + int(ox)
@@ -41835,16 +41918,13 @@ class HardcoreSurvivalState(State):
                     r.bottom = int(map_rect.bottom)
                 if any(r.colliderect(prev) for prev in edge_label_rects):
                     continue
+                pygame.draw.rect(surface, (10, 10, 14), r, border_radius=3)
+                pygame.draw.rect(surface, (60, 60, 70), r, 1, border_radius=3)
                 draw_text(surface, self.app.font_s, text, (int(r.centerx), int(r.centery)), color, anchor="center")
                 edge_label_rects.append(pygame.Rect(r))
                 return
-            # Fallback: draw clamped (may overlap).
-            try:
-                x2 = int(clamp(int(cx), int(map_rect.left + 2), int(map_rect.right - 2)))
-                y2 = int(clamp(int(cy), int(map_rect.top + 2), int(map_rect.bottom - 2)))
-            except Exception:
-                x2, y2 = int(cx), int(cy)
-            draw_text(surface, self.app.font_s, text, (int(x2), int(y2)), color, anchor="center")
+            # Fallback: skip drawing if all positions overlap (avoids visual clutter).
+            return
         if isinstance(cached_scaled, pygame.Surface):
             surface.blit(cached_scaled, (map_x0, map_y0))
 
