@@ -39822,8 +39822,20 @@ class HardcoreSurvivalState(State):
                 if wind_n < 0.0:
                     sway_base = -int(sway_base)
 
-            # Stalks: fixed grid with per-tile jitter so you can see "one by one" plants.
-            bases = (2, 4, 6, 8, 3, 7)
+            # Stalks: keep them sparse so each plant reads as an individual stalk.
+            # (User feedback: too many stalks per tile made the field look "stuck together".)
+            patterns = (
+                (2, 7),
+                (3, 8),
+                (2, 6),
+                (3, 7),
+                (2, 5, 8),
+                (3, 6, 8),
+                (2, 6, 8),
+                (2, 5),
+            )
+            bases = patterns[int(h) & 7]
+            used_x: set[int] = set()
             for i, bx in enumerate(bases):
                 hh2 = int(self._hash2_u32(int(tx), int(ty), int(seed2) ^ (int(i) * 0x9E3779B9)))
                 # Small jitter to avoid perfectly straight stripes.
@@ -39834,6 +39846,15 @@ class HardcoreSurvivalState(State):
                 elif rj == 1:
                     j = 1
                 x = int(clamp(int(bx) + int(row_shift) + int(j), 1, int(rect.w - 2)))
+                if int(x) in used_x:
+                    # Avoid duplicates after row_shift/clamp so stalks stay separated.
+                    if int(x) - 1 >= 1 and int(x) - 1 not in used_x:
+                        x = int(x) - 1
+                    elif int(x) + 1 <= int(rect.w - 2) and int(x) + 1 not in used_x:
+                        x = int(x) + 1
+                    else:
+                        continue
+                used_x.add(int(x))
 
                 top = 2 + int((hh2 >> 5) % 3)  # 2..4
                 y0 = int(rect.y + int(top))
@@ -40665,6 +40686,163 @@ class HardcoreSurvivalState(State):
                             pygame.draw.rect(surface, (255, 220, 140), rect.inflate(-2, -2), 1)
         except Exception:
             pass
+
+    def _draw_wheat_tile_foreground(self, surface: pygame.Surface, rect: pygame.Rect, tx: int, ty: int) -> None:
+        # Foreground pass used to occlude the player's legs when walking through crops.
+        # We only draw the upper portion (heads + a short stalk segment) so it reads as
+        # "tall grass" without re-drawing the full tile texture.
+        try:
+            tile_id = int(self.T_WHEAT)
+            col = self._tile_color(int(tile_id))
+            seed = int(self.seed) ^ (int(tile_id) * 0x9E3779B9) ^ 0xB5297A4D
+            h = int(self._hash2_u32(int(tx), int(ty), int(seed)))
+        except Exception:
+            return
+
+        seed2 = int(self.seed) ^ 0xA52D9E13
+        stalk_hi = self._tint(col, add=(10, 8, 0))
+        head = self._tint(col, add=(58, 46, 10))
+        head_hi = self._tint(col, add=(78, 62, 16))
+        head_lo = self._tint(col, add=(22, 16, 0))
+
+        # Match the same subtle row staggering used by the base tile.
+        cell = int(self._hash2_u32(int(tx) // 6, int(ty) // 6, int(seed2)))
+        row_shift = 1 if (int(cell) & 1) == 0 else 0
+
+        # Wind sway for heads (keep in sync with background).
+        try:
+            wind = float(getattr(self, "weather_wind", 0.0))
+        except Exception:
+            wind = 0.0
+        wind_n = float(clamp(float(wind) / 60.0, -1.0, 1.0))
+        wind_a = abs(float(wind_n))
+        sway_base = 0
+        if wind_a > 0.05:
+            try:
+                t = float(getattr(self, "world_time_s", 0.0))
+            except Exception:
+                t = 0.0
+            amp = 1 if wind_a < 0.55 else 2
+            phase = int((h >> 7) & 255)
+            step = int(float(t) * 3.0)
+            wave = (0, 1, 0, -1)
+            sway_base = int(wave[int((int(step) + int(phase)) & 3)] * int(amp))
+            if wind_n < 0.0:
+                sway_base = -int(sway_base)
+
+        patterns = (
+            (2, 7),
+            (3, 8),
+            (2, 6),
+            (3, 7),
+            (2, 5, 8),
+            (3, 6, 8),
+            (2, 6, 8),
+            (2, 5),
+        )
+        bases = patterns[int(h) & 7]
+        used_x: set[int] = set()
+        for i, bx in enumerate(bases):
+            hh2 = int(self._hash2_u32(int(tx), int(ty), int(seed2) ^ (int(i) * 0x9E3779B9)))
+            j = 0
+            rj = int(hh2 & 7)
+            if rj == 0:
+                j = -1
+            elif rj == 1:
+                j = 1
+            x = int(clamp(int(bx) + int(row_shift) + int(j), 1, int(rect.w - 2)))
+            if int(x) in used_x:
+                if int(x) - 1 >= 1 and int(x) - 1 not in used_x:
+                    x = int(x) - 1
+                elif int(x) + 1 <= int(rect.w - 2) and int(x) + 1 not in used_x:
+                    x = int(x) + 1
+                else:
+                    continue
+            used_x.add(int(x))
+
+            top = 2 + int((hh2 >> 5) % 3)  # 2..4
+            y0 = int(rect.y + int(top))
+            y1 = int(rect.bottom - 2)
+            if y1 <= y0:
+                continue
+
+            # Short stalk segment (foreground).
+            seg_len = 5
+            y2 = int(min(int(y1), int(y0 + seg_len)))
+            if y2 > y0:
+                surface.fill(stalk_hi, pygame.Rect(int(rect.x + x), int(y0), 1, int(y2 - y0 + 1)))
+
+            sway = int(sway_base)
+            if ((hh2 >> 1) & 1) == 0:
+                sway = int(clamp(int(sway) * 2, -2, 2))
+            hx = int(clamp(int(x) + int(sway), 1, int(rect.w - 3)))
+            hy = int(clamp(int(y0 - 1), int(rect.y + 1), int(rect.bottom - 3)))
+
+            surface.fill(head, pygame.Rect(int(rect.x + hx), int(hy), 2, 2))
+            surface.fill(head_hi, pygame.Rect(int(rect.x + hx), int(hy), 2, 1))
+            if int(hy) + 2 < int(rect.bottom - 1):
+                surface.fill(head_lo, pygame.Rect(int(rect.x + hx), int(hy + 2), 1, 1))
+
+    def _draw_crop_foreground_occlusion(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
+        # Top-down "tall grass" technique: draw a tiny crop foreground pass AFTER the player,
+        # clipped to the player's lower-body rect, so legs get occluded when walking in wheat.
+        if bool(getattr(self, "hr_interior", False)) or bool(getattr(self, "sch_interior", False)) or bool(getattr(self, "house_interior", False)):
+            return
+
+        pr = getattr(self, "_last_player_screen_rect", None)
+        if not isinstance(pr, pygame.Rect):
+            return
+        if int(pr.w) <= 0 or int(pr.h) <= 0:
+            return
+
+        cover_h = int(min(int(pr.h), max(8, int(float(self.TILE_SIZE) * 1.2))))
+        if cover_h <= 0:
+            return
+        clip = pygame.Rect(int(pr.x), int(pr.bottom - cover_h), int(pr.w), int(cover_h))
+
+        prev_clip = surface.get_clip()
+        clip = clip.clip(prev_clip)
+        if int(clip.w) <= 0 or int(clip.h) <= 0:
+            return
+
+        try:
+            surface.set_clip(clip)
+            ts = int(self.TILE_SIZE)
+            if ts <= 0:
+                return
+
+            wx0 = int(cam_x) + int(clip.left)
+            wy0 = int(cam_y) + int(clip.top)
+            wx1 = int(cam_x) + int(clip.right - 1)
+            wy1 = int(cam_y) + int(clip.bottom - 1)
+
+            tx0 = int(math.floor(float(wx0) / float(ts)))
+            ty0 = int(math.floor(float(wy0) / float(ts)))
+            tx1 = int(math.floor(float(wx1) / float(ts)))
+            ty1 = int(math.floor(float(wy1) / float(ts)))
+
+            ptx, pty = self._player_tile()
+            for ty in range(int(ty0), int(ty1) + 1):
+                # Only occlude from the player's row downward (front-to-back ordering).
+                if int(ty) < int(pty):
+                    continue
+                py = int(ty) * int(ts) - int(cam_y)
+                if py >= INTERNAL_H or py + ts < 0:
+                    continue
+                for tx in range(int(tx0), int(tx1) + 1):
+                    px = int(tx) * int(ts) - int(cam_x)
+                    if px >= INTERNAL_W or px + ts < 0:
+                        continue
+                    try:
+                        tid = int(self.world.peek_tile(int(tx), int(ty)))
+                    except Exception:
+                        continue
+                    if int(tid) != int(self.T_WHEAT):
+                        continue
+                    rect = pygame.Rect(int(px), int(py), int(ts), int(ts))
+                    self._draw_wheat_tile_foreground(surface, rect, int(tx), int(ty))
+        finally:
+            surface.set_clip(prev_clip)
 
     def _draw_home_move_mode_overlay(self, surface: pygame.Surface, cam_x: int, cam_y: int) -> None:
         if not bool(getattr(self, "home_move_mode", False)):
@@ -44772,6 +44950,7 @@ class HardcoreSurvivalState(State):
         overlay = getattr(self, "_inside_highrise_floor_overlay", None)
         if self.mount is None and overlay is None:
             self._draw_player(surface, cam_x, cam_y_draw)
+            self._draw_crop_foreground_occlusion(surface, cam_x, cam_y_draw)
         self._draw_hit_fx(surface, cam_x, cam_y_draw)
         # Occlude the player/mount by front facades when behind buildings.
         # NOTE: On high-rise upper floors the player is drawn with an extra
