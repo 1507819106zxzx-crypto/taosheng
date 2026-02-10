@@ -55,8 +55,14 @@ def pick_ui_font_path() -> str | None:
         # to a non-CJK fallback on some platforms.
         try:
             f = pygame.font.Font(str(path), 16)
-            metrics = f.metrics("电梯")
-            return bool(metrics) and all(m is not None for m in metrics)
+            # Metrics can still exist for the "notdef" tofu box glyph, so compare
+            # two different CJK characters; if they render identically, we treat
+            # it as missing CJK support.
+            a = f.render("电", False, (255, 255, 255))
+            b = f.render("梯", False, (255, 255, 255))
+            if a.get_size() != b.get_size():
+                return True
+            return pygame.image.tostring(a, "RGBA") != pygame.image.tostring(b, "RGBA")
         except Exception:
             return False
 
@@ -2147,8 +2153,12 @@ class App:
         self.font_l = pygame.font.Font(font_path, 28) if font_path else pygame.font.Font(None, 28)
         self.ui_font_has_cjk = False
         try:
-            metrics = self.font_m.metrics("电梯")
-            self.ui_font_has_cjk = bool(metrics) and all(m is not None for m in metrics)
+            a = self.font_m.render("电", False, (255, 255, 255))
+            b = self.font_m.render("梯", False, (255, 255, 255))
+            if a.get_size() != b.get_size():
+                self.ui_font_has_cjk = True
+            else:
+                self.ui_font_has_cjk = pygame.image.tostring(a, "RGBA") != pygame.image.tostring(b, "RGBA")
         except Exception:
             self.ui_font_has_cjk = False
 
@@ -31912,6 +31922,37 @@ class HardcoreSurvivalState(State):
             if (not bool(vert0)) and seat_dir in ("left", "right"):
                 seat_dir = "down"
 
+        # Seat anchor offset: center-of-tile is not the cushion center for chair/sofa sprites.
+        # (User feedback: sitting wasn't at the chair center.) Adjust the pose anchor
+        # toward the rendered seat so the avatar lands on the furniture.
+        try:
+            tile = float(max(1, int(self.TILE_SIZE)))
+            if int(tid) == int(self.T_CHAIR):
+                off = float(tile) * 0.15  # ~1.5px on 10px tiles (matches chair seat inset)
+                if str(seat_dir) == "down":
+                    ay = float(ay) + float(off)
+                elif str(seat_dir) == "up":
+                    ay = float(ay) - float(off)
+                elif str(seat_dir) == "right":
+                    ax = float(ax) + float(off)
+                elif str(seat_dir) == "left":
+                    ax = float(ax) - float(off)
+            elif int(tid) == int(self.T_SOFA):
+                vert0 = int(max_y - min_y) > int(max_x - min_x)
+                off = float(tile) * 0.20  # sofa back+seat split is wider than chair
+                if bool(vert0):
+                    if str(seat_dir) == "right":
+                        ax = float(ax) + float(off)
+                    elif str(seat_dir) == "left":
+                        ax = float(ax) - float(off)
+                else:
+                    if str(seat_dir) == "down":
+                        ay = float(ay) + float(off)
+                    elif str(seat_dir) == "up":
+                        ay = float(ay) - float(off)
+        except Exception:
+            pass
+
         self.player.dir = str(seat_dir)
         if str(seat_dir) == "up":
             self.player.facing = pygame.Vector2(0, -1)
@@ -33817,39 +33858,89 @@ class HardcoreSurvivalState(State):
                     except Exception:
                         toilet_tile = None
 
-                    if toilet_tile is not None:
-                        tx_t, ty_t = toilet_tile
+                        if toilet_tile is not None:
+                            tx_t, ty_t = toilet_tile
 
-                        bath_cells: set[tuple[int, int]] = set()
-                        try:
-                            room_cells = {(int(x), int(y)) for (x, y) in region if int(get(int(x), int(y))) != int(self.T_DOOR)}
-                            comp: set[tuple[int, int]] = set()
-                            stack3 = [(int(tx_t), int(ty_t))]
-                            while stack3 and len(comp) < len(room_cells):
-                                x, y = stack3.pop()
-                                x = int(x)
-                                y = int(y)
-                                if (x, y) in comp:
-                                    continue
-                                if (x, y) not in room_cells:
-                                    continue
-                                comp.add((int(x), int(y)))
-                                stack3.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+                            bath_cells: set[tuple[int, int]] = set()
+                            try:
+                                door_like = {
+                                    int(self.T_DOOR),
+                                    int(self.T_DOOR_HOME),
+                                    int(self.T_DOOR_HOME_LOCKED),
+                                    int(self.T_DOOR_LOCKED),
+                                    int(self.T_DOOR_BROKEN),
+                                }
 
-                            # If the component is huge (open-plan), only treat the close
-                            # neighborhood as "bathroom" so we don't move the kitchen fridge.
-                            if comp and len(comp) <= max(18, int(len(region) * 0.55)):
-                                bath_cells = comp
-                            else:
+                                # Only consider passable floor tiles for room connectivity so
+                                # furniture solids don't "bridge" separate rooms.
+                                room_floor: set[tuple[int, int]] = set()
+                                for x, y in region:
+                                    x = int(x)
+                                    y = int(y)
+                                    tid2 = int(get(int(x), int(y)))
+                                    if int(tid2) in door_like:
+                                        continue
+                                    if bool(self._tile_solid(int(tid2))):
+                                        continue
+                                    room_floor.add((int(x), int(y)))
+
+                                # Start from an adjacent floor tile (toilet itself is solid).
+                                start2: tuple[int, int] | None = None
+                                for ox, oy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+                                    sx, sy = int(tx_t + ox), int(ty_t + oy)
+                                    if (int(sx), int(sy)) in room_floor:
+                                        start2 = (int(sx), int(sy))
+                                        break
+
+                                comp: set[tuple[int, int]] = set()
+                                if start2 is not None:
+                                    stack3 = [start2]
+                                    while stack3 and len(comp) < len(room_floor):
+                                        x, y = stack3.pop()
+                                        x = int(x)
+                                        y = int(y)
+                                        if (x, y) in comp:
+                                            continue
+                                        if (x, y) not in room_floor:
+                                            continue
+                                        comp.add((int(x), int(y)))
+                                        stack3.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+
+                                # Expand to include adjacent solids/fixtures within the same room.
+                                expanded: set[tuple[int, int]] = set(comp)
+                                for x, y in tuple(comp):
+                                    for ox, oy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+                                        nx, ny = int(x + ox), int(y + oy)
+                                        if (int(nx), int(ny)) in region:
+                                            expanded.add((int(nx), int(ny)))
+
+                                # If the component is huge (open-plan), only treat the close
+                                # neighborhood as "bathroom" so we don't move the kitchen fridge.
+                                if expanded and len(comp) <= max(24, int(len(region) * 0.45)):
+                                    bath_cells = expanded
+                                else:
+                                    for yy in range(int(ty_t) - 1, int(ty_t) + 2):
+                                        for xx in range(int(tx_t) - 1, int(tx_t) + 2):
+                                            if (int(xx), int(yy)) in region:
+                                                bath_cells.add((int(xx), int(yy)))
+                            except Exception:
                                 for yy in range(int(ty_t) - 1, int(ty_t) + 2):
                                     for xx in range(int(tx_t) - 1, int(tx_t) + 2):
                                         if (int(xx), int(yy)) in region:
                                             bath_cells.add((int(xx), int(yy)))
-                        except Exception:
-                            for yy in range(int(ty_t) - 1, int(ty_t) + 2):
-                                for xx in range(int(tx_t) - 1, int(tx_t) + 2):
-                                    if (int(xx), int(yy)) in region:
-                                        bath_cells.add((int(xx), int(yy)))
+
+                            # Proximity safety net: even if the room is open-plan, never allow
+                            # a fridge right next to / very near the toilet area.
+                            try:
+                                for px, py in region:
+                                    px = int(px)
+                                    py = int(py)
+                                    if int(get(int(px), int(py))) != int(self.T_FRIDGE):
+                                        continue
+                                    if abs(int(px) - int(tx_t)) + abs(int(py) - int(ty_t)) <= 6:
+                                        bath_cells.add((int(px), int(py)))
+                            except Exception:
+                                pass
 
                         removed = 0
                         for xx, yy in tuple(bath_cells):
@@ -39327,16 +39418,18 @@ class HardcoreSurvivalState(State):
         # Spacing pattern: reduce density so facades do not over-window.
         # (User feedback: too many windows.) Keep a lower density, but still
         # guarantee at least a couple of candidates on medium facades.
-        if int(span) >= 18:
-            spacing = 12
+        if int(span) >= 22:
+            spacing = 16
+        elif int(span) >= 18:
+            spacing = 14
         elif int(span) >= 14:
-            spacing = 10
+            spacing = 12
         elif int(span) >= 11:
-            spacing = 9
+            spacing = 10
         elif int(span) >= 9:
-            spacing = 8
+            spacing = 9
         else:
-            spacing = 7
+            spacing = 8
         inner = int(span) - 2 * int(margin)
         if int(inner) <= 0:
             return None
@@ -39686,37 +39779,29 @@ class HardcoreSurvivalState(State):
                 surface.fill(water, pygame.Rect(rect.x + 2, rect.y + 3, 2, 1))
 
         if tile_id == self.T_WHEAT:
-            # Wheat field (top-down): dense golden ears with subtle row hints + wind sway.
+            # Crop field (rice/wheat): vertical stalks with heads + subtle row hints + wind sway.
+            # User feedback: previous furrow-heavy pattern could read like "grass stripes";
+            # switch to stalk silhouettes so you can see each plant growing upward.
             seed2 = int(self.seed) ^ 0xA52D9E13
-            cell = int(self._hash2_u32(int(tx) // 8, int(ty) // 8, seed2))
-            vert = (cell & 1) == 0
 
-            furrow = self._tint(col, add=(-34, -26, -18))
-            furrow_hi = self._tint(col, add=(24, 18, 0))
-            canopy = self._tint(col, add=(12, 8, -6))
-            canopy_lo = self._tint(col, add=(-12, -10, -12))
-            ear = self._tint(col, add=(54, 44, 8))
-            ear_hi = self._tint(ear, add=(22, 18, 0))
-            ear_lo = self._tint(ear, add=(-34, -26, -18))
+            bed = self._tint(col, add=(-18, -16, -14))
+            bed_lo = self._tint(col, add=(-30, -26, -22))
+            stalk = self._tint(col, add=(-24, -20, -16))
+            stalk_hi = self._tint(col, add=(10, 8, 0))
+            head = self._tint(col, add=(58, 46, 10))
+            head_hi = self._tint(col, add=(78, 62, 16))
+            head_lo = self._tint(col, add=(22, 16, 0))
 
-            # Slightly darker base so the ears pop.
-            surface.fill(canopy_lo, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2))
+            # Slightly darker inner bed so stalks pop.
+            surface.fill(bed, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2))
 
-            # Row hints (furrows) so it reads as a field, not grass.
-            if vert:
-                for x_off in (2, 5, 8):
-                    if rect.x + x_off < rect.right - 1:
-                        surface.fill(furrow, pygame.Rect(rect.x + x_off, rect.y + 1, 1, rect.h - 2))
-                if (int(ty) % 3) == 0:
-                    surface.fill(furrow_hi, pygame.Rect(rect.x + 1, rect.y + 2, rect.w - 2, 1))
-            else:
-                for y_off in (2, 5, 8):
-                    if rect.y + y_off < rect.bottom - 1:
-                        surface.fill(furrow, pygame.Rect(rect.x + 1, rect.y + y_off, rect.w - 2, 1))
-                if (int(tx) % 3) == 0:
-                    surface.fill(furrow_hi, pygame.Rect(rect.x + 2, rect.y + 1, 1, rect.h - 2))
+            # Gentle row hint: stagger columns every few tiles so it doesn't become a hard "comb".
+            cell = int(self._hash2_u32(int(tx) // 6, int(ty) // 6, int(seed2)))
+            row_shift = 1 if (int(cell) & 1) == 0 else 0
+            if ((int(tx) + int(row_shift)) % 4) == 0:
+                surface.fill(bed_lo, pygame.Rect(rect.x + 1, rect.y + 1, 1, rect.h - 2))
 
-            # Wind sway (horizontal) for the top "ears" (small, readable motion).
+            # Wind sway (horizontal) for the ear heads (small, readable motion).
             try:
                 wind = float(getattr(self, "weather_wind", 0.0))
             except Exception:
@@ -39737,48 +39822,52 @@ class HardcoreSurvivalState(State):
                 if wind_n < 0.0:
                     sway_base = -int(sway_base)
 
-            # Dense ears: a handful of 2x2 clusters + highlights.
-            for i in range(9):
+            # Stalks: fixed grid with per-tile jitter so you can see "one by one" plants.
+            bases = (2, 4, 6, 8, 3, 7)
+            for i, bx in enumerate(bases):
                 hh2 = int(self._hash2_u32(int(tx), int(ty), int(seed2) ^ (int(i) * 0x9E3779B9)))
-                # Base position inside the tile (1..8).
-                ox = 1 + int(hh2 % 8)
-                oy = 1 + int((hh2 >> 4) % 8)
-                # Snap to row center with a tiny jitter so it feels planted.
-                if vert:
-                    ox = int((2, 5, 8)[int(ox // 3)])
-                    if (hh2 & 1) == 0:
-                        ox = int(clamp(int(ox - 1), 1, 8))
-                else:
-                    oy = int((2, 5, 8)[int(oy // 3)])
-                    if (hh2 & 1) == 0:
-                        oy = int(clamp(int(oy - 1), 1, 8))
+                # Small jitter to avoid perfectly straight stripes.
+                j = 0
+                rj = int(hh2 & 7)
+                if rj == 0:
+                    j = -1
+                elif rj == 1:
+                    j = 1
+                x = int(clamp(int(bx) + int(row_shift) + int(j), 1, int(rect.w - 2)))
 
-                # Apply sway mostly to the ear head.
+                top = 2 + int((hh2 >> 5) % 3)  # 2..4
+                y0 = int(rect.y + int(top))
+                y1 = int(rect.bottom - 2)
+                if y1 <= y0:
+                    continue
+
+                # Main stalk.
+                surface.fill(stalk, pygame.Rect(int(rect.x + x), int(y0), 1, int(y1 - y0 + 1)))
+                if ((hh2 >> 2) & 1) == 0 and int(y1 - y0) >= 4:
+                    surface.fill(stalk_hi, pygame.Rect(int(rect.x + x), int(y0), 1, 2))
+
+                # Ear head with sway (mostly on the top).
                 sway = int(sway_base)
-                if (hh2 & 3) == 0:
-                    sway = int(sway * 2)
-                x0 = int(rect.x + ox + sway)
-                y0 = int(rect.y + oy)
-                x0 = int(clamp(int(x0), int(rect.x + 1), int(rect.right - 3)))
-                y0 = int(clamp(int(y0), int(rect.y + 1), int(rect.bottom - 3)))
+                if ((hh2 >> 1) & 1) == 0:
+                    sway = int(clamp(int(sway) * 2, -2, 2))
+                hx = int(clamp(int(x) + int(sway), 1, int(rect.w - 3)))
+                hy = int(clamp(int(y0 - 1), int(rect.y + 1), int(rect.bottom - 3)))
 
-                # Ear (2x2) + tiny awn pixels so it reads like wheat, not grass.
-                surface.fill(ear, pygame.Rect(int(x0), int(y0), 2, 2))
-                surface.fill(ear_hi, pygame.Rect(int(x0), int(y0), 2, 1))
-                # Awns / sparkle.
-                if x0 - 1 >= rect.x + 1:
-                    surface.fill(ear_hi, pygame.Rect(int(x0 - 1), int(y0 + 1), 1, 1))
-                if x0 + 2 < rect.right - 1:
-                    surface.fill(ear_hi, pygame.Rect(int(x0 + 2), int(y0), 1, 1))
-                # Shadow under the ear.
-                if y0 + 2 < rect.bottom - 1:
-                    surface.fill(ear_lo, pygame.Rect(int(x0), int(y0 + 2), 1, 1))
+                surface.fill(head, pygame.Rect(int(rect.x + hx), int(hy), 2, 2))
+                surface.fill(head_hi, pygame.Rect(int(rect.x + hx), int(hy), 2, 1))
+                # Awns / grain pixels.
+                if int(hx) - 1 >= 1:
+                    surface.fill(head_hi, pygame.Rect(int(rect.x + hx - 1), int(hy + 1), 1, 1))
+                if int(hx) + 2 <= int(rect.w - 2):
+                    surface.fill(head_hi, pygame.Rect(int(rect.x + hx + 2), int(hy), 1, 1))
+                if int(hy) + 2 < int(rect.bottom - 1):
+                    surface.fill(head_lo, pygame.Rect(int(rect.x + hx), int(hy + 2), 1, 1))
 
-            # A couple of extra bright specks so the whole field glows.
-            if ((h >> 2) & 1) == 0:
-                surface.fill(ear_hi, pygame.Rect(rect.x + 2, rect.y + 2, 1, 1))
-            if ((h >> 3) & 1) == 0:
-                surface.fill(ear_hi, pygame.Rect(rect.x + 7, rect.y + 3, 1, 1))
+            # Extra sparkle so the field reads dense even when zoomed out.
+            if ((h >> 2) & 3) == 0:
+                surface.fill(head_hi, pygame.Rect(rect.x + 2, rect.y + 2, 1, 1))
+            if ((h >> 4) & 3) == 0:
+                surface.fill(head_hi, pygame.Rect(rect.x + 7, rect.y + 3, 1, 1))
 
         if tile_id == self.T_MOUNTAIN:
             # Mountain ground: rocky strata + occasional boulders.
@@ -41307,7 +41396,8 @@ class HardcoreSurvivalState(State):
         hint = ""
 
         # Explicit readable hover tips for home/RV furniture.
-        # NOTE: Keep this in Chinese to match the current UI language.
+        # If the UI font lacks CJK glyphs, fall back to English to avoid "box" text.
+        has_cjk = bool(getattr(self.app, "ui_font_has_cjk", True))
         if tid == int(self.T_WALL):
             # Window tiles are rendered as glass cutouts on perimeter wall tiles while inside a building.
             try:
@@ -41319,33 +41409,64 @@ class HardcoreSurvivalState(State):
                 closed = (int(tx), int(ty)) in getattr(self, "world_window_closed", set())
             except Exception:
                 closed = False
-            state = "关闭" if bool(closed) else "打开"
-            self._hover_tooltip = (["窗户", f"状态：{state}", "E 开/关"], (int(mx), int(my)))
+            if has_cjk:
+                state = "关闭" if bool(closed) else "打开"
+                lines2 = ["窗户", f"状态：{state}", "E 开/关"]
+            else:
+                state = "Closed" if bool(closed) else "Open"
+                lines2 = ["Window", f"State: {state}", "E Toggle"]
+            self._hover_tooltip = (lines2, (int(mx), int(my)))
             return
 
-        tips: dict[int, tuple[str, str, str]] = {
-            int(self.T_CHAIR): ("椅子", "坐下休息", "E 坐下"),
-            int(self.T_SOFA): ("沙发", "坐下休息", "E 坐下"),
-            int(self.T_BED): ("床", "睡觉恢复体力/精神", "E 睡觉"),
-            int(self.T_FRIDGE): ("冰箱", "存放食物/饮料", "E 打开"),
-            int(self.T_SHELF): ("柜子", "存放物品", "E 打开"),
-            int(self.T_CABINET): ("柜子", "存放物品", "E 打开"),
-            int(self.T_TABLE): ("桌子", "放置/整理物品", ""),
-            int(self.T_TV): ("电视", "看看节目 (+士气)", "E 开/关"),
-            int(self.T_PC): ("电脑", "使用电脑：地图/工作", "E 使用"),
-            int(self.T_LAMP): ("灯", "开关灯光", "E 开/关"),
-            int(self.T_SWITCH): ("开关", "开关灯光", "E 开/关"),
-            int(self.T_TOILET): ("马桶", "上厕所", "E 使用"),
-            int(self.T_SINK): ("水池", "接水/洗手（需要杯子）", "E 接水"),
-            int(self.T_DOOR): ("门", "通往其他区域", ""),
-            int(self.T_DOOR_HOME): ("门", "通往其他区域", ""),
-            int(self.T_DOOR_LOCKED): ("门", "上锁", "E 开锁/撬开"),
-            int(self.T_DOOR_HOME_LOCKED): ("家门", "上锁", "E 开锁/撬开"),
-            int(self.T_DOOR_BROKEN): ("门", "损坏（可通行）", ""),
-            int(self.T_STAIRS_UP): ("楼梯", "上楼", "E 使用"),
-            int(self.T_STAIRS_DOWN): ("楼梯", "下楼", "E 使用"),
-            int(self.T_ELEVATOR): ("电梯", "选择楼层", "E 使用"),
-        }
+        tips: dict[int, tuple[str, str, str]]
+        if has_cjk:
+            tips = {
+                int(self.T_CHAIR): ("椅子", "坐下休息", "E 坐下"),
+                int(self.T_SOFA): ("沙发", "坐下休息", "E 坐下"),
+                int(self.T_BED): ("床", "睡觉恢复体力/精神", "E 睡觉"),
+                int(self.T_FRIDGE): ("冰箱", "存放食物/饮料", "E 打开"),
+                int(self.T_SHELF): ("柜子", "存放物品", "E 打开"),
+                int(self.T_CABINET): ("柜子", "存放物品", "E 打开"),
+                int(self.T_TABLE): ("桌子", "放置/整理物品", ""),
+                int(self.T_TV): ("电视", "看看节目 (+士气)", "E 开/关"),
+                int(self.T_PC): ("电脑", "使用电脑：地图/工作", "E 使用"),
+                int(self.T_LAMP): ("灯", "开关灯光", "E 开/关"),
+                int(self.T_SWITCH): ("开关", "开关灯光", "E 开/关"),
+                int(self.T_TOILET): ("马桶", "上厕所", "E 使用"),
+                int(self.T_SINK): ("水池", "接水/洗手（需要杯子）", "E 接水"),
+                int(self.T_DOOR): ("门", "通往其他区域", ""),
+                int(self.T_DOOR_HOME): ("门", "通往其他区域", ""),
+                int(self.T_DOOR_LOCKED): ("门", "上锁", "E 开锁/撬开"),
+                int(self.T_DOOR_HOME_LOCKED): ("家门", "上锁", "E 开锁/撬开"),
+                int(self.T_DOOR_BROKEN): ("门", "损坏（可通行）", ""),
+                int(self.T_STAIRS_UP): ("楼梯", "上楼", "E 使用"),
+                int(self.T_STAIRS_DOWN): ("楼梯", "下楼", "E 使用"),
+                int(self.T_ELEVATOR): ("电梯", "选择楼层", "E 使用"),
+            }
+        else:
+            tips = {
+                int(self.T_CHAIR): ("Chair", "Sit to rest", "E Sit"),
+                int(self.T_SOFA): ("Sofa", "Sit to rest", "E Sit"),
+                int(self.T_BED): ("Bed", "Sleep to recover", "E Sleep"),
+                int(self.T_FRIDGE): ("Fridge", "Food storage", "E Open"),
+                int(self.T_SHELF): ("Shelf", "Storage", "E Open"),
+                int(self.T_CABINET): ("Cabinet", "Storage", "E Open"),
+                int(self.T_TABLE): ("Table", "Place items", ""),
+                int(self.T_TV): ("TV", "Entertainment", "E Toggle"),
+                int(self.T_PC): ("PC", "Computer", "E Use"),
+                int(self.T_LAMP): ("Lamp", "Toggle light", "E Toggle"),
+                int(self.T_SWITCH): ("Switch", "Toggle light", "E Toggle"),
+                int(self.T_TOILET): ("Toilet", "Use toilet", "E Use"),
+                int(self.T_SINK): ("Sink", "Wash / drink", "E Use"),
+                int(self.T_DOOR): ("Door", "Pass through", ""),
+                int(self.T_DOOR_HOME): ("Door", "Pass through", ""),
+                int(self.T_DOOR_LOCKED): ("Locked door", "Locked", "E Unlock / Pry"),
+                int(self.T_DOOR_HOME_LOCKED): ("Locked door", "Locked", "E Unlock / Pry"),
+                int(self.T_DOOR_BROKEN): ("Broken door", "Broken (passable)", ""),
+                int(self.T_STAIRS_UP): ("Stairs", "Up", "E Use"),
+                int(self.T_STAIRS_DOWN): ("Stairs", "Down", "E Use"),
+                int(self.T_ELEVATOR): ("Elevator", "Select floor", "E Use"),
+            }
         tip = tips.get(int(tid))
         if tip is None:
             return
