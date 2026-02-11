@@ -26787,6 +26787,88 @@ class HardcoreSurvivalState(State):
                 return pb
             return pa if la <= lb else pb
 
+        door_tids = {
+            int(self.T_DOOR),
+            int(self.T_DOOR_BROKEN),
+            int(self.T_DOOR_LOCKED),
+            int(self.T_DOOR_HOME),
+            int(self.T_DOOR_HOME_LOCKED),
+        }
+        _story_door_cache: dict[tuple[int, int, int, int], tuple[tuple[int, int], ...]] = {}
+
+        def building_door_candidates(bkey: tuple[int, int, int, int]) -> tuple[tuple[int, int], ...]:
+            key = (int(bkey[0]), int(bkey[1]), int(bkey[2]), int(bkey[3]))
+            cached = _story_door_cache.get(key)
+            if cached is not None:
+                return cached
+            tx0, ty0, bw, bh = key
+            cands: list[tuple[int, int]] = []
+
+            def consider(xx: int, yy: int) -> None:
+                xx = int(xx)
+                yy = int(yy)
+                try:
+                    tid = int(self.world.peek_tile(int(xx), int(yy)))
+                except Exception:
+                    return
+                if int(tid) in door_tids and not bool(self._tile_solid(int(tid))):
+                    cands.append((int(xx), int(yy)))
+
+            for xx in range(int(tx0), int(tx0 + bw)):
+                consider(int(xx), int(ty0))
+                consider(int(xx), int(ty0 + bh - 1))
+            for yy in range(int(ty0) + 1, int(ty0 + bh) - 1):
+                consider(int(tx0), int(yy))
+                consider(int(tx0 + bw - 1), int(yy))
+
+            if not cands:
+                # Fallback: any non-solid border tile that connects to a non-solid interior tile.
+                def consider_open(xx: int, yy: int) -> None:
+                    xx = int(xx)
+                    yy = int(yy)
+                    try:
+                        tid = int(self.world.peek_tile(int(xx), int(yy)))
+                    except Exception:
+                        return
+                    if bool(self._tile_solid(int(tid))):
+                        return
+                    for ox, oy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        nx = int(xx + ox)
+                        ny = int(yy + oy)
+                        if not (int(tx0) <= int(nx) < int(tx0 + bw) and int(ty0) <= int(ny) < int(ty0 + bh)):
+                            continue
+                        try:
+                            tid2 = int(self.world.peek_tile(int(nx), int(ny)))
+                        except Exception:
+                            continue
+                        if not bool(self._tile_solid(int(tid2))):
+                            cands.append((int(xx), int(yy)))
+                            break
+
+                for xx in range(int(tx0), int(tx0 + bw)):
+                    consider_open(int(xx), int(ty0))
+                    consider_open(int(xx), int(ty0 + bh - 1))
+                for yy in range(int(ty0) + 1, int(ty0 + bh) - 1):
+                    consider_open(int(tx0), int(yy))
+                    consider_open(int(tx0 + bw - 1), int(yy))
+
+            out = tuple(cands)
+            _story_door_cache[key] = out
+            return out
+
+        def nearest_building_door(
+            bkey: tuple[int, int, int, int],
+            *,
+            prefer_tx: int,
+            prefer_ty: int,
+        ) -> tuple[int, int] | None:
+            cands = building_door_candidates(bkey)
+            if not cands:
+                return None
+            ptx = int(prefer_tx)
+            pty = int(prefer_ty)
+            return min(cands, key=lambda p: (abs(int(p[0]) - int(ptx)) + abs(int(p[1]) - int(pty)), abs(int(p[1]) - int(pty)), abs(int(p[0]) - int(ptx))))
+
         npc_w, npc_h = self._story_npc_collider_wh()
         base_speed = 60.0
         npc_beh: dict[str, dict[str, object]] = {
@@ -27436,6 +27518,37 @@ class HardcoreSurvivalState(State):
 
                     goal = tile_center(int(best_tile[0]), int(best_tile[1]))
                     goal_left = float(rng.uniform(0.9, 2.2))
+
+            # If the NPC is moving between indoor/outdoor goals, route via the building door
+            # instead of pushing directly into exterior walls (looks like "wall climbing").
+            if bool(allow_inside):
+                try:
+                    ntx = int(math.floor(float(pos.x) / float(self.TILE_SIZE)))
+                    nty = int(math.floor(float(pos.y) / float(self.TILE_SIZE)))
+                    gtx = int(math.floor(float(goal.x) / float(self.TILE_SIZE)))
+                    gty = int(math.floor(float(goal.y) / float(self.TILE_SIZE)))
+
+                    hit_now = self._peek_building_at_tile(int(ntx), int(nty))
+                    hit_goal = self._peek_building_at_tile(int(gtx), int(gty))
+                    now_key: tuple[int, int, int, int] | None = None
+                    goal_key: tuple[int, int, int, int] | None = None
+                    if hit_now is not None:
+                        now_key = (int(hit_now[0]), int(hit_now[1]), int(hit_now[2]), int(hit_now[3]))
+                    if hit_goal is not None:
+                        goal_key = (int(hit_goal[0]), int(hit_goal[1]), int(hit_goal[2]), int(hit_goal[3]))
+
+                    if now_key is not None and goal_key != now_key and bool(self._story_npc_is_indoor_tile(int(ntx), int(nty))):
+                        door = nearest_building_door(now_key, prefer_tx=int(ntx), prefer_ty=int(nty))
+                        if door is not None and (int(ntx), int(nty)) != (int(door[0]), int(door[1])):
+                            goal = tile_center(int(door[0]), int(door[1]))
+                            goal_left = max(float(goal_left), 1.2)
+                    elif now_key is None and goal_key is not None and bool(self._story_npc_is_indoor_tile(int(gtx), int(gty))):
+                        door = nearest_building_door(goal_key, prefer_tx=int(ntx), prefer_ty=int(nty))
+                        if door is not None and (int(ntx), int(nty)) != (int(door[0]), int(door[1])):
+                            goal = tile_center(int(door[0]), int(door[1]))
+                            goal_left = max(float(goal_left), 1.2)
+                except Exception:
+                    pass
 
             d = pygame.Vector2(goal) - pygame.Vector2(pos)
             vel = pygame.Vector2(0, 0)
@@ -39857,23 +39970,27 @@ class HardcoreSurvivalState(State):
                         continue
                 used_x.add(int(x))
 
-                top = 2 + int((hh2 >> 5) % 3)  # 2..4
-                y0 = int(rect.y + int(top))
+                # Taller plants: extend the top a few pixels above the tile so crops can
+                # reach up toward the player's torso (still drawn behind the body).
+                extra = 3 + int((hh2 >> 9) & 3)  # 3..6
+                y0 = int(rect.y - int(extra))
                 y1 = int(rect.bottom - 2)
                 if y1 <= y0:
                     continue
 
-                # Main stalk.
-                surface.fill(stalk, pygame.Rect(int(rect.x + x), int(y0), 1, int(y1 - y0 + 1)))
-                if ((hh2 >> 2) & 1) == 0 and int(y1 - y0) >= 4:
-                    surface.fill(stalk_hi, pygame.Rect(int(rect.x + x), int(y0), 1, 2))
-
-                # Ear head with sway (mostly on the top).
+                # Wind sway: move the whole plant (stalk + head) together.
                 sway = int(sway_base)
                 if ((hh2 >> 1) & 1) == 0:
                     sway = int(clamp(int(sway) * 2, -2, 2))
-                hx = int(clamp(int(x) + int(sway), 1, int(rect.w - 3)))
-                hy = int(clamp(int(y0 - 1), int(rect.y + 1), int(rect.bottom - 3)))
+                x2 = int(clamp(int(x) + int(sway), 1, int(rect.w - 2)))
+
+                # Main stalk.
+                surface.fill(stalk, pygame.Rect(int(rect.x + x2), int(y0), 1, int(y1 - y0 + 1)))
+                if ((hh2 >> 2) & 1) == 0 and int(y1 - y0) >= 4:
+                    surface.fill(stalk_hi, pygame.Rect(int(rect.x + x2), int(y0), 1, 2))
+
+                hx = int(x2)
+                hy = int(y0 - 1)
 
                 # Ear head (smaller): 1x2 so it doesn't read as a big blob.
                 surface.fill(head, pygame.Rect(int(rect.x + hx), int(hy), 1, 2))
@@ -40762,23 +40879,26 @@ class HardcoreSurvivalState(State):
                     continue
             used_x.add(int(x))
 
-            top = 2 + int((hh2 >> 5) % 3)  # 2..4
-            y0 = int(rect.y + int(top))
+            extra = 3 + int((hh2 >> 9) & 3)  # 3..6 (match background crop height)
+            y0 = int(rect.y - int(extra))
             y1 = int(rect.bottom - 2)
             if y1 <= y0:
                 continue
 
-            # Short stalk segment (foreground).
-            seg_len = 5
-            y2 = int(min(int(y1), int(y0 + seg_len)))
-            if y2 > y0:
-                surface.fill(stalk_hi, pygame.Rect(int(rect.x + x), int(y0), 1, int(y2 - y0 + 1)))
-
             sway = int(sway_base)
             if ((hh2 >> 1) & 1) == 0:
                 sway = int(clamp(int(sway) * 2, -2, 2))
-            hx = int(clamp(int(x) + int(sway), 1, int(rect.w - 3)))
-            hy = int(clamp(int(y0 - 1), int(rect.y + 1), int(rect.bottom - 3)))
+            x2 = int(clamp(int(x) + int(sway), 1, int(rect.w - 2)))
+
+            # Short stalk segment (foreground): use the lower portion so it always overlaps legs.
+            seg_len = 6
+            y_seg0 = int(max(int(rect.y) + 1, int(y1) - int(seg_len)))
+            y2 = int(min(int(y1), int(y_seg0 + seg_len)))
+            if y2 > y_seg0:
+                surface.fill(stalk_hi, pygame.Rect(int(rect.x + x2), int(y_seg0), 1, int(y2 - y_seg0 + 1)))
+
+            hx = int(x2)
+            hy = int(y0 - 1)
 
             surface.fill(head, pygame.Rect(int(rect.x + hx), int(hy), 1, 2))
             surface.fill(head_hi, pygame.Rect(int(rect.x + hx), int(hy), 1, 1))
