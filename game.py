@@ -22101,22 +22101,29 @@ class HardcoreSurvivalState(State):
         w = 132
         h = 34
         panel = pygame.Rect(int(INTERNAL_W - w - 10), 8, int(w), int(h))
-        pygame.draw.rect(surface, (0, 0, 0), panel, border_radius=10)
-        pygame.draw.rect(surface, (80, 80, 96), panel, 2, border_radius=10)
+        surface.fill((0, 0, 0), panel)
+        pygame.draw.rect(surface, (80, 80, 96), panel, 2)
         draw_text(surface, self.app.font_s, f"番茄钟 {label}", (panel.x + 10, panel.y + 7), pygame.Color(240, 240, 244))
         draw_text(surface, self.app.font_s, format_time(rem), (panel.right - 10, panel.y + 7), pygame.Color(255, 220, 140), anchor="topright")
 
         bar = pygame.Rect(panel.x + 10, panel.bottom - 10, panel.w - 20, 6)
-        pygame.draw.rect(surface, (28, 28, 34), bar, border_radius=4)
+        surface.fill((28, 28, 34), bar)
+        pygame.draw.rect(surface, (60, 60, 72), bar, 1)
         fill = pygame.Rect(bar.x + 1, bar.y + 1, int(round((bar.w - 2) * frac)), bar.h - 2)
         if fill.w > 0:
-            pygame.draw.rect(surface, (255, 220, 140), fill, border_radius=3)
+            surface.fill((255, 220, 140), fill)
 
     def _draw_pomodoro_ui(self, surface: pygame.Surface) -> None:
-        panel = pygame.Rect(0, 0, 320, 190)
+        panel = pygame.Rect(0, 0, 320, 206)
         panel.center = (INTERNAL_W // 2, INTERNAL_H // 2)
-        pygame.draw.rect(surface, (0, 0, 0), panel, border_radius=14)
-        pygame.draw.rect(surface, (90, 90, 110), panel, 2, border_radius=14)
+        surface.fill((0, 0, 0), panel)
+        inner = panel.inflate(-4, -4)
+        surface.fill((18, 18, 22), inner)
+        pygame.draw.rect(surface, (90, 90, 110), panel, 2)
+        pygame.draw.rect(surface, (50, 50, 62), inner, 1)
+        title = pygame.Rect(int(panel.x + 4), int(panel.y + 4), int(panel.w - 8), 24)
+        surface.fill((28, 28, 34), title)
+        pygame.draw.rect(surface, (90, 90, 110), title, 1)
         draw_text(surface, self.app.font_m, "番茄钟", (panel.centerx, panel.y + 12), pygame.Color(240, 240, 240), anchor="center")
 
         cfg = self._pomodoro_settings_ref()
@@ -22131,6 +22138,10 @@ class HardcoreSurvivalState(State):
             draw_text(surface, self.app.font_m, format_time(rem), (panel.centerx, panel.y + 56), pygame.Color(255, 220, 140), anchor="center")
 
         sel = int(getattr(self, "pomodoro_ui_sel", 0))
+        row_fill = (12, 12, 14)
+        row_border = (50, 50, 62)
+        row_sel_fill = (28, 28, 34)
+        row_sel_border = (255, 220, 140)
         rows = [
             ("专注(分钟)", int(cfg.get("work_min", 25))),
             ("短休息(分钟)", int(cfg.get("break_min", 5))),
@@ -22143,8 +22154,12 @@ class HardcoreSurvivalState(State):
         for i, (label, val) in enumerate(rows):
             rr = pygame.Rect(int(panel.x + 18), int(y0 + i * line_h - 2), int(panel.w - 36), int(line_h))
             if int(sel) == int(i):
-                pygame.draw.rect(surface, (28, 28, 34), rr, border_radius=8)
-                pygame.draw.rect(surface, (255, 220, 140), rr, 1, border_radius=8)
+                surface.fill(row_sel_fill, rr)
+                pygame.draw.rect(surface, row_sel_border, rr, 1)
+                surface.fill(row_sel_border, pygame.Rect(int(rr.x + 1), int(rr.y + 1), 2, int(rr.h - 2)))
+            else:
+                surface.fill(row_fill, rr)
+                pygame.draw.rect(surface, row_border, rr, 1)
             draw_text(surface, self.app.font_s, label, (x0, y0 + i * line_h), pygame.Color(230, 230, 236))
             draw_text(surface, self.app.font_s, str(int(val)), (panel.right - 28, y0 + i * line_h), pygame.Color(240, 240, 244), anchor="topright")
 
@@ -22155,8 +22170,12 @@ class HardcoreSurvivalState(State):
             i = 4 + j
             rr = pygame.Rect(int(panel.x + 18), int(btn_y + j * line_h - 2), int(panel.w - 36), int(line_h))
             if int(sel) == int(i):
-                pygame.draw.rect(surface, (28, 28, 34), rr, border_radius=8)
-                pygame.draw.rect(surface, (255, 220, 140), rr, 1, border_radius=8)
+                surface.fill(row_sel_fill, rr)
+                pygame.draw.rect(surface, row_sel_border, rr, 1)
+                surface.fill(row_sel_border, pygame.Rect(int(rr.x + 1), int(rr.y + 1), 2, int(rr.h - 2)))
+            else:
+                surface.fill(row_fill, rr)
+                pygame.draw.rect(surface, row_border, rr, 1)
             draw_text(surface, self.app.font_s, label, (x0, int(btn_y + j * line_h)), pygame.Color(255, 220, 140) if i == 4 else pygame.Color(210, 210, 220))
 
         draw_text(
@@ -31367,8 +31386,10 @@ class HardcoreSurvivalState(State):
         *,
         radius_px: float,
         prop_ids: set[str] | None = None,
+        origin_pos: pygame.Vector2 | None = None,
     ) -> tuple["_Chunk | None", "_WorldProp | None", float]:
         cx, cy = self._player_chunk()
+        origin = pygame.Vector2(self.player.pos) if origin_pos is None else pygame.Vector2(origin_pos)
         best_d2 = float(radius_px * radius_px)
         best_prop: HardcoreSurvivalState._WorldProp | None = None
         best_chunk: HardcoreSurvivalState._Chunk | None = None
@@ -31385,7 +31406,7 @@ class HardcoreSurvivalState(State):
                     pos = getattr(pr, "pos", None)
                     if pos is None:
                         continue
-                    d2 = float((pygame.Vector2(pos) - self.player.pos).length_squared())
+                    d2 = float((pygame.Vector2(pos) - origin).length_squared())
                     if d2 < best_d2:
                         best_d2 = d2
                         best_prop = pr
@@ -31922,7 +31943,24 @@ class HardcoreSurvivalState(State):
         if not bool(self._player_in_home_world_building()):
             return False
 
-        _chunk, pr, _d2 = self._find_nearest_prop(radius_px=18.0, prop_ids={"pomodoro", "wall_calendar"})
+        origin_pos: pygame.Vector2 | None = None
+        try:
+            if (
+                str(getattr(self, "player_pose", "") or "") == "sit"
+                and str(getattr(self, "player_pose_space", "") or "") == "world"
+                and isinstance(getattr(self, "player_pose_anchor", None), tuple)
+            ):
+                ax, ay = getattr(self, "player_pose_anchor", (None, None))
+                if ax is not None and ay is not None:
+                    origin_pos = pygame.Vector2(float(ax), float(ay))
+        except Exception:
+            origin_pos = None
+
+        _chunk, pr, _d2 = self._find_nearest_prop(
+            radius_px=26.0,
+            prop_ids={"pomodoro", "wall_calendar"},
+            origin_pos=origin_pos,
+        )
         if pr is None:
             return False
         pid = str(getattr(pr, "prop_id", "") or "")
@@ -32329,11 +32367,11 @@ class HardcoreSurvivalState(State):
             self._set_hint("醒来", seconds=0.8)
             return
         if str(getattr(self, "player_pose", "")) == "sit" and str(getattr(self, "player_pose_space", "")) == "world":
-            if self._try_use_pc_world():
+            if self._try_use_home_tools_world():
                 return
             if self._try_watch_tv_world():
                 return
-            if self._try_use_home_tools_world():
+            if self._try_use_pc_world():
                 return
             self._clear_player_pose()
             self._set_hint("起身", seconds=0.8)
@@ -39970,26 +40008,47 @@ class HardcoreSurvivalState(State):
                         continue
                 used_x.add(int(x))
 
-                # Taller plants: extend the top a few pixels above the tile so crops can
-                # reach up toward the player's torso (still drawn behind the body).
-                extra = 3 + int((hh2 >> 9) & 3)  # 3..6
+                # Taller plants: extend the top above the tile so crops can reach the
+                # player's torso (still drawn behind the body).
+                extra = 6 + int((hh2 >> 9) & 3) * 2  # 6,8,10,12
                 y0 = int(rect.y - int(extra))
                 y1 = int(rect.bottom - 2)
                 if y1 <= y0:
                     continue
 
-                # Wind sway: move the whole plant (stalk + head) together.
+                # Wind sway: bend the whole plant. The root stays planted; the top moves.
                 sway = int(sway_base)
                 if ((hh2 >> 1) & 1) == 0:
                     sway = int(clamp(int(sway) * 2, -2, 2))
-                x2 = int(clamp(int(x) + int(sway), 1, int(rect.w - 2)))
+                x_base = int(x)
+                x_top = int(clamp(int(x_base) + int(sway), 1, int(rect.w - 2)))
 
-                # Main stalk.
-                surface.fill(stalk, pygame.Rect(int(rect.x + x2), int(y0), 1, int(y1 - y0 + 1)))
+                # Main stalk (bent): keep the lower portion fixed (root doesn't "wiggle"),
+                # then tilt the upper portion as a straight segment so the stalk + ear move together.
+                hgt = int(y1 - y0)
+                if int(sway) == 0 or int(hgt) <= 0:
+                    surface.fill(stalk, pygame.Rect(int(rect.x + x_base), int(y0), 1, int(hgt + 1)))
+                else:
+                    bend_t = 0.6  # bottom 60% stays vertical
+                    y_bend = int(round(float(y1) - float(hgt) * float(bend_t)))
+                    y_bend = int(clamp(int(y_bend), int(y0), int(y1)))
+                    if int(y1) >= int(y_bend):
+                        surface.fill(
+                            stalk,
+                            pygame.Rect(int(rect.x + x_base), int(y_bend), 1, int(y1 - y_bend + 1)),
+                        )
+                    pygame.draw.line(
+                        surface,
+                        stalk,
+                        (int(rect.x + x_base), int(y_bend)),
+                        (int(rect.x + x_top), int(y0)),
+                        1,
+                    )
+
                 if ((hh2 >> 2) & 1) == 0 and int(y1 - y0) >= 4:
-                    surface.fill(stalk_hi, pygame.Rect(int(rect.x + x2), int(y0), 1, 2))
+                    surface.fill(stalk_hi, pygame.Rect(int(rect.x + x_top), int(y0), 1, 2))
 
-                hx = int(x2)
+                hx = int(x_top)
                 hy = int(y0 - 1)
 
                 # Ear head (smaller): 1x2 so it doesn't read as a big blob.
@@ -40879,7 +40938,7 @@ class HardcoreSurvivalState(State):
                     continue
             used_x.add(int(x))
 
-            extra = 3 + int((hh2 >> 9) & 3)  # 3..6 (match background crop height)
+            extra = 6 + int((hh2 >> 9) & 3) * 2  # 6,8,10,12 (match background crop height)
             y0 = int(rect.y - int(extra))
             y1 = int(rect.bottom - 2)
             if y1 <= y0:
@@ -40888,16 +40947,29 @@ class HardcoreSurvivalState(State):
             sway = int(sway_base)
             if ((hh2 >> 1) & 1) == 0:
                 sway = int(clamp(int(sway) * 2, -2, 2))
-            x2 = int(clamp(int(x) + int(sway), 1, int(rect.w - 2)))
+            x_base = int(x)
+            x_top = int(clamp(int(x_base) + int(sway), 1, int(rect.w - 2)))
 
             # Short stalk segment (foreground): use the lower portion so it always overlaps legs.
             seg_len = 6
             y_seg0 = int(max(int(rect.y) + 1, int(y1) - int(seg_len)))
             y2 = int(min(int(y1), int(y_seg0 + seg_len)))
             if y2 > y_seg0:
-                surface.fill(stalk_hi, pygame.Rect(int(rect.x + x2), int(y_seg0), 1, int(y2 - y_seg0 + 1)))
+                hgt = int(y1 - y0)
+                bend_t = 0.6  # must match background crop bend
+                y_bend = int(round(float(y1) - float(hgt) * float(bend_t)))
+                y_bend = int(clamp(int(y_bend), int(y0), int(y1)))
+                if int(y_seg0) >= int(y_bend) or int(y_bend) <= int(y0):
+                    x_seg = int(x_base)
+                else:
+                    denom = int(y_bend - y0)
+                    t3 = float(int(y_bend) - int(y_seg0)) / float(max(1, int(denom)))
+                    t3 = float(clamp(float(t3), 0.0, 1.0))
+                    x_f = float(x_base) + (float(x_top - x_base) * float(t3))
+                    x_seg = int(clamp(int(round(float(x_f))), 1, int(rect.w - 2)))
+                surface.fill(stalk_hi, pygame.Rect(int(rect.x + x_seg), int(y_seg0), 1, int(y2 - y_seg0 + 1)))
 
-            hx = int(x2)
+            hx = int(x_top)
             hy = int(y0 - 1)
 
             surface.fill(head, pygame.Rect(int(rect.x + hx), int(hy), 1, 2))
