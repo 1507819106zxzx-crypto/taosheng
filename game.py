@@ -39786,11 +39786,12 @@ class HardcoreSurvivalState(State):
 
             bed = self._tint(col, add=(-18, -16, -14))
             bed_lo = self._tint(col, add=(-30, -26, -22))
-            stalk = self._tint(col, add=(-24, -20, -16))
-            stalk_hi = self._tint(col, add=(10, 8, 0))
             head = self._tint(col, add=(58, 46, 10))
             head_hi = self._tint(col, add=(78, 62, 16))
             head_lo = self._tint(col, add=(22, 16, 0))
+            # User request: crop body (stalk) should match the ear/head color.
+            stalk = head
+            stalk_hi = head
 
             # Slightly darker inner bed so stalks pop.
             surface.fill(bed, pygame.Rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2))
@@ -39874,13 +39875,14 @@ class HardcoreSurvivalState(State):
                 hx = int(clamp(int(x) + int(sway), 1, int(rect.w - 3)))
                 hy = int(clamp(int(y0 - 1), int(rect.y + 1), int(rect.bottom - 3)))
 
-                surface.fill(head, pygame.Rect(int(rect.x + hx), int(hy), 2, 2))
-                surface.fill(head_hi, pygame.Rect(int(rect.x + hx), int(hy), 2, 1))
-                # Awns / grain pixels.
-                if int(hx) - 1 >= 1:
+                # Ear head (smaller): 1x2 so it doesn't read as a big blob.
+                surface.fill(head, pygame.Rect(int(rect.x + hx), int(hy), 1, 2))
+                surface.fill(head_hi, pygame.Rect(int(rect.x + hx), int(hy), 1, 1))
+                # Awns / grain pixels (tiny side hints).
+                if int(hx) - 1 >= 1 and ((hh2 >> 3) & 1) == 0:
                     surface.fill(head_hi, pygame.Rect(int(rect.x + hx - 1), int(hy + 1), 1, 1))
-                if int(hx) + 2 <= int(rect.w - 2):
-                    surface.fill(head_hi, pygame.Rect(int(rect.x + hx + 2), int(hy), 1, 1))
+                if int(hx) + 1 <= int(rect.w - 2) and ((hh2 >> 4) & 1) == 0:
+                    surface.fill(head_hi, pygame.Rect(int(rect.x + hx + 1), int(hy), 1, 1))
                 if int(hy) + 2 < int(rect.bottom - 1):
                     surface.fill(head_lo, pygame.Rect(int(rect.x + hx), int(hy + 2), 1, 1))
 
@@ -40700,10 +40702,10 @@ class HardcoreSurvivalState(State):
             return
 
         seed2 = int(self.seed) ^ 0xA52D9E13
-        stalk_hi = self._tint(col, add=(10, 8, 0))
         head = self._tint(col, add=(58, 46, 10))
         head_hi = self._tint(col, add=(78, 62, 16))
         head_lo = self._tint(col, add=(22, 16, 0))
+        stalk_hi = head
 
         # Match the same subtle row staggering used by the base tile.
         cell = int(self._hash2_u32(int(tx) // 6, int(ty) // 6, int(seed2)))
@@ -40778,8 +40780,12 @@ class HardcoreSurvivalState(State):
             hx = int(clamp(int(x) + int(sway), 1, int(rect.w - 3)))
             hy = int(clamp(int(y0 - 1), int(rect.y + 1), int(rect.bottom - 3)))
 
-            surface.fill(head, pygame.Rect(int(rect.x + hx), int(hy), 2, 2))
-            surface.fill(head_hi, pygame.Rect(int(rect.x + hx), int(hy), 2, 1))
+            surface.fill(head, pygame.Rect(int(rect.x + hx), int(hy), 1, 2))
+            surface.fill(head_hi, pygame.Rect(int(rect.x + hx), int(hy), 1, 1))
+            if int(hx) - 1 >= 1 and ((hh2 >> 3) & 1) == 0:
+                surface.fill(head_hi, pygame.Rect(int(rect.x + hx - 1), int(hy + 1), 1, 1))
+            if int(hx) + 1 <= int(rect.w - 2) and ((hh2 >> 4) & 1) == 0:
+                surface.fill(head_hi, pygame.Rect(int(rect.x + hx + 1), int(hy), 1, 1))
             if int(hy) + 2 < int(rect.bottom - 1):
                 surface.fill(head_lo, pygame.Rect(int(rect.x + hx), int(hy + 2), 1, 1))
 
